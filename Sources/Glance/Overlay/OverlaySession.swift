@@ -1,0 +1,56 @@
+import SwiftUI
+
+/// View-model bridging the overlay UI and the backend for one overlay session
+/// (hotkey-press → dismissal). Distinct from the backend's Claude session.
+@MainActor
+final class OverlaySession: ObservableObject {
+
+    struct Turn: Identifiable {
+        let id = UUID()
+        let question: String
+        var answer: String = ""
+        var failed: Bool = false
+    }
+
+    @Published var input: String = ""
+    @Published var turns: [Turn] = []
+    /// True between submitting a question and the first streamed token (FR13
+    /// "working" state).
+    @Published var isWorking: Bool = false
+
+    /// Wired by the controller.
+    var submitHandler: ((String) -> Void)?
+    var dismissHandler: (() -> Void)?
+
+    var canSubmit: Bool {
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isWorking
+    }
+
+    func submit() {
+        let q = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, !isWorking else { return }
+        turns.append(Turn(question: q))
+        input = ""
+        isWorking = true
+        submitHandler?(q)
+    }
+
+    // MARK: - Backend event application (called on main)
+
+    func appendToken(_ text: String) {
+        isWorking = false
+        guard !turns.isEmpty else { return }
+        turns[turns.count - 1].answer += text
+    }
+
+    func completeTurn() {
+        isWorking = false
+    }
+
+    func failTurn(_ message: String) {
+        isWorking = false
+        guard !turns.isEmpty else { return }
+        turns[turns.count - 1].answer = message
+        turns[turns.count - 1].failed = true
+    }
+}
