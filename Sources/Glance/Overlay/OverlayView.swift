@@ -146,10 +146,6 @@ struct OverlayView: View {
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
             attachButton
-            Text("turn \(session.turnCount)")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.faint)
-            kbd("esc ✕")
         }
         .padding(.horizontal, 22).padding(.vertical, 14)
         .background(Color.white.opacity(0.03))
