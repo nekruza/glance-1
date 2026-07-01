@@ -30,6 +30,22 @@ final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    /// Screen coords to keep fixed as the panel auto-resizes to its SwiftUI
+    /// content (streaming answers grow the panel). Left edge stays put; top edge
+    /// stays put so the panel expands downward.
+    var anchoredLeft: CGFloat?
+    var anchoredTop: CGFloat?
+
+    override func setContentSize(_ size: NSSize) {
+        super.setContentSize(size)
+        reanchor()
+    }
+
+    func reanchor() {
+        guard let left = anchoredLeft, let top = anchoredTop else { return }
+        setFrameOrigin(NSPoint(x: left, y: top - frame.height))
+    }
+
     // FR4: Esc dismisses. keyCode 53 = Escape.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {

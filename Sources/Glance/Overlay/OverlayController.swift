@@ -28,7 +28,7 @@ final class OverlayController {
 
         let root = OverlayView(session: session)
         let host = NSHostingView(rootView: root)
-        host.frame = panel.frame
+        host.sizingOptions = [.preferredContentSize] // panel tracks SwiftUI content size
         panel.contentView = host
         hostingView = host
 
@@ -54,16 +54,17 @@ final class OverlayController {
     // MARK: - Layout
 
     private func positionPanel() {
-        // Center horizontally, upper third of the display under the cursor —
-        // near where the user is looking, out of the way of content below.
+        // Center horizontally, top edge in the upper third of the display under
+        // the cursor. The panel auto-grows downward from this fixed top as the
+        // answer streams (see OverlayPanel anchoring).
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
         panel.layoutIfNeeded()
-        let size = panel.frame.size
-        let x = frame.midX - size.width / 2
-        let y = frame.midY + frame.height * 0.12
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        let width = panel.frame.width
+        panel.anchoredLeft = frame.midX - width / 2
+        panel.anchoredTop = frame.minY + frame.height * 0.82
+        panel.reanchor()
     }
 
     // MARK: - Click-outside dismissal (FR4)

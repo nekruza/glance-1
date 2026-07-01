@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// FR3/FR11/FR13: translucent overlay content — auto-focused input plus a
-/// streaming, Markdown-rendered answer area with a visible working state.
+/// FR3/FR11/FR13: translucent overlay — auto-focused input plus a streaming,
+/// Markdown-rendered answer area with a visible working state. Kept minimal by
+/// design (owner: "keep minimal, just polish").
 struct OverlayView: View {
     @ObservedObject var session: OverlaySession
     @FocusState private var inputFocused: Bool
@@ -10,54 +11,68 @@ struct OverlayView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !session.turns.isEmpty {
                 transcript
-                Divider().opacity(0.4)
+                Divider().opacity(0.35).padding(.vertical, 4)
             }
             inputRow
+            footerHint
         }
-        .padding(14)
-        .frame(width: 620)
+        .padding(16)
+        .frame(width: 640)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
         .onAppear { inputFocused = true }
     }
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
                     ForEach(session.turns) { turn in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(turn.question)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            if turn.answer.isEmpty && session.isWorking && turn.id == session.turns.last?.id {
-                                workingRow
-                            } else if turn.failed {
-                                Text(turn.answer)
-                                    .foregroundStyle(.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            } else {
-                                MarkdownText(text: turn.answer)
-                            }
+                        VStack(alignment: .leading, spacing: 8) {
+                            questionBubble(turn.question)
+                            answerBlock(turn)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .id(turn.id)
                     }
                 }
-                .padding(.bottom, 4)
+                .padding(.vertical, 2)
             }
-            .frame(maxHeight: 360)
-            .onChange(of: session.turns.last?.answer) { _, _ in
-                if let last = session.turns.last?.id {
-                    withAnimation { proxy.scrollTo(last, anchor: .bottom) }
-                }
-            }
+            .frame(maxHeight: 380)
+            .onChange(of: session.turns.last?.answer) { _, _ in scrollToEnd(proxy) }
+            .onChange(of: session.turns.count) { _, _ in scrollToEnd(proxy) }
+        }
+    }
+
+    private func questionBubble(_ text: String) -> some View {
+        HStack {
+            Spacer(minLength: 40)
+            Text(text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.85)))
+        }
+    }
+
+    @ViewBuilder private func answerBlock(_ turn: OverlaySession.Turn) -> some View {
+        if turn.answer.isEmpty && session.isWorking && turn.id == session.turns.last?.id {
+            workingRow
+        } else if turn.failed {
+            Label(turn.answer, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            MarkdownText(text: turn.answer)
+                .font(.system(size: 14))
         }
     }
 
@@ -78,10 +93,38 @@ struct OverlayView: View {
                 .font(.system(size: 16))
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
-            if session.isWorking {
-                ProgressView().controlSize(.small)
+            Button(action: { session.submit() }) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(session.canSubmit ? Color.accentColor : Color.secondary.opacity(0.5))
             }
+            .buttonStyle(.plain)
+            .disabled(!session.canSubmit)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
+    }
+
+    private var footerHint: some View {
+        HStack(spacing: 10) {
+            hint("return", "send")
+            hint("escape", "dismiss")
+            Spacer()
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+        .padding(.top, 8)
+    }
+
+    private func hint(_ symbol: String, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+            Text(label)
+        }
+    }
+
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        if let last = session.turns.last?.id {
+            withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last, anchor: .bottom) }
+        }
     }
 }
