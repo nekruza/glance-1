@@ -11,7 +11,6 @@ struct OverlayView: View {
         VStack(alignment: .leading, spacing: 0) {
             if session.turns.isEmpty {
                 promptRow
-                contextStrip
             } else {
                 transcript
                 followUpBar
@@ -62,27 +61,6 @@ struct OverlayView: View {
         .padding(.horizontal, 22).padding(.vertical, 20)
     }
 
-    private var contextStrip: some View {
-        HStack(spacing: 12) {
-            thumbnail
-            captureText
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.muted)
-            Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(session.attachImage ? Theme.success : Theme.faint)
-                    .frame(width: 6, height: 6)
-                    .shadow(color: session.attachImage ? Theme.success : .clear, radius: 4)
-                Text(session.attachImage ? "Screenshot attached" : "Text only")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Theme.muted)
-            }
-        }
-        .padding(.horizontal, 22).padding(.vertical, 11)
-        .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
-    }
-
     private var thumbnail: some View {
         RoundedRectangle(cornerRadius: 5)
             .fill(LinearGradient(colors: [Theme.glassTint, Color(red: 26/255, green: 33/255, blue: 48/255)],
@@ -90,16 +68,6 @@ struct OverlayView: View {
             .frame(width: 52, height: 33)
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.glassBorderHi, lineWidth: 1))
             .opacity(session.attachImage ? 1 : 0.4)
-    }
-
-    private var captureText: some View {
-        Group {
-            if session.captureLabel.isEmpty {
-                Text("Active display · at invocation")
-            } else {
-                Text("Captured ") + Text(session.captureLabel).foregroundColor(Theme.fg) + Text(" · at invocation")
-            }
-        }
     }
 
     // MARK: - Answer: transcript + follow-up
