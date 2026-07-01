@@ -43,11 +43,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc sign for local run. TCC (Screen Recording) ties the grant to this
-# code identity, so re-running an ad-hoc build keeps the permission as long as
-# the binary identity is stable.
-echo "▶ ad-hoc codesign"
-codesign --force --deep --sign - "$APP"
+# TCC (Screen Recording) ties the grant to the code-signing identity. Ad-hoc
+# (`--sign -`) changes identity every rebuild and orphans the grant, so prefer a
+# STABLE self-signed identity (create it once with Scripts/dev-sign-setup.sh).
+SIGN_KC="$HOME/Library/Keychains/glance-signing.keychain-db"
+SIGN_ID="Glance Dev"
+if security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "$SIGN_ID"; then
+    echo "▶ codesign with stable identity '$SIGN_ID'"
+    codesign --force --deep --sign "$SIGN_ID" --keychain "$SIGN_KC" "$APP"
+else
+    echo "▶ ad-hoc codesign (run Scripts/dev-sign-setup.sh for a persistent Screen Recording grant)"
+    codesign --force --deep --sign - "$APP"
+fi
 
 echo "✔ built $APP"
 echo "  run: open \"$APP\""
