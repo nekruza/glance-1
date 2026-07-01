@@ -98,9 +98,11 @@ final class AppCoordinator {
             overlay.session.failTurn("Backend unavailable.")
             return
         }
-        // Screenshot goes with the first question only (FR10); follow-ups reuse
-        // the live session's context (FR12).
-        let image = pendingImagePNG
+        // Screenshot goes with the first question only (FR10), and only if the
+        // user left the attach toggle on. Follow-ups reuse the live session's
+        // context (FR12) and never carry an image.
+        let isFirstTurn = pendingImagePNG != nil
+        let image = (isFirstTurn && overlay.session.attachImage) ? pendingImagePNG : nil
         pendingImagePNG = nil
 
         backend.ask(question: question, imagePNG: image) { [weak self] event in

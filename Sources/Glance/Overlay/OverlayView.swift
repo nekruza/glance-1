@@ -76,6 +76,11 @@ struct OverlayView: View {
         }
     }
 
+    private var placeholder: String {
+        if !session.turns.isEmpty { return "Ask a follow-up…" }
+        return session.attachImage ? "Ask about what's on screen…" : "Ask anything (no screenshot)…"
+    }
+
     private var workingRow: some View {
         HStack(spacing: 8) {
             ProgressView().controlSize(.small)
@@ -87,12 +92,23 @@ struct OverlayView: View {
         HStack(spacing: 10) {
             Image(systemName: "sparkle.magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField(session.turns.isEmpty ? "Ask about what's on screen…" : "Ask a follow-up…",
-                      text: $session.input)
+            TextField(placeholder, text: $session.input)
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
+            // Attach-screenshot toggle — only for the first question (image
+            // never rides along on follow-ups).
+            if session.turns.isEmpty {
+                Button(action: { session.attachImage.toggle() }) {
+                    Image(systemName: session.attachImage ? "photo.fill" : "photo")
+                        .font(.system(size: 18))
+                        .foregroundStyle(session.attachImage ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(session.attachImage ? "Screenshot will be sent — click to ask without it"
+                                          : "Text-only — click to attach the screenshot")
+            }
             Button(action: { session.submit() }) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 22))

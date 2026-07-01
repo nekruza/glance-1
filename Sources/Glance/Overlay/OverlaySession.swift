@@ -14,6 +14,9 @@ final class OverlaySession: ObservableObject {
 
     @Published var input: String = ""
     @Published var turns: [Turn] = []
+    /// Whether to attach the captured screenshot to the FIRST question. Toggled
+    /// in the overlay; follow-ups never carry an image regardless.
+    @Published var attachImage: Bool = true
     /// True between submitting a question and the first streamed token (FR13
     /// "working" state).
     @Published var isWorking: Bool = false
