@@ -87,7 +87,7 @@ struct OverlayView: View {
                     }
                 }
             }
-            .frame(maxHeight: 440)
+            .frame(height: 300) // fixed once a conversation starts; scrolls internally
             .onChange(of: session.turns.last?.answer) { _, _ in scrollToEnd(proxy) }
             .onChange(of: session.turns.count) { _, _ in scrollToEnd(proxy) }
         }
