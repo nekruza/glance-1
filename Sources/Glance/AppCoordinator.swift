@@ -86,6 +86,15 @@ final class AppCoordinator {
 
     private func showOverlay() {
         overlay.present()
+        // Reflect CLI connection in the footer (present() only reaches here when
+        // the CLI is OK, so show the connected version).
+        if case .ok(_, let version) = claudeStatus {
+            overlay.session.backendConnected = true
+            overlay.session.backendLabel = "Claude CLI connected · \(version)"
+        } else {
+            overlay.session.backendConnected = false
+            overlay.session.backendLabel = "Claude CLI not connected"
+        }
         overlay.onSubmit { [weak self] question in
             self?.handleSubmit(question)
         }

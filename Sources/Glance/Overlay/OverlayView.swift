@@ -121,21 +121,16 @@ struct OverlayView: View {
     }
 
     private var footerHint: some View {
-        HStack(spacing: 10) {
-            hint("return", "send")
-            hint("escape", "dismiss")
+        HStack(spacing: 6) {
+            Circle()
+                .fill(session.backendConnected ? Color.green : Color.orange)
+                .frame(width: 7, height: 7)
+            Text(session.backendLabel)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             Spacer()
         }
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
         .padding(.top, 8)
-    }
-
-    private func hint(_ symbol: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: symbol)
-            Text(label)
-        }
     }
 
     private func scrollToEnd(_ proxy: ScrollViewProxy) {

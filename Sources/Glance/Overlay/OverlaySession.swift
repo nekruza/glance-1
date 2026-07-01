@@ -14,9 +14,12 @@ final class OverlaySession: ObservableObject {
 
     @Published var input: String = ""
     @Published var turns: [Turn] = []
-    /// Whether to attach the captured screenshot to the FIRST question. Toggled
-    /// in the overlay; follow-ups never carry an image regardless.
+    /// Whether to attach a screenshot to the next message (toggled in overlay).
     @Published var attachImage: Bool = true
+
+    /// Claude CLI connection state, shown in the overlay footer.
+    @Published var backendConnected: Bool = false
+    @Published var backendLabel: String = "Checking Claude CLI…"
     /// True between submitting a question and the first streamed token (FR13
     /// "working" state).
     @Published var isWorking: Bool = false
