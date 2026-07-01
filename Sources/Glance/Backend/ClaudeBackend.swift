@@ -102,13 +102,10 @@ final class ClaudeBackend {
             self.sawTokenThisTurn = false
             self.startTimeout()
 
-            let line: String
-            if !self.didSendFirstMessage {
-                line = Self.userMessageJSON(text: question, imagePNG: imagePNG)
-                self.didSendFirstMessage = true
-            } else {
-                line = Self.userMessageJSON(text: question, imagePNG: nil)
-            }
+            // Attach whatever image the caller passed (may be nil for text-only,
+            // or a fresh screenshot on a follow-up). The caller decides.
+            self.didSendFirstMessage = true
+            let line = Self.userMessageJSON(text: question, imagePNG: imagePNG)
             guard let handle = self.stdinPipe?.fileHandleForWriting,
                   let payload = (line + "\n").data(using: .utf8) else {
                 self.emit(.failed("Backend not ready."))

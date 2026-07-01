@@ -44,6 +44,13 @@ final class OverlayController {
         session.submitHandler = handler
     }
 
+    /// Make the panel invisible to screen capture without losing key focus or
+    /// ending the session — used when capturing a fresh screenshot for a
+    /// follow-up so the overlay itself stays out of the shot (FR8).
+    func setHiddenForCapture(_ hidden: Bool) {
+        panel.alphaValue = hidden ? 0 : 1
+    }
+
     func dismiss() {
         guard panel.isVisible else { return }
         removeClickOutsideMonitor()

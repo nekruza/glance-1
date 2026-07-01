@@ -77,7 +77,9 @@ struct OverlayView: View {
     }
 
     private var placeholder: String {
-        if !session.turns.isEmpty { return "Ask a follow-up…" }
+        if !session.turns.isEmpty {
+            return session.attachImage ? "Ask a follow-up (with current screen)…" : "Ask a follow-up (no screenshot)…"
+        }
         return session.attachImage ? "Ask about what's on screen…" : "Ask anything (no screenshot)…"
     }
 
@@ -97,18 +99,16 @@ struct OverlayView: View {
                 .font(.system(size: 16))
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
-            // Attach-screenshot toggle — only for the first question (image
-            // never rides along on follow-ups).
-            if session.turns.isEmpty {
-                Button(action: { session.attachImage.toggle() }) {
-                    Image(systemName: session.attachImage ? "photo.fill" : "photo")
-                        .font(.system(size: 18))
-                        .foregroundStyle(session.attachImage ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .help(session.attachImage ? "Screenshot will be sent — click to ask without it"
-                                          : "Text-only — click to attach the screenshot")
+            // Attach-screenshot toggle — available on every message. On follow-
+            // ups with it on, a fresh screenshot of the current screen is sent.
+            Button(action: { session.attachImage.toggle() }) {
+                Image(systemName: session.attachImage ? "photo.fill" : "photo")
+                    .font(.system(size: 18))
+                    .foregroundStyle(session.attachImage ? Color.accentColor : Color.secondary)
             }
+            .buttonStyle(.plain)
+            .help(session.attachImage ? "Screenshot will be sent — click to ask without it"
+                                      : "Text-only — click to attach the current screen")
             Button(action: { session.submit() }) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 22))

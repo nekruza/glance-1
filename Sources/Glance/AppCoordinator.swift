@@ -98,13 +98,39 @@ final class AppCoordinator {
             overlay.session.failTurn("Backend unavailable.")
             return
         }
-        // Screenshot goes with the first question only (FR10), and only if the
-        // user left the attach toggle on. Follow-ups reuse the live session's
-        // context (FR12) and never carry an image.
-        let isFirstTurn = pendingImagePNG != nil
-        let image = (isFirstTurn && overlay.session.attachImage) ? pendingImagePNG : nil
-        pendingImagePNG = nil
+        let attach = overlay.session.attachImage
 
+        // First question: use the still captured at invocation (already clean).
+        if let firstShot = pendingImagePNG {
+            pendingImagePNG = nil
+            send(question, image: attach ? firstShot : nil, via: backend)
+            return
+        }
+
+        // Follow-up with attach on: grab a FRESH shot of the current screen,
+        // hiding the overlay so it isn't in the image (FR8).
+        if attach {
+            Task { [weak self] in
+                guard let self else { return }
+                let png = await self.captureExcludingOverlay()
+                self.send(question, image: png, via: backend)
+            }
+        } else {
+            send(question, image: nil, via: backend)
+        }
+    }
+
+    /// Hide the overlay from capture, take a still, restore it.
+    private func captureExcludingOverlay() async -> Data? {
+        overlay.setHiddenForCapture(true)
+        // Let the compositor drop the now-transparent panel before capturing.
+        try? await Task.sleep(nanoseconds: 30_000_000) // 30 ms
+        let png = try? await ScreenCaptureService.captureActiveDisplay().pngData
+        overlay.setHiddenForCapture(false)
+        return png
+    }
+
+    private func send(_ question: String, image: Data?, via backend: ClaudeBackend) {
         backend.ask(question: question, imagePNG: image) { [weak self] event in
             guard let self else { return }
             switch event {
