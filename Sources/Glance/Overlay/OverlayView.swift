@@ -33,8 +33,10 @@ struct OverlayView: View {
 
     private var glass: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.glassTint.opacity(0.55))
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(.regularMaterial)
+            // Opaque-enough dark tint so background UI (editor text, tooltips)
+            // doesn't bleed through and hurt readability. Still a hint of glass.
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.glassTint.opacity(0.9))
         }
     }
 
