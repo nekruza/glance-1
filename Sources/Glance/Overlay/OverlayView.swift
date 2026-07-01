@@ -72,6 +72,9 @@ struct OverlayView: View {
 
     // MARK: - Answer: transcript + follow-up
 
+    @State private var contentHeight: CGFloat = 0
+    private let maxTranscript: CGFloat = 420
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -86,8 +89,13 @@ struct OverlayView: View {
                         Color.clear.frame(height: 1).id(turn.id)
                     }
                 }
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                })
             }
-            .frame(height: 300) // fixed once a conversation starts; scrolls internally
+            // Exactly content height, capped at 420 → no dead space, no runaway.
+            .frame(height: min(contentHeight, maxTranscript))
+            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             .onChange(of: session.turns.last?.answer) { _, _ in scrollToEnd(proxy) }
             .onChange(of: session.turns.count) { _, _ in scrollToEnd(proxy) }
         }
@@ -204,6 +212,12 @@ struct OverlayView: View {
             withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last, anchor: .bottom) }
         }
     }
+}
+
+/// Measures the transcript content height so the scroll area can hug it.
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 /// Three bouncing accent dots — the answer "working" state (02-overlay-answer).

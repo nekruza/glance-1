@@ -15,7 +15,8 @@ final class OverlaySession: ObservableObject {
     @Published var input: String = ""
     @Published var turns: [Turn] = []
     /// Whether to attach a screenshot to the next message (toggled in overlay).
-    @Published var attachImage: Bool = true
+    /// Default off — attach only when the user opts in.
+    @Published var attachImage: Bool = false
 
     /// Claude CLI connection state, shown in the overlay footer.
     @Published var backendConnected: Bool = false

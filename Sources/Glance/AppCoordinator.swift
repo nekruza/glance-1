@@ -68,12 +68,6 @@ final class AppCoordinator {
             return
         }
 
-        // FR7: Screen Recording gate before we try to capture.
-        guard ScreenCaptureService.hasPermission else {
-            PermissionOnboarding.promptForScreenRecording()
-            return
-        }
-
         // FR15 warm path: spawn the backend now so start/auth overlaps with the
         // user reading the overlay and typing.
         let backend = ClaudeBackend(binaryPath: path)
@@ -81,22 +75,18 @@ final class AppCoordinator {
         backend.startWarm()
         self.backend = backend
 
-        // FR8: capture the still BEFORE the overlay is on screen, then present.
+        // Attachment defaults off, so don't block on Screen Recording — capture
+        // opportunistically (FR8: before the overlay is shown) and open the
+        // overlay either way. Permission is prompted only if the user attaches.
         Task { [weak self] in
             guard let self else { return }
-            do {
-                let shot = try await ScreenCaptureService.captureActiveDisplay()
-                self.pendingImagePNG = shot.pngData
-                self.pendingCaptureLabel = shot.displayLabel
-                self.showOverlay()
-            } catch CaptureError.permissionDenied {
-                self.teardownBackend()
-                PermissionOnboarding.promptForScreenRecording()
-            } catch {
-                self.teardownBackend()
-                PermissionOnboarding.reportError(title: "Screen capture failed",
-                                                 detail: error.localizedDescription)
+            if ScreenCaptureService.hasPermission {
+                if let shot = try? await ScreenCaptureService.captureActiveDisplay() {
+                    self.pendingImagePNG = shot.pngData
+                    self.pendingCaptureLabel = shot.displayLabel
+                }
             }
+            self.showOverlay()
         }
     }
 
@@ -132,23 +122,33 @@ final class AppCoordinator {
         }
         let attach = overlay.session.attachImage
 
-        // First question: use the still captured at invocation (already clean).
-        if let firstShot = pendingImagePNG {
-            pendingImagePNG = nil
-            send(question, image: attach ? firstShot : nil, via: backend)
+        // Text-only (the default) — send immediately.
+        guard attach else {
+            send(question, image: nil, via: backend)
             return
         }
 
-        // Follow-up with attach on: grab a FRESH shot of the current screen,
-        // hiding the overlay so it isn't in the image (FR8).
-        if attach {
-            Task { [weak self] in
-                guard let self else { return }
-                let png = await self.captureExcludingOverlay()
-                self.send(question, image: png, via: backend)
-            }
-        } else {
+        // Attach requested but no Screen Recording permission → prompt, send
+        // text-only this turn.
+        guard ScreenCaptureService.hasPermission else {
+            PermissionOnboarding.promptForScreenRecording()
             send(question, image: nil, via: backend)
+            return
+        }
+
+        // First question: use the still captured at invocation (already clean).
+        if let firstShot = pendingImagePNG {
+            pendingImagePNG = nil
+            send(question, image: firstShot, via: backend)
+            return
+        }
+
+        // Follow-up: grab a FRESH shot of the current screen, hiding the overlay
+        // so it isn't in the image (FR8).
+        Task { [weak self] in
+            guard let self else { return }
+            let png = await self.captureExcludingOverlay()
+            self.send(question, image: png, via: backend)
         }
     }
 
