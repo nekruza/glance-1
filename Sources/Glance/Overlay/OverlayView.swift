@@ -1,141 +1,259 @@
 import SwiftUI
 
-/// FR3/FR11/FR13: translucent overlay — auto-focused input plus a streaming,
-/// Markdown-rendered answer area with a visible working state. Kept minimal by
-/// design (owner: "keep minimal, just polish").
+/// Dark-glass overlay built to the screens/ visual contract (01-overlay-idle,
+/// 02-overlay-answer). Idle = prompt + context strip + backend footer; answer =
+/// asked header(s) + streamed Markdown + follow-up bar + footer.
 struct OverlayView: View {
     @ObservedObject var session: OverlaySession
     @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !session.turns.isEmpty {
+            if session.turns.isEmpty {
+                promptRow
+                contextStrip
+            } else {
                 transcript
-                Divider().opacity(0.35).padding(.vertical, 4)
+                followUpBar
             }
-            inputRow
-            footerHint
+            footer
         }
-        .padding(16)
-        .frame(width: 640)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
+        .frame(width: Theme.overlayWidth)
+        .background(glass)
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                .strokeBorder(Theme.glassBorder, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .shadow(color: .black.opacity(0.55), radius: 40, y: 24)
+        .foregroundStyle(Theme.fg)
         .onAppear { inputFocused = true }
     }
+
+    // MARK: - Surface
+
+    private var glass: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.glassTint.opacity(0.55))
+        }
+    }
+
+    private var spark: some View {
+        Image(systemName: "sparkle")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+    }
+
+    // MARK: - Idle: prompt row + context strip
+
+    private var promptRow: some View {
+        HStack(spacing: 14) {
+            spark
+            TextField("", text: $session.input, prompt: Text(placeholder).foregroundColor(Theme.faint))
+                .textFieldStyle(.plain)
+                .font(.system(size: 19))
+                .tint(Theme.accent)
+                .focused($inputFocused)
+                .onSubmit { session.submit() }
+            attachButton
+            kbd("↩ Ask")
+        }
+        .padding(.horizontal, 22).padding(.vertical, 20)
+    }
+
+    private var contextStrip: some View {
+        HStack(spacing: 12) {
+            thumbnail
+            captureText
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.muted)
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(session.attachImage ? Theme.success : Theme.faint)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: session.attachImage ? Theme.success : .clear, radius: 4)
+                Text(session.attachImage ? "Screenshot attached" : "Text only")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(.horizontal, 22).padding(.vertical, 11)
+        .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+    }
+
+    private var thumbnail: some View {
+        RoundedRectangle(cornerRadius: 5)
+            .fill(LinearGradient(colors: [Theme.glassTint, Color(red: 26/255, green: 33/255, blue: 48/255)],
+                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: 52, height: 33)
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.glassBorderHi, lineWidth: 1))
+            .opacity(session.attachImage ? 1 : 0.4)
+    }
+
+    private var captureText: some View {
+        Group {
+            if session.captureLabel.isEmpty {
+                Text("Active display · at invocation")
+            } else {
+                Text("Captured ") + Text(session.captureLabel).foregroundColor(Theme.fg) + Text(" · at invocation")
+            }
+        }
+    }
+
+    // MARK: - Answer: transcript + follow-up
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(session.turns) { turn in
-                        VStack(alignment: .leading, spacing: 8) {
-                            questionBubble(turn.question)
-                            answerBlock(turn)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
+                        askedHeader(turn, showThumb: idx == 0 && session.attachImage)
+                        answerBlock(turn)
+                            .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 18)
+                        if idx < session.turns.count - 1 {
+                            Divider().overlay(Theme.glassBorder)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .id(turn.id)
+                        Color.clear.frame(height: 1).id(turn.id)
                     }
                 }
-                .padding(.vertical, 2)
             }
-            .frame(maxHeight: 380)
+            .frame(maxHeight: 440)
             .onChange(of: session.turns.last?.answer) { _, _ in scrollToEnd(proxy) }
             .onChange(of: session.turns.count) { _, _ in scrollToEnd(proxy) }
         }
     }
 
-    private func questionBubble(_ text: String) -> some View {
-        HStack {
-            Spacer(minLength: 40)
-            Text(text)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.85)))
+    private func askedHeader(_ turn: OverlaySession.Turn, showThumb: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            spark.font(.system(size: 16, weight: .semibold))
+            Text(turn.question)
+                .font(.system(size: 17))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if showThumb {
+                thumbnail.frame(width: 44, height: 28)
+            }
         }
+        .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 14)
+        .overlay(Divider().overlay(Theme.glassBorder), alignment: .bottom)
     }
 
     @ViewBuilder private func answerBlock(_ turn: OverlaySession.Turn) -> some View {
         if turn.answer.isEmpty && session.isWorking && turn.id == session.turns.last?.id {
             workingRow
         } else if turn.failed {
-            Label(turn.answer, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
+            Label {
+                Text(turn.answer)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+            }
+            .foregroundStyle(Theme.danger)
+            .font(.system(size: 14))
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             MarkdownText(text: turn.answer)
-                .font(.system(size: 14))
+                .font(.system(size: 15))
         }
+    }
+
+    private var workingRow: some View {
+        HStack(spacing: 10) {
+            BouncingDots()
+            Text(session.turns.count <= 1 ? "Reading your screen…" : "Thinking…")
+                .foregroundStyle(Theme.muted).font(.system(size: 14))
+        }
+    }
+
+    private var followUpBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.right")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.faint)
+            TextField("", text: $session.input,
+                      prompt: Text(placeholder).foregroundColor(Theme.faint))
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .tint(Theme.accent)
+                .focused($inputFocused)
+                .onSubmit { session.submit() }
+            attachButton
+            Text("turn \(session.turnCount)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.faint)
+            kbd("esc ✕")
+        }
+        .padding(.horizontal, 22).padding(.vertical, 14)
+        .background(Color.white.opacity(0.03))
+        .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+    }
+
+    // MARK: - Shared controls
+
+    private var attachButton: some View {
+        Button(action: { session.attachImage.toggle() }) {
+            Image(systemName: session.attachImage ? "photo.fill" : "photo")
+                .font(.system(size: 17))
+                .foregroundStyle(session.attachImage ? Theme.accent : Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .help(session.attachImage ? "Screenshot will be sent — click for text-only"
+                                  : "Text-only — click to attach the current screen")
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(session.backendConnected ? Theme.success : Theme.danger)
+                .frame(width: 6, height: 6)
+                .shadow(color: session.backendConnected ? Theme.success : .clear, radius: 4)
+            Text(session.backendLabel)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.muted)
+            Spacer()
+            Text("Backend · Claude CLI (local)")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.faint)
+        }
+        .padding(.horizontal, 22).padding(.vertical, 10)
+        .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+    }
+
+    private func kbd(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(Theme.muted)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.field))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.glassBorder, lineWidth: 1))
     }
 
     private var placeholder: String {
         if !session.turns.isEmpty {
-            return session.attachImage ? "Ask a follow-up (with current screen)…" : "Ask a follow-up (no screenshot)…"
+            return session.attachImage ? "Ask a follow-up (with current screen)…" : "Ask a follow-up (text only)…"
         }
         return session.attachImage ? "Ask about what's on screen…" : "Ask anything (no screenshot)…"
-    }
-
-    private var workingRow: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text("Thinking…").foregroundStyle(.secondary).font(.system(size: 13))
-        }
-    }
-
-    private var inputRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "sparkle.magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField(placeholder, text: $session.input)
-                .textFieldStyle(.plain)
-                .font(.system(size: 16))
-                .focused($inputFocused)
-                .onSubmit { session.submit() }
-            // Attach-screenshot toggle — available on every message. On follow-
-            // ups with it on, a fresh screenshot of the current screen is sent.
-            Button(action: { session.attachImage.toggle() }) {
-                Image(systemName: session.attachImage ? "photo.fill" : "photo")
-                    .font(.system(size: 18))
-                    .foregroundStyle(session.attachImage ? Color.accentColor : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            .help(session.attachImage ? "Screenshot will be sent — click to ask without it"
-                                      : "Text-only — click to attach the current screen")
-            Button(action: { session.submit() }) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(session.canSubmit ? Color.accentColor : Color.secondary.opacity(0.5))
-            }
-            .buttonStyle(.plain)
-            .disabled(!session.canSubmit)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var footerHint: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(session.backendConnected ? Color.green : Color.orange)
-                .frame(width: 7, height: 7)
-            Text(session.backendLabel)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.top, 8)
     }
 
     private func scrollToEnd(_ proxy: ScrollViewProxy) {
         if let last = session.turns.last?.id {
             withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last, anchor: .bottom) }
+        }
+    }
+}
+
+/// Three bouncing accent dots — the answer "working" state (02-overlay-answer).
+private struct BouncingDots: View {
+    @State private var phase = 0.0
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3) { i in
+                Circle().fill(Theme.accent).frame(width: 5, height: 5)
+                    .offset(y: phase == Double(i) ? -3 : 0)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.4).repeatForever()) { phase = 2 }
         }
     }
 }

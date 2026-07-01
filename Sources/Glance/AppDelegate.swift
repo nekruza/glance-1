@@ -9,6 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // FR5 / FR3: menu-bar app, no Dock, no App Switcher entry.
         NSApp.setActivationPolicy(.accessory)
 
+        statusItem.onAsk = { [weak coordinator] in coordinator?.summon() }
+        statusItem.statusProvider = { [weak coordinator] in
+            coordinator?.backendStatusLine() ?? (false, "Claude CLI status unknown")
+        }
         statusItem.install()
         coordinator.start()
     }

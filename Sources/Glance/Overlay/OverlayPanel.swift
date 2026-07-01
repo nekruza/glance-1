@@ -20,6 +20,9 @@ final class OverlayPanel: NSPanel {
         hasShadow = true
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
+        // Force dark so the glass reads dark regardless of the desktop behind it
+        // (design contract: dark-glass overlay).
+        appearance = NSAppearance(named: .darkAqua)
         // Not in Dock / App Switcher (FR3, FR5) — reinforced by .accessory policy.
         titleVisibility = .hidden
         titlebarAppearsTransparent = true

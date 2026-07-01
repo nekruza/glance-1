@@ -10,6 +10,12 @@ import CoreGraphics
 struct CaptureResult {
     let image: CGImage
     let pngData: Data
+    let displayIndex: Int   // 1-based, for "Display N"
+    let pixelWidth: Int
+    let pixelHeight: Int
+
+    /// Context-strip label, e.g. "Display 1 · 2560×1440".
+    var displayLabel: String { "Display \(displayIndex) · \(pixelWidth)×\(pixelHeight)" }
 }
 
 enum CaptureError: Error, LocalizedError {
@@ -87,7 +93,12 @@ enum ScreenCaptureService {
         guard let png = pngData(from: cgImage) else {
             throw CaptureError.captureFailed("PNG encode failed")
         }
-        return CaptureResult(image: cgImage, pngData: png)
+        let index = (content.displays.firstIndex(where: { $0.displayID == display.displayID }) ?? 0) + 1
+        return CaptureResult(image: cgImage,
+                             pngData: png,
+                             displayIndex: index,
+                             pixelWidth: cgImage.width,
+                             pixelHeight: cgImage.height)
     }
 
     // MARK: - Helpers

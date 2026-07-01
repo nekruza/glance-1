@@ -20,6 +20,11 @@ final class OverlaySession: ObservableObject {
     /// Claude CLI connection state, shown in the overlay footer.
     @Published var backendConnected: Bool = false
     @Published var backendLabel: String = "Checking Claude CLI…"
+
+    /// Captured-display label for the context strip, e.g. "Display 1 · 2560×1440".
+    @Published var captureLabel: String = ""
+
+    var turnCount: Int { turns.count }
     /// True between submitting a question and the first streamed token (FR13
     /// "working" state).
     @Published var isWorking: Bool = false

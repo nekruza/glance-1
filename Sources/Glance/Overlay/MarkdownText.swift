@@ -10,7 +10,7 @@ struct MarkdownText: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(Self.parse(text).enumerated()), id: \.offset) { _, block in
                 block.view
             }
@@ -30,35 +30,44 @@ struct MarkdownText: View {
         @ViewBuilder var view: some View {
             switch self {
             case .heading(let level, let t):
-                Text(inline(t))
-                    .font(.system(size: headingSize(level), weight: .semibold))
-                    .fixedSize(horizontal: false, vertical: true)
+                if level >= 2 {
+                    // Design: uppercase, tracked, muted section labels.
+                    Text(t.uppercased())
+                        .font(.system(size: 13, weight: .semibold))
+                        .tracking(0.4)
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                } else {
+                    Text(inline(t))
+                        .font(.system(size: 19, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             case .bullet(let t):
-                HStack(alignment: .top, spacing: 6) {
-                    Text("•").foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 8) {
+                    Text("•").foregroundStyle(Theme.accent)
                     Text(inline(t)).fixedSize(horizontal: false, vertical: true)
                 }
             case .ordered(let n, let t):
-                HStack(alignment: .top, spacing: 6) {
-                    Text("\(n).").foregroundStyle(.secondary).monospacedDigit()
+                HStack(alignment: .top, spacing: 8) {
+                    Text("\(n).").foregroundStyle(Theme.accent).monospacedDigit()
                     Text(inline(t)).fixedSize(horizontal: false, vertical: true)
                 }
             case .code(let code):
                 Text(code)
-                    .font(.system(.body, design: .monospaced))
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(Color(red: 0xdf/255, green: 0xe4/255, blue: 0xf0/255))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(.black.opacity(0.28)))
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.codeBg))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.glassBorder, lineWidth: 1))
             case .paragraph(let t):
                 Text(inline(t))
+                    .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
-        }
-
-        private func headingSize(_ level: Int) -> CGFloat {
-            switch level { case 1: return 20; case 2: return 17; default: return 15 }
         }
 
         /// Inline emphasis / `code` via Foundation's Markdown parser, scoped to a

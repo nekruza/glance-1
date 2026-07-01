@@ -13,6 +13,7 @@ final class AppCoordinator {
 
     private var backend: ClaudeBackend?
     private var pendingImagePNG: Data?
+    private var pendingCaptureLabel: String = ""
     private var claudeStatus: ClaudeLocator.Status = .notFound
     private var cancellables = Set<AnyCancellable>()
 
@@ -33,6 +34,20 @@ final class AppCoordinator {
         // Warm ScreenCaptureKit's shareable-content cache so the first capture
         // isn't slow (helps FR2). Best-effort.
         Task { _ = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) }
+    }
+
+    /// Menu-driven summon (same as the hotkey).
+    func summon() {
+        if !overlay.isVisible { present() }
+    }
+
+    /// Current backend status for the menu's status line.
+    func backendStatusLine() -> (connected: Bool, label: String) {
+        let s = ClaudeLocator.check()
+        if case .ok(_, let v) = s {
+            return (true, "Claude CLI connected · " + shortVersion(v))
+        }
+        return (false, "Claude CLI not connected")
     }
 
     // MARK: - Invocation
@@ -72,6 +87,7 @@ final class AppCoordinator {
             do {
                 let shot = try await ScreenCaptureService.captureActiveDisplay()
                 self.pendingImagePNG = shot.pngData
+                self.pendingCaptureLabel = shot.displayLabel
                 self.showOverlay()
             } catch CaptureError.permissionDenied {
                 self.teardownBackend()
@@ -84,13 +100,20 @@ final class AppCoordinator {
         }
     }
 
+    /// "2.1.197 (Claude Code)" → "claude 2.1.197".
+    private func shortVersion(_ raw: String) -> String {
+        let num = raw.split(separator: " ").first.map(String.init) ?? raw
+        return "claude \(num)"
+    }
+
     private func showOverlay() {
         overlay.present()
         // Reflect CLI connection in the footer (present() only reaches here when
         // the CLI is OK, so show the connected version).
+        overlay.session.captureLabel = pendingCaptureLabel
         if case .ok(_, let version) = claudeStatus {
             overlay.session.backendConnected = true
-            overlay.session.backendLabel = "Claude CLI connected · \(version)"
+            overlay.session.backendLabel = "Claude CLI connected · \(shortVersion(version))"
         } else {
             overlay.session.backendConnected = false
             overlay.session.backendLabel = "Claude CLI not connected"
