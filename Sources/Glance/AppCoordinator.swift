@@ -11,6 +11,9 @@ final class AppCoordinator {
     private let overlay = OverlayController()
     private let prefs = Preferences.shared
 
+    /// Opens the Settings window (wired to the status-item controller).
+    var onOpenSettings: (() -> Void)?
+
     private var backend: ClaudeBackend?
     private var pendingImagePNG: Data?
     private var pendingCaptureLabel: String = ""
@@ -100,6 +103,10 @@ final class AppCoordinator {
         overlay.present()
         // Reflect CLI connection in the footer (present() only reaches here when
         // the CLI is OK, so show the connected version).
+        overlay.session.settingsHandler = { [weak self] in
+            self?.overlay.dismiss()
+            self?.onOpenSettings?()
+        }
         overlay.session.captureLabel = pendingCaptureLabel
         if case .ok(_, let version) = claudeStatus {
             overlay.session.backendConnected = true

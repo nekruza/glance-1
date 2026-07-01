@@ -57,7 +57,6 @@ struct OverlayView: View {
                 .tint(Theme.accent)
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
-            attachButton
             kbd("↩ Ask")
         }
         .padding(.horizontal, 22).padding(.vertical, 20)
@@ -155,7 +154,6 @@ struct OverlayView: View {
                 .tint(Theme.accent)
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
-            attachButton
         }
         .padding(.horizontal, 22).padding(.vertical, 14)
         .background(Color.white.opacity(0.03))
@@ -185,9 +183,14 @@ struct OverlayView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.muted)
             Spacer()
-            Text("Backend · Claude CLI (local)")
-                .font(.system(size: 11.5))
-                .foregroundStyle(Theme.faint)
+            attachButton
+            Button(action: { session.settingsHandler?() }) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.muted)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
         }
         .padding(.horizontal, 22).padding(.vertical, 10)
         .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)

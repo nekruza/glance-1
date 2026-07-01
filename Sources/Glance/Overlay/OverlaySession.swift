@@ -33,6 +33,7 @@ final class OverlaySession: ObservableObject {
     /// Wired by the controller.
     var submitHandler: ((String) -> Void)?
     var dismissHandler: (() -> Void)?
+    var settingsHandler: (() -> Void)?
 
     var canSubmit: Bool {
         !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isWorking

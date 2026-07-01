@@ -82,6 +82,9 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     @objc private func askAction() { onAsk?() }
 
+    /// Public entry so the overlay's gear button can open the same window.
+    func showSettings() { openSettings() }
+
     @objc private func openSettings() {
         if let window = settingsWindow {
             NSApp.activate(ignoringOtherApps: true)
