@@ -74,18 +74,19 @@ struct OverlayView: View {
 
     // MARK: - Answer: transcript + follow-up
 
-    private let maxTranscript: CGFloat = 420
+    private let minTranscript: CGFloat = 340
+    private let maxTranscript: CGFloat = 520
 
     private var transcript: some View {
         ScrollViewReader { proxy in
-            // Hug content when short; switch to a scroll view once it exceeds the
-            // cap. ViewThatFits gives the hosting panel a concrete size so it
-            // grows to include the input + footer (no clipping).
+            // Comfortable minimum height so short answers aren't cramped; grow
+            // with content, cap at max then scroll. ViewThatFits keeps the panel
+            // size deterministic (input + footer never clipped).
             ViewThatFits(in: .vertical) {
                 transcriptContent
                 ScrollView { transcriptContent }
             }
-            .frame(maxHeight: maxTranscript)
+            .frame(minHeight: minTranscript, maxHeight: maxTranscript, alignment: .top)
             .onChange(of: session.turns.last?.answer) { _, _ in scrollToEnd(proxy) }
             .onChange(of: session.turns.count) { _, _ in scrollToEnd(proxy) }
         }
