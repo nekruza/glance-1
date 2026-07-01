@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// Owns the reusable overlay panel and its SwiftUI content. Reused across
 /// invocations so presenting is a cheap show/center, not a window alloc (FR2).
@@ -10,6 +11,11 @@ final class OverlayController {
     private let panel = OverlayPanel()
     private var hostingView: NSHostingView<OverlayView>?
     private var clickOutsideMonitor: Any?
+    private var sizeCancellable: AnyCancellable?
+
+    /// Deterministic window heights — no SwiftUI/window auto-sizing feedback
+    /// loop (that raced and clipped the input + footer).
+    private let conversationHeight: CGFloat = 560
 
     /// Called when the overlay is dismissed for any reason (FR4).
     var onDismiss: (() -> Void)?
@@ -28,9 +34,26 @@ final class OverlayController {
 
         let root = OverlayView(session: session)
         let host = NSHostingView(rootView: root)
-        host.sizingOptions = [.preferredContentSize] // panel tracks SwiftUI content size
+        host.sizingOptions = [] // window size is set manually, never auto-tracked
+        host.autoresizingMask = [.width, .height]
         panel.contentView = host
         hostingView = host
+
+        // Compact idle size, measured from the idle content.
+        let idleHeight = max(host.fittingSize.height, 96)
+        panel.setContentSize(NSSize(width: 640, height: idleHeight))
+
+        // Grow to the fixed conversation size on the first message; shrink back
+        // if the transcript is ever emptied.
+        sizeCancellable = session.$turns
+            .map(\.isEmpty)
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isEmpty in
+                guard let self else { return }
+                let h = isEmpty ? idleHeight : self.conversationHeight
+                self.panel.setContentSize(NSSize(width: 640, height: h))
+            }
 
         positionPanel()
         panel.makeKeyAndOrderFront(nil)
