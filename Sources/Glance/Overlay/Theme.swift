@@ -4,7 +4,8 @@ import SwiftUI
 /// Values sampled from 01-overlay-idle.html / 02-overlay-answer.html.
 enum Theme {
     // Accent
-    static let accent = Color(red: 0x2f/255, green: 0x6f/255, blue: 0xeb/255) // #2f6feb
+    /// User-tunable in Settings (default #06C167, Uber Eats green).
+    static var accent: Color { Preferences.shared.accentColor }
 
     // Dark-glass surface
     static let glassTint = Color(red: 22/255, green: 24/255, blue: 29/255)     // rgba(22,24,29,·)

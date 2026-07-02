@@ -49,6 +49,19 @@ struct SettingsView: View {
                 } label: {
                     settingLabel("Overlay opacity", "How solid the overlay background is")
                 }
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        ColorPicker("", selection: $prefs.accentColor, supportsOpacity: false)
+                            .labelsHidden()
+                        Button("Reset") {
+                            prefs.accentHex = Preferences.defaultAccentHex
+                        }
+                        .controlSize(.small)
+                        .disabled(prefs.accentHex == Preferences.defaultAccentHex)
+                    }
+                } label: {
+                    settingLabel("Accent color", "Icons, highlights and cursor in the overlay")
+                }
             }
 
             Section("Status") {

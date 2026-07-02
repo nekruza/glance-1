@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 /// User settings (FR17 hotkey, FR18 launch-at-login). FR19: nothing else in v1.
 /// Backed by UserDefaults; observable so Settings UI and HotkeyManager react.
@@ -10,10 +11,14 @@ final class Preferences: ObservableObject {
         static let hotkeyKeyCode = "hotkey.keyCode"
         static let hotkeyModifiers = "hotkey.modifiers"
         static let overlayOpacity = "overlay.opacity"
+        static let accentHex = "overlay.accentHex"
     }
 
     /// Default dark-tint opacity of the overlay background.
     static let defaultOverlayOpacity: Double = 0.7
+
+    /// Default accent — Uber Eats green.
+    static let defaultAccentHex = "06C167"
 
     private let defaults = UserDefaults.standard
 
@@ -27,6 +32,16 @@ final class Preferences: ObservableObject {
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
     @Published var overlayOpacity: Double {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
+    }
+
+    /// Accent color as an RRGGBB hex string (drives Theme.accent everywhere).
+    @Published var accentHex: String {
+        didSet { defaults.set(accentHex, forKey: Keys.accentHex) }
+    }
+
+    var accentColor: Color {
+        get { Color(hexRGB: accentHex) ?? Color(hexRGB: Self.defaultAccentHex)! }
+        set { accentHex = newValue.hexRGB ?? Self.defaultAccentHex }
     }
 
     private init() {
@@ -43,5 +58,29 @@ final class Preferences: ObservableObject {
         } else {
             overlayOpacity = Self.defaultOverlayOpacity
         }
+        accentHex = defaults.string(forKey: Keys.accentHex) ?? Self.defaultAccentHex
+    }
+}
+
+// MARK: - Hex color helpers
+
+extension Color {
+    /// "RRGGBB" (with or without leading #) → Color, sRGB.
+    init?(hexRGB: String) {
+        var s = hexRGB.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+        self.init(red: Double((v >> 16) & 0xff) / 255,
+                  green: Double((v >> 8) & 0xff) / 255,
+                  blue: Double(v & 0xff) / 255)
+    }
+
+    /// Color → "RRGGBB" (sRGB, alpha dropped).
+    var hexRGB: String? {
+        guard let c = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        return String(format: "%02X%02X%02X",
+                      Int(round(c.redComponent * 255)),
+                      Int(round(c.greenComponent * 255)),
+                      Int(round(c.blueComponent * 255)))
     }
 }
