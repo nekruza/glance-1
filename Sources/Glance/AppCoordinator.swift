@@ -14,6 +14,16 @@ final class AppCoordinator {
     /// Opens the Settings window (wired to the status-item controller).
     var onOpenSettings: (() -> Void)?
 
+    /// Toggles meeting transcription (wired to the app delegate's transcriber).
+    var onToggleTranscription: (() -> Void)? {
+        didSet { overlay.session.transcribeHandler = onToggleTranscription }
+    }
+
+    /// Reflect transcription state in the overlay's record button.
+    func setTranscribing(_ recording: Bool) {
+        overlay.session.isTranscribing = recording
+    }
+
     private var backend: ClaudeBackend?
     private var suggestions: SuggestionService?
     private var pendingImagePNG: Data?

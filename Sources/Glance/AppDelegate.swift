@@ -4,6 +4,7 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = StatusItemController()
     private let coordinator = AppCoordinator()
+    private let transcriber = MeetingTranscriber()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // FR5 / FR3: menu-bar app, no Dock, no App Switcher entry.
@@ -19,8 +20,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.statusProvider = { [weak coordinator] in
             coordinator?.backendStatusLine() ?? (false, "Claude CLI status unknown")
         }
+        statusItem.onToggleTranscription = { [weak self] in self?.toggleTranscription() }
+        statusItem.isTranscribing = { [weak self] in self?.transcriber.isRecording ?? false }
+        coordinator.onToggleTranscription = { [weak self] in self?.toggleTranscription() }
+        transcriber.onStateChange = { [weak self] in
+            guard let self else { return }
+            self.statusItem.refreshTranscribeState()
+            self.coordinator.setTranscribing(self.transcriber.isRecording)
+        }
         statusItem.install()
         coordinator.start()
+    }
+
+    private func toggleTranscription() {
+        if transcriber.isRecording {
+            Task { [weak self] in
+                guard let self else { return }
+                if let url = await self.transcriber.stop() {
+                    // Show the notes; the AI summary is prepended when ready.
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            return
+        }
+        MeetingTranscriber.requestPermissions { [weak self] ok, message in
+            guard let self else { return }
+            guard ok else {
+                if let message { self.alert("Can't start transcription", message) }
+                return
+            }
+            Task {
+                do {
+                    try await self.transcriber.start()
+                } catch {
+                    self.alert("Transcription failed to start", error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func alert(_ title: String, _ text: String) {
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = text
+        a.alertStyle = .warning
+        NSApp.activate(ignoringOtherApps: true)
+        a.runModal()
     }
 
     private func installMainMenu() {

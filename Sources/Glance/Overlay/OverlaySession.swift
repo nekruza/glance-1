@@ -18,6 +18,9 @@ final class OverlaySession: ObservableObject {
     /// Default off — attach only when the user opts in.
     @Published var attachImage: Bool = false
 
+    /// Live meeting-transcription state (footer record button).
+    @Published var isTranscribing: Bool = false
+
     /// Claude CLI connection state, shown in the overlay footer.
     @Published var backendConnected: Bool = false
     @Published var backendLabel: String = "Checking Claude CLI…"
@@ -49,6 +52,7 @@ final class OverlaySession: ObservableObject {
     var settingsHandler: (() -> Void)?
     var historyHandler: ((SessionSummary) -> Void)?
     var clearHandler: (() -> Void)?
+    var transcribeHandler: (() -> Void)?
 
     var canSubmit: Bool {
         !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isWorking

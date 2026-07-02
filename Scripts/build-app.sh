@@ -39,6 +39,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>               <true/>
     <key>NSHighResolutionCapable</key>   <true/>
     <key>NSHumanReadableCopyright</key>  <string>Personal tool.</string>
+    <!-- Meeting transcription -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Glance records your microphone to transcribe your side of meetings.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Glance transcribes meeting audio on-device to create notes.</string>
 </dict>
 </plist>
 PLIST

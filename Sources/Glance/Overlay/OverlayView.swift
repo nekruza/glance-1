@@ -243,6 +243,17 @@ struct OverlayView: View {
         .help("Close overlay")
     }
 
+    private var transcribeButton: some View {
+        Button(action: { session.transcribeHandler?() }) {
+            Image(systemName: session.isTranscribing ? "record.circle.fill" : "waveform.circle")
+                .font(.system(size: 15))
+                .foregroundStyle(session.isTranscribing ? Theme.danger : Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .help(session.isTranscribing ? "Stop meeting transcription and save notes"
+                                     : "Start meeting transcription (Granola-style notes)")
+    }
+
     private var clearButton: some View {
         Button(action: { session.clearHandler?() }) {
             Image(systemName: "trash")
@@ -330,6 +341,7 @@ struct OverlayView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.muted)
             Spacer()
+            transcribeButton
             if !session.turns.isEmpty {
                 clearButton
             }

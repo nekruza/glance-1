@@ -15,7 +15,9 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Carbon"),          // RegisterEventHotKey (FR1)
                 .linkedFramework("ScreenCaptureKit"), // SCScreenshotManager (FR6)
-                .linkedFramework("ServiceManagement") // SMAppService launch-at-login (FR18)
+                .linkedFramework("ServiceManagement"), // SMAppService launch-at-login (FR18)
+                .linkedFramework("Speech"),           // on-device meeting transcription
+                .linkedFramework("AVFoundation")      // mic capture for transcription
             ]
         )
     ]

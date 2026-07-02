@@ -8,12 +8,16 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     /// Set by the app delegate; summons the overlay.
     var onAsk: (() -> Void)?
+    /// Toggles meeting transcription; provider reports the live state.
+    var onToggleTranscription: (() -> Void)?
+    var isTranscribing: (() -> Bool)?
     /// Provides the live backend status for the status line.
     var statusProvider: (() -> (connected: Bool, label: String))?
 
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var statusLineItem: NSMenuItem?
+    private var transcribeItem: NSMenuItem?
 
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -50,6 +54,12 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
         ask.target = self
         menu.addItem(ask)
 
+        let transcribe = NSMenuItem(title: "Start Meeting Transcription",
+                                    action: #selector(toggleTranscription), keyEquivalent: "")
+        transcribe.target = self
+        transcribeItem = transcribe
+        menu.addItem(transcribe)
+
         menu.addItem(.separator())
 
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -66,7 +76,22 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     // MARK: - NSMenuDelegate
 
-    func menuWillOpen(_ menu: NSMenu) { refreshStatusLine() }
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshStatusLine()
+        refreshTranscribeState()
+    }
+
+    /// Menu title + menu-bar icon reflect the recording state.
+    func refreshTranscribeState() {
+        let recording = isTranscribing?() ?? false
+        transcribeItem?.title = recording ? "Stop Transcription & Save Notes"
+                                          : "Start Meeting Transcription"
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: recording ? "record.circle" : "sparkle",
+                                   accessibilityDescription: "Glance")
+            button.image?.isTemplate = true
+        }
+    }
 
     private func refreshStatusLine() {
         let (connected, label) = statusProvider?() ?? (false, "Claude CLI status unknown")
@@ -81,6 +106,8 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func askAction() { onAsk?() }
+
+    @objc private func toggleTranscription() { onToggleTranscription?() }
 
     /// Public entry so the overlay's gear button can open the same window.
     func showSettings() { openSettings() }
