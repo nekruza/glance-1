@@ -72,11 +72,14 @@ final class AppCoordinator {
         }
 
         // FR15 warm path: spawn the backend now so start/auth overlaps with the
-        // user reading the overlay and typing.
-        let backend = ClaudeBackend(binaryPath: path)
-        backend.firstTokenTimeout = 30 // FR13
-        backend.startWarm()
-        self.backend = backend
+        // user reading the overlay and typing. Reuse the live backend when
+        // re-summoning — the conversation persists across dismissals.
+        if backend == nil {
+            let backend = ClaudeBackend(binaryPath: path)
+            backend.firstTokenTimeout = 30 // FR13
+            backend.startWarm()
+            self.backend = backend
+        }
 
         // Attachment defaults off, so don't block on Screen Recording — capture
         // opportunistically (FR8: before the overlay is shown) and open the
@@ -107,6 +110,20 @@ final class AppCoordinator {
             self?.overlay.dismiss()
             self?.onOpenSettings?()
         }
+        overlay.session.historyHandler = { [weak self] summary in
+            self?.resumeHistorySession(summary)
+        }
+        overlay.session.clearHandler = { [weak self] in
+            self?.clearSession()
+        }
+        // Populate the History dropdown off the main thread (directory scan +
+        // head parse of each candidate file).
+        Task { [weak self] in
+            let sessions = await Task.detached(priority: .utility) {
+                SessionHistoryStore.recentSessions()
+            }.value
+            self?.overlay.session.historySessions = sessions
+        }
         overlay.session.captureLabel = pendingCaptureLabel
         if case .ok(_, let version) = claudeStatus {
             overlay.session.backendConnected = true
@@ -117,6 +134,44 @@ final class AppCoordinator {
         }
         overlay.onSubmit { [weak self] question in
             self?.handleSubmit(question)
+        }
+    }
+
+    /// Clear button: drop the conversation (and any resumed session), start a
+    /// fresh warm backend, and fall back to the idle prompt.
+    private func clearSession() {
+        teardownBackend()
+        overlay.session.clearTranscript()
+        guard case .ok(let path, _) = claudeStatus else { return }
+        let backend = ClaudeBackend(binaryPath: path)
+        backend.firstTokenTimeout = 30
+        backend.startWarm()
+        self.backend = backend
+    }
+
+    // MARK: - History resume
+
+    /// Swap the backend for one that resumes the picked Claude CLI session and
+    /// show its past transcript; follow-ups continue that conversation.
+    private func resumeHistorySession(_ summary: SessionSummary) {
+        guard case .ok(let path, _) = claudeStatus else { return }
+        teardownBackend()
+
+        let backend = ClaudeBackend(binaryPath: path,
+                                    resumeSessionId: summary.id,
+                                    resumeCwd: summary.cwd)
+        // Resuming a large session (long transcript, project hooks) can take
+        // far longer to first token than a fresh one.
+        backend.firstTokenTimeout = 120
+        backend.startWarm()
+        self.backend = backend
+
+        let url = summary.fileURL
+        Task { [weak self] in
+            let turns = await Task.detached(priority: .userInitiated) {
+                SessionHistoryStore.loadTurns(from: url)
+            }.value
+            self?.overlay.session.loadTranscript(turns)
         }
     }
 
@@ -182,11 +237,18 @@ final class AppCoordinator {
 
     // MARK: - Teardown
 
-    /// FR4/FR9/FR12: end the overlay session — kill the backend process and drop
-    /// the screenshot bytes. Next invocation starts fresh.
+    /// Overlay dismissed. Keep the backend and transcript — the conversation
+    /// survives until the user clears it (trash) — but drop the screenshot
+    /// bytes (FR9); the next summon captures a fresh one.
     private func endSession() {
-        teardownBackend()
         pendingImagePNG = nil
+        // Attaching is an explicit, per-summon opt-in — never carry it over.
+        overlay.session.attachImage = false
+    }
+
+    /// App is quitting: don't leave an orphaned claude process behind.
+    func shutdown() {
+        teardownBackend()
     }
 
     private func teardownBackend() {

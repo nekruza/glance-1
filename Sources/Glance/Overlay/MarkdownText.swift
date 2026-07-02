@@ -33,14 +33,14 @@ struct MarkdownText: View {
                 if level >= 2 {
                     // Design: uppercase, tracked, muted section labels.
                     Text(t.uppercased())
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .tracking(0.4)
                         .foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 6)
                 } else {
                     Text(inline(t))
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             case .bullet(let t):
@@ -55,7 +55,7 @@ struct MarkdownText: View {
                 }
             case .code(let code):
                 Text(code)
-                    .font(.system(size: 12.5, design: .monospaced))
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Color(red: 0xdf/255, green: 0xe4/255, blue: 0xf0/255))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -6,6 +6,7 @@ import SwiftUI
 struct OverlayView: View {
     @ObservedObject var session: OverlaySession
     @FocusState private var inputFocused: Bool
+    @State private var showHistory = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -18,26 +19,38 @@ struct OverlayView: View {
             footer
         }
         .frame(width: Theme.overlayWidth)
+        .background(GeometryReader { geo in
+            Color.clear
+                .onAppear { session.contentHeight = geo.size.height }
+                .onChange(of: geo.size.height) { _, h in session.contentHeight = h }
+        })
         .background(glass)
         .overlay(
             RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
                 .strokeBorder(Theme.glassBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-        .shadow(color: .black.opacity(0.55), radius: 40, y: 24)
+        .overlay(alignment: .topTrailing) {
+            closeButton.padding(5)
+        }
         .foregroundStyle(Theme.fg)
         .onAppear { inputFocused = true }
+        // Clearing (trash) or resuming (History) swaps the text field between
+        // promptRow and followUpBar; FocusState resets when the focused field
+        // leaves the hierarchy, so re-focus or typing goes nowhere. The new
+        // field isn't focusable until after the view update, hence the delay.
+        .onChange(of: session.turns.isEmpty) { _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { inputFocused = true }
+        }
     }
 
     // MARK: - Surface
 
     private var glass: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(.regularMaterial)
-            // Opaque-enough dark tint so background UI (editor text, tooltips)
-            // doesn't bleed through and hurt readability. Still a hint of glass.
-            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.glassTint.opacity(0.9))
-        }
+        // No blur material — any NSVisualEffectView material reads as frosted
+        // near-opaque gray. Pure translucent color = genuinely see-through.
+        RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+            .fill(Theme.glassTint.opacity(0.7))
     }
 
     private var spark: some View {
@@ -106,7 +119,7 @@ struct OverlayView: View {
         HStack(alignment: .top, spacing: 12) {
             spark.font(.system(size: 16, weight: .semibold))
             Text(turn.question)
-                .font(.system(size: 17))
+                .font(.system(size: 14))
                 .frame(maxWidth: .infinity, alignment: .leading)
             if showThumb {
                 thumbnail.frame(width: 44, height: 28)
@@ -130,14 +143,14 @@ struct OverlayView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             MarkdownText(text: turn.answer)
-                .font(.system(size: 15))
+                .font(.system(size: 12))
         }
     }
 
     private var workingRow: some View {
         HStack(spacing: 10) {
             BouncingDots()
-            Text(session.turns.count <= 1 ? "Reading your screen…" : "Thinking…")
+            Text(session.attachImage ? "Reading your screen…" : "Thinking…")
                 .foregroundStyle(Theme.muted).font(.system(size: 14))
         }
     }
@@ -173,6 +186,96 @@ struct OverlayView: View {
                                   : "Text-only — click to attach the current screen")
     }
 
+    private var closeButton: some View {
+        Button(action: { session.dismissHandler?() }) {
+            Image(systemName: "xmark")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(Theme.muted)
+                .padding(4)
+                .background(Circle().fill(Theme.field))
+                .overlay(Circle().strokeBorder(Theme.glassBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Close overlay")
+    }
+
+    private var clearButton: some View {
+        Button(action: { session.clearHandler?() }) {
+            Image(systemName: "trash")
+                .font(.system(size: 13.5))
+                .foregroundStyle(Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .help("Clear conversation and start a fresh session")
+    }
+
+    // MARK: - History (past Claude CLI sessions)
+
+    private var historyButton: some View {
+        Button(action: { showHistory.toggle() }) {
+            HStack(spacing: 5) {
+                Text("History").font(.system(size: 11.5))
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(Theme.muted)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.field))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.glassBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Resume a past Claude CLI session")
+        .popover(isPresented: $showHistory, arrowEdge: .bottom) { historyList }
+    }
+
+    private var historyList: some View {
+        Group {
+            if session.historySessions.isEmpty {
+                Text("No past sessions")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.muted)
+                    .padding(20)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(session.historySessions) { item in
+                            historyRow(item)
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(width: 340)
+                .frame(maxHeight: 320)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func historyRow(_ item: SessionSummary) -> some View {
+        Button {
+            showHistory = false
+            session.historyHandler?(item)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                Text("\(item.projectLabel) · \(Self.relativeTime.localizedString(for: item.modified, relativeTo: Date()))")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(HistoryRowButtonStyle())
+    }
+
+    private static let relativeTime: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
     private var footer: some View {
         HStack(spacing: 8) {
             Circle()
@@ -183,6 +286,10 @@ struct OverlayView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.muted)
             Spacer()
+            if !session.turns.isEmpty {
+                clearButton
+            }
+            historyButton
             attachButton
             Button(action: { session.settingsHandler?() }) {
                 Image(systemName: "gearshape")
@@ -216,6 +323,19 @@ struct OverlayView: View {
         if let last = session.turns.last?.id {
             withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last, anchor: .bottom) }
         }
+    }
+}
+
+/// Hover highlight for history rows inside the popover.
+private struct HistoryRowButtonStyle: ButtonStyle {
+    @State private var hovering = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.14 : hovering ? 0.08 : 0))
+            )
+            .onHover { hovering = $0 }
     }
 }
 

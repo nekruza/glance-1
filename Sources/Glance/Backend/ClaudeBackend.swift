@@ -23,6 +23,13 @@ final class ClaudeBackend {
 
     private let binaryPath: String
     private let workingDir: URL
+    /// Whether workingDir is our throwaway temp dir (cleaned up on shutdown)
+    /// as opposed to a resumed session's original project dir.
+    private let ownsWorkingDir: Bool
+    /// Claude session UUID to resume: seeded by the History feature, then kept
+    /// up to date from the stream so a respawn (process died between overlay
+    /// summons) continues the same conversation instead of losing context.
+    private var resumeSessionId: String?
 
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -35,14 +42,33 @@ final class ClaudeBackend {
 
     private let ioQueue = DispatchQueue(label: "com.h57q3wq0c.glance.backend")
 
-    init(binaryPath: String) {
+    init(binaryPath: String, resumeSessionId: String? = nil, resumeCwd: String? = nil) {
         self.binaryPath = binaryPath
+        self.resumeSessionId = resumeSessionId
+
+        // Resume needs the session's original cwd — the CLI keys its session
+        // store by project directory. Recreate it if it's gone (temp dirs).
+        if resumeSessionId != nil, let cwd = resumeCwd {
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            if !fm.fileExists(atPath: cwd, isDirectory: &isDir) {
+                try? fm.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+                _ = fm.fileExists(atPath: cwd, isDirectory: &isDir)
+            }
+            if isDir.boolValue {
+                self.workingDir = URL(fileURLWithPath: cwd, isDirectory: true)
+                self.ownsWorkingDir = false
+                return
+            }
+        }
+
         // Neutral cwd: a private temp dir so we don't inherit a project's
         // CLAUDE.md / hooks (keeps latency and behavior predictable).
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("glance-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.workingDir = dir
+        self.ownsWorkingDir = true
     }
 
     // MARK: - Lifecycle
@@ -57,13 +83,17 @@ final class ClaudeBackend {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        proc.arguments = [
+        var args = [
             "-p",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--verbose"
         ]
+        if let id = resumeSessionId {
+            args += ["--resume", id]
+        }
+        proc.arguments = args
         proc.currentDirectoryURL = workingDir
 
         let inPipe = Pipe()
@@ -134,7 +164,9 @@ final class ClaudeBackend {
             self.stdinPipe = nil
             self.stdoutBuffer.removeAll()
             self.didSendFirstMessage = false
-            try? FileManager.default.removeItem(at: self.workingDir)
+            if self.ownsWorkingDir {
+                try? FileManager.default.removeItem(at: self.workingDir)
+            }
         }
     }
 
@@ -153,6 +185,8 @@ final class ClaudeBackend {
 
     private func handleLine(_ lineData: Data) {
         guard let line = try? JSONDecoder().decode(StreamLine.self, from: lineData) else { return }
+
+        if let sid = line.sessionId { resumeSessionId = sid }
 
         if let text = line.streamedText, !text.isEmpty {
             if !sawTokenThisTurn {
@@ -173,6 +207,9 @@ final class ClaudeBackend {
     }
 
     private func handleExit(_ p: Process) {
+        // A terminated process we already replaced (timeout → shutdown →
+        // respawn) must not clobber the live one's state.
+        guard p === process else { return }
         // If the process dies mid-turn, surface it rather than spin (FR13/FR16).
         timeoutWork?.cancel()
         if currentHandler != nil {

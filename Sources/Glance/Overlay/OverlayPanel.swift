@@ -17,9 +17,10 @@ final class OverlayPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         hidesOnDeactivate = false
-        isMovableByWindowBackground = false
+        // Drag anywhere that isn't a control (header, paddings, footer).
+        isMovableByWindowBackground = true
         // Force dark so the glass reads dark regardless of the desktop behind it
         // (design contract: dark-glass overlay).
         appearance = NSAppearance(named: .darkAqua)
@@ -27,6 +28,10 @@ final class OverlayPanel: NSPanel {
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         animationBehavior = .utilityWindow
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowDidMove(_:)),
+            name: NSWindow.didMoveNotification, object: self)
     }
 
     // Must become key so the text field receives input (FR3 fallback path).
@@ -38,6 +43,10 @@ final class OverlayPanel: NSPanel {
     /// stays put so the panel expands downward.
     var anchoredLeft: CGFloat?
     var anchoredTop: CGFloat?
+    /// Set once the user drags the panel; the controller then stops recentering
+    /// it on each summon.
+    private(set) var userMoved = false
+    private var isProgrammaticMove = false
 
     override func setContentSize(_ size: NSSize) {
         super.setContentSize(size)
@@ -46,7 +55,18 @@ final class OverlayPanel: NSPanel {
 
     func reanchor() {
         guard let left = anchoredLeft, let top = anchoredTop else { return }
+        isProgrammaticMove = true
         setFrameOrigin(NSPoint(x: left, y: top - frame.height))
+        isProgrammaticMove = false
+    }
+
+    /// A drag moved the window: adopt the new spot as the anchor so the next
+    /// resize/reanchor doesn't snap it back.
+    @objc private func windowDidMove(_ note: Notification) {
+        guard !isProgrammaticMove else { return }
+        userMoved = true
+        anchoredLeft = frame.minX
+        anchoredTop = frame.maxY
     }
 
     // FR4: Esc dismisses. keyCode 53 = Escape.

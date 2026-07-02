@@ -30,10 +30,21 @@ final class OverlaySession: ObservableObject {
     /// "working" state).
     @Published var isWorking: Bool = false
 
+    /// Past Claude CLI sessions for the footer History dropdown.
+    @Published var historySessions: [SessionSummary] = []
+
+    /// True rendered height of the overlay content, reported by the view
+    /// (GeometryReader). The controller sizes the idle window from this —
+    /// AppKit-side measurement of the hosting view proved unreliable and
+    /// clipped the content.
+    @Published var contentHeight: CGFloat = 0
+
     /// Wired by the controller.
     var submitHandler: ((String) -> Void)?
     var dismissHandler: (() -> Void)?
     var settingsHandler: (() -> Void)?
+    var historyHandler: ((SessionSummary) -> Void)?
+    var clearHandler: (() -> Void)?
 
     var canSubmit: Bool {
         !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isWorking
@@ -46,6 +57,21 @@ final class OverlaySession: ObservableObject {
         input = ""
         isWorking = true
         submitHandler?(q)
+    }
+
+    /// Wipe the conversation back to the idle prompt (Clear button).
+    func clearTranscript() {
+        turns = []
+        input = ""
+        isWorking = false
+        attachImage = false
+    }
+
+    /// Replace the transcript with a resumed session's past turns (History).
+    func loadTranscript(_ pairs: [(question: String, answer: String)]) {
+        turns = pairs.map { Turn(question: $0.question, answer: $0.answer) }
+        isWorking = false
+        input = ""
     }
 
     // MARK: - Backend event application (called on main)
