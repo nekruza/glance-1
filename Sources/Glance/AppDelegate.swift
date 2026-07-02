@@ -44,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "Select All",
                      action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Start Dictation…",
+                     action: Selector(("startDictation:")), keyEquivalent: "")
         editItem.submenu = edit
 
         NSApp.mainMenu = main

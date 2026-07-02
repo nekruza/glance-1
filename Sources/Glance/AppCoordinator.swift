@@ -15,6 +15,7 @@ final class AppCoordinator {
     var onOpenSettings: (() -> Void)?
 
     private var backend: ClaudeBackend?
+    private var suggestions: SuggestionService?
     private var pendingImagePNG: Data?
     private var pendingCaptureLabel: String = ""
     private var claudeStatus: ClaudeLocator.Status = .notFound
@@ -229,9 +230,30 @@ final class AppCoordinator {
             guard let self else { return }
             switch event {
             case .token(let text): self.overlay.session.appendToken(text)
-            case .completed:        self.overlay.session.completeTurn()
+            case .completed:
+                self.overlay.session.completeTurn()
+                self.generateSuggestions()
             case .failed(let msg):  self.overlay.session.failTurn(msg)
             }
+        }
+    }
+
+    /// Fill the suggestion chips from the just-finished turn (cheap one-shot
+    /// haiku call, separate from the conversation).
+    private func generateSuggestions() {
+        guard case .ok(let path, _) = claudeStatus,
+              let turn = overlay.session.turns.last, !turn.failed, !turn.answer.isEmpty
+        else { return }
+
+        if suggestions == nil { suggestions = SuggestionService(binaryPath: path) }
+        let turnId = turn.id
+        suggestions?.suggest(question: turn.question, answer: turn.answer) { [weak self] list in
+            guard let self,
+                  // Stale guard: still the same last turn, nothing in flight.
+                  self.overlay.session.turns.last?.id == turnId,
+                  !self.overlay.session.isWorking
+            else { return }
+            self.overlay.session.suggestions = list
         }
     }
 
@@ -254,5 +276,6 @@ final class AppCoordinator {
     private func teardownBackend() {
         backend?.shutdown()
         backend = nil
+        suggestions?.cancel()
     }
 }

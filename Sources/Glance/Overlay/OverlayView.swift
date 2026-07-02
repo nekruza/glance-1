@@ -5,6 +5,7 @@ import SwiftUI
 /// asked header(s) + streamed Markdown + follow-up bar + footer.
 struct OverlayView: View {
     @ObservedObject var session: OverlaySession
+    @ObservedObject private var prefs = Preferences.shared
     @FocusState private var inputFocused: Bool
     @State private var showHistory = false
 
@@ -14,6 +15,9 @@ struct OverlayView: View {
                 promptRow
             } else {
                 transcript
+                if !session.suggestions.isEmpty && !session.isWorking {
+                    suggestionChips
+                }
                 followUpBar
             }
             footer
@@ -49,8 +53,9 @@ struct OverlayView: View {
     private var glass: some View {
         // No blur material — any NSVisualEffectView material reads as frosted
         // near-opaque gray. Pure translucent color = genuinely see-through.
+        // Opacity is user-tunable in Settings.
         RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-            .fill(Theme.glassTint.opacity(0.7))
+            .fill(Theme.glassTint.opacity(prefs.overlayOpacity))
     }
 
     private var spark: some View {
@@ -70,6 +75,7 @@ struct OverlayView: View {
                 .tint(Theme.accent)
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
+            micButton
             kbd("↩ Ask")
         }
         .padding(.horizontal, 22).padding(.vertical, 20)
@@ -155,6 +161,27 @@ struct OverlayView: View {
         }
     }
 
+    private var suggestionChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(session.suggestions, id: \.self) { s in
+                    Button(action: { session.submitSuggestion(s) }) {
+                        Text(s)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.fg.opacity(0.85))
+                            .lineLimit(1)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(Theme.field))
+                            .overlay(Capsule().strokeBorder(Theme.glassBorderHi, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 22).padding(.vertical, 8)
+        }
+        .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+    }
+
     private var followUpBar: some View {
         HStack(spacing: 12) {
             Image(systemName: "arrow.right")
@@ -167,6 +194,7 @@ struct OverlayView: View {
                 .tint(Theme.accent)
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
+            micButton
         }
         .padding(.horizontal, 22).padding(.vertical, 14)
         .background(Color.white.opacity(0.03))
@@ -174,6 +202,22 @@ struct OverlayView: View {
     }
 
     // MARK: - Shared controls
+
+    private var micButton: some View {
+        Button(action: {
+            // System dictation types into the focused field, so focus first.
+            inputFocused = true
+            DispatchQueue.main.async {
+                NSApp.sendAction(Selector(("startDictation:")), to: nil, from: nil)
+            }
+        }) {
+            Image(systemName: "mic")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .help("Dictate with macOS dictation")
+    }
 
     private var attachButton: some View {
         Button(action: { session.attachImage.toggle() }) {

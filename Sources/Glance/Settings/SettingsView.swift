@@ -32,6 +32,23 @@ struct SettingsView: View {
                 } label: {
                     settingLabel("Launch at login", "Start in the menu bar when you sign in")
                 }
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        Slider(value: $prefs.overlayOpacity, in: 0.2...1.0)
+                            .frame(width: 140)
+                        Text("\(Int(prefs.overlayOpacity * 100))%")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                        Button("Reset") {
+                            prefs.overlayOpacity = Preferences.defaultOverlayOpacity
+                        }
+                        .controlSize(.small)
+                        .disabled(prefs.overlayOpacity == Preferences.defaultOverlayOpacity)
+                    }
+                } label: {
+                    settingLabel("Overlay opacity", "How solid the overlay background is")
+                }
             }
 
             Section("Status") {

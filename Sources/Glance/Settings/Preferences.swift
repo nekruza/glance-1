@@ -9,7 +9,11 @@ final class Preferences: ObservableObject {
     private enum Keys {
         static let hotkeyKeyCode = "hotkey.keyCode"
         static let hotkeyModifiers = "hotkey.modifiers"
+        static let overlayOpacity = "overlay.opacity"
     }
+
+    /// Default dark-tint opacity of the overlay background.
+    static let defaultOverlayOpacity: Double = 0.7
 
     private let defaults = UserDefaults.standard
 
@@ -20,6 +24,11 @@ final class Preferences: ObservableObject {
         }
     }
 
+    /// Overlay background opacity (0.2 barely-there … 1.0 solid).
+    @Published var overlayOpacity: Double {
+        didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
+    }
+
     private init() {
         if defaults.object(forKey: Keys.hotkeyKeyCode) != nil {
             let code = UInt32(defaults.integer(forKey: Keys.hotkeyKeyCode))
@@ -28,6 +37,11 @@ final class Preferences: ObservableObject {
             hotkey = combo.isValid ? combo : .defaultCombo
         } else {
             hotkey = .defaultCombo
+        }
+        if defaults.object(forKey: Keys.overlayOpacity) != nil {
+            overlayOpacity = min(max(defaults.double(forKey: Keys.overlayOpacity), 0.2), 1.0)
+        } else {
+            overlayOpacity = Self.defaultOverlayOpacity
         }
     }
 }

@@ -33,6 +33,10 @@ final class OverlaySession: ObservableObject {
     /// Past Claude CLI sessions for the footer History dropdown.
     @Published var historySessions: [SessionSummary] = []
 
+    /// Context-based follow-up prompts, shown as clickable chips after an
+    /// answer completes. Clicking one submits it as the next message.
+    @Published var suggestions: [String] = []
+
     /// True rendered height of the overlay content, reported by the view
     /// (GeometryReader). The controller sizes the idle window from this —
     /// AppKit-side measurement of the hosting view proved unreliable and
@@ -56,7 +60,15 @@ final class OverlaySession: ObservableObject {
         turns.append(Turn(question: q))
         input = ""
         isWorking = true
+        suggestions = []
         submitHandler?(q)
+    }
+
+    /// Submit a suggestion chip as the next message.
+    func submitSuggestion(_ text: String) {
+        guard !isWorking else { return }
+        input = text
+        submit()
     }
 
     /// Wipe the conversation back to the idle prompt (Clear button).
@@ -65,6 +77,7 @@ final class OverlaySession: ObservableObject {
         input = ""
         isWorking = false
         attachImage = false
+        suggestions = []
     }
 
     /// Replace the transcript with a resumed session's past turns (History).
