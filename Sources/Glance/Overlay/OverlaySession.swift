@@ -103,6 +103,12 @@ final class OverlaySession: ObservableObject {
         isWorking = false
     }
 
+    /// Swap the last answer's text (task-capture cleanup after completion).
+    func replaceLastAnswer(_ text: String) {
+        guard !turns.isEmpty else { return }
+        turns[turns.count - 1].answer = text
+    }
+
     func failTurn(_ message: String) {
         isWorking = false
         guard !turns.isEmpty else { return }

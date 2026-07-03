@@ -135,6 +135,7 @@ final class AppCoordinator {
         if backend == nil {
             let backend = ClaudeBackend(binaryPath: path)
             backend.firstTokenTimeout = 30 // FR13
+            backend.appendSystemPrompt = TaskCapture.systemPrompt
             backend.startWarm()
             self.backend = backend
         }
@@ -203,6 +204,7 @@ final class AppCoordinator {
         guard case .ok(let path, _) = claudeStatus else { return }
         let backend = ClaudeBackend(binaryPath: path)
         backend.firstTokenTimeout = 30
+        backend.appendSystemPrompt = TaskCapture.systemPrompt
         backend.startWarm()
         self.backend = backend
     }
@@ -289,10 +291,27 @@ final class AppCoordinator {
             case .token(let text): self.overlay.session.appendToken(text)
             case .completed:
                 self.overlay.session.completeTurn()
+                self.captureTasksFromAnswer()
                 self.generateSuggestions()
             case .failed(let msg):  self.overlay.session.failTurn(msg)
             }
         }
+    }
+
+    /// V2 bridge: harvest `glance-task` blocks the assistant emitted when the
+    /// user asked (possibly about a screenshot) to add tasks — create them on
+    /// the board and show a confirmation in place of the raw block.
+    private func captureTasksFromAnswer() {
+        guard let last = overlay.session.turns.last, !last.failed else { return }
+        let (cleaned, captured) = TaskCapture.extract(from: last.answer)
+        guard !captured.isEmpty else { return }
+        overlay.session.replaceLastAnswer(cleaned)
+        for c in captured {
+            let item = taskStore.add(TaskCapture.makeTaskItem(c))
+            taskNotifications.post(message: "Task added: \(item.title)", taskId: item.id)
+        }
+        // New work on the board → let the ranking catch up (batched).
+        taskOverlay?.session.schedulePrioritize(force: true)
     }
 
     /// Fill the suggestion chips from the just-finished turn (cheap one-shot

@@ -31,6 +31,10 @@ final class ClaudeBackend {
     /// summons) continues the same conversation instead of losing context.
     private var resumeSessionId: String?
 
+    /// Extra system-prompt text appended to the session (V2: task-creation
+    /// protocol for the ask overlay).
+    var appendSystemPrompt: String?
+
     private var process: Process?
     private var stdinPipe: Pipe?
     private var stdoutBuffer = Data()
@@ -92,6 +96,9 @@ final class ClaudeBackend {
         ]
         if let id = resumeSessionId {
             args += ["--resume", id]
+        }
+        if let sys = appendSystemPrompt, !sys.isEmpty {
+            args += ["--append-system-prompt", sys]
         }
         proc.arguments = args
         proc.currentDirectoryURL = workingDir
