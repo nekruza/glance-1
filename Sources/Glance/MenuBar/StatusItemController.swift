@@ -8,6 +8,8 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     /// Set by the app delegate; summons the overlay.
     var onAsk: (() -> Void)?
+    /// Summons the V2 task board.
+    var onTasks: (() -> Void)?
     /// Toggles meeting transcription; provider reports the live state.
     var onToggleTranscription: (() -> Void)?
     var isTranscribing: (() -> Bool)?
@@ -53,6 +55,10 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
         let ask = NSMenuItem(title: "Ask about screen…", action: #selector(askAction), keyEquivalent: "")
         ask.target = self
         menu.addItem(ask)
+
+        let tasks = NSMenuItem(title: "Tasks…", action: #selector(tasksAction), keyEquivalent: "")
+        tasks.target = self
+        menu.addItem(tasks)
 
         let transcribe = NSMenuItem(title: "Start Meeting Transcription",
                                     action: #selector(toggleTranscription), keyEquivalent: "")
@@ -106,6 +112,8 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func askAction() { onAsk?() }
+
+    @objc private func tasksAction() { onTasks?() }
 
     @objc private func toggleTranscription() { onToggleTranscription?() }
 

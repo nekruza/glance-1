@@ -1,0 +1,171 @@
+import Foundation
+
+/// AI services for the task board: enrichment (FR36–38), prioritization
+/// (FR39–42), prompt→tasks decomposition (FR27). Each is a one-shot
+/// `claude -p` call requesting strict JSON, parsed defensively — a malformed
+/// response degrades to "no change", never corrupts the board.
+final class TaskAI {
+
+    private let binaryPath: String
+    private let queue = DispatchQueue(label: "com.h57q3wq0c.glance.taskai", attributes: .concurrent)
+
+    init(binaryPath: String) {
+        self.binaryPath = binaryPath
+    }
+
+    // MARK: - Enrichment (FR36)
+
+    struct Enrichment: Decodable {
+        var title: String?
+        var description: String?
+        var labels: [String]?
+        var taskKind: String?
+        var estimate: String?
+        var repoName: String?
+    }
+
+    func enrich(title: String, description: String, repoNames: [String],
+                completion: @escaping (Enrichment?) -> Void) {
+        let prompt = """
+        You enrich a todo task. Given its raw title/description, produce JSON only \
+        (no prose, no fences) with keys: "title" (cleaned, <=200 chars), \
+        "description" (markdown: 1-3 sentence context; add acceptance criteria \
+        bullets ONLY if clearly inferable), "labels" (array, 1-4 short lowercase \
+        tags), "taskKind" (one of: code, writing, research, other), "estimate" \
+        (one of: minutes, hour, halfday, day+), "repoName" (one of \(repoNames) \
+        if the task clearly belongs to that repo, else null).
+
+        Task title: \(title)
+        Task description: \(description.isEmpty ? "(none)" : description)
+        """
+        runJSON(prompt: prompt, model: "haiku", completion: completion)
+    }
+
+    // MARK: - Prioritization (FR39)
+
+    struct PriorityEntry: Decodable {
+        var id: String
+        var priority: String
+        var rationale: String
+    }
+
+    /// Compact board state in, ordered ids + rationale out. Pinned tasks are
+    /// sent for context but the store ignores rank changes on them (FR41).
+    func prioritize(board: [TaskItem], completion: @escaping ([PriorityEntry]?) -> Void) {
+        let lines = board.map { t -> String in
+            var bits = ["id=\(t.id.uuidString)", "title=\(t.title.prefix(80))"]
+            if !t.labels.isEmpty { bits.append("labels=\(t.labels.joined(separator: "|"))") }
+            if let e = t.estimate { bits.append("estimate=\(e.rawValue)") }
+            if let d = t.dueAt { bits.append("due=\(ISO8601DateFormatter().string(from: d))") }
+            bits.append("kind=\(t.taskKind.rawValue)")
+            bits.append("status=\(t.status.rawValue)")
+            if t.isPinned { bits.append("PINNED") }
+            return bits.joined(separator: " · ")
+        }.joined(separator: "\n")
+
+        let prompt = """
+        You prioritize a personal task board. Order tasks by what the user should \
+        do first. Consider: due dates, blockers/urgency language, small-quick-wins \
+        unblocking others, staleness. Output JSON only (no prose, no fences): an \
+        array of ALL task objects in your recommended order, each \
+        {"id": "<uuid>", "priority": "P0|P1|P2|P3", "rationale": "<one short \
+        sentence why this position>"}. Include every task exactly once.
+
+        Tasks:
+        \(lines)
+        """
+        runJSON(prompt: prompt, model: "haiku", completion: completion)
+    }
+
+    // MARK: - Prompt → tasks decomposition (FR27)
+
+    struct DecomposedTask: Decodable {
+        var title: String
+        var description: String?
+        var labels: [String]?
+        var taskKind: String?
+        var estimate: String?
+    }
+
+    func decompose(prompt userText: String, completion: @escaping ([DecomposedTask]?) -> Void) {
+        let prompt = """
+        Decompose the following braindump/notes into discrete actionable tasks. \
+        Output JSON only (no prose, no fences): array of 1-10 objects \
+        {"title": "<imperative, <=120 chars>", "description": "<markdown context \
+        from the source text>", "labels": [..], "taskKind": "code|writing|research|other", \
+        "estimate": "minutes|hour|halfday|day+"}. Split independent work items; \
+        don't invent work not implied by the text.
+
+        Text:
+        \(userText)
+        """
+        runJSON(prompt: prompt, model: nil, completion: completion)
+    }
+
+    // MARK: - Plumbing
+
+    /// Run one `claude -p` call and decode its stdout as T. Completion on main.
+    private func runJSON<T: Decodable>(prompt: String, model: String?,
+                                       completion: @escaping (T?) -> Void) {
+        queue.async { [binaryPath] in
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: binaryPath)
+            var args = ["-p"]
+            if let model { args += ["--model", model] }
+            args.append(prompt)
+            proc.arguments = args
+            proc.currentDirectoryURL = FileManager.default.temporaryDirectory
+
+            let out = Pipe()
+            proc.standardOutput = out
+            proc.standardError = Pipe()
+
+            var result: T?
+            do {
+                try proc.run()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                if proc.terminationStatus == 0,
+                   let text = String(data: data, encoding: .utf8) {
+                    result = Self.decodeLenient(T.self, from: text)
+                }
+            } catch {
+                // fall through with nil
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// Models sometimes wrap JSON in fences or prose despite instructions —
+    /// extract the outermost JSON value before decoding.
+    static func decodeLenient<T: Decodable>(_ type: T.Type, from text: String) -> T? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates: [String] = [
+            trimmed,
+            Self.stripFences(trimmed),
+            Self.extractJSON(trimmed, open: "[", close: "]"),
+            Self.extractJSON(trimmed, open: "{", close: "}")
+        ].compactMap { $0 }
+        for c in candidates {
+            if let data = c.data(using: .utf8),
+               let decoded = try? JSONDecoder().decode(T.self, from: data) {
+                return decoded
+            }
+        }
+        return nil
+    }
+
+    private static func stripFences(_ s: String) -> String? {
+        guard s.hasPrefix("```") else { return nil }
+        var lines = s.split(separator: "\n", omittingEmptySubsequences: false)
+        lines.removeFirst()
+        if lines.last?.hasPrefix("```") == true { lines.removeLast() }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func extractJSON(_ s: String, open: Character, close: Character) -> String? {
+        guard let start = s.firstIndex(of: open), let end = s.lastIndex(of: close),
+              start < end else { return nil }
+        return String(s[start...end])
+    }
+}

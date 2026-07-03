@@ -11,6 +11,9 @@ struct KeyCombo: Equatable, Codable {
     /// FR17 rebind makes it non-fatal.
     static let defaultCombo = KeyCombo(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey))
 
+    /// V2 FR20 default for the task board. ⌥T.
+    static let defaultTaskCombo = KeyCombo(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(optionKey))
+
     /// Human-readable label for the menu / settings ("⌥Space").
     var displayString: String {
         var s = ""

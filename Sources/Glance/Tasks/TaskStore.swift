@@ -1,0 +1,239 @@
+import Foundation
+import Combine
+
+/// Task persistence + board state (PRD V2 §4). JSON file store for MVP —
+/// atomic writes, loaded at launch; API is storage-agnostic so a later SQLite
+/// swap doesn't touch callers. All mutation on the main actor.
+@MainActor
+final class TaskStore: ObservableObject {
+
+    @Published private(set) var tasks: [TaskItem] = []
+    @Published private(set) var runs: [TaskRun] = []
+    @Published private(set) var approvals: [ApprovalRecord] = []
+
+    private let dir: URL
+    private let fileURL: URL
+    private var saveWork: DispatchWorkItem?
+
+    private struct Snapshot: Codable {
+        var version = 1
+        var tasks: [TaskItem]
+        var runs: [TaskRun]
+        var approvals: [ApprovalRecord]
+    }
+
+    init() {
+        dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Glance", isDirectory: true)
+        fileURL = dir.appendingPathComponent("tasks.json")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        load()
+    }
+
+    // MARK: - Queries
+
+    /// Board ordering (FR21): pinned tasks at their pinned positions first,
+    /// then AI rank. Snoozed tasks that woke up return automatically.
+    func boardTasks() -> [TaskItem] {
+        wakeSnoozed()
+        let active = tasks.filter { TaskStatus.boardStatuses.contains($0.status) }
+        let pinned = active.filter(\.isPinned).sorted { ($0.userPinnedRank ?? 0) < ($1.userPinnedRank ?? 0) }
+        let rest = active.filter { !$0.isPinned }.sorted { $0.aiRank < $1.aiRank }
+        return pinned + rest
+    }
+
+    func inboxTasks() -> [TaskItem] {
+        tasks.filter { $0.status == .inbox }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func doneTasks() -> [TaskItem] {
+        tasks.filter { $0.status == .done || $0.status == .archived || $0.status == .cancelled }
+            .sorted { ($0.completedAt ?? $0.updatedAt) > ($1.completedAt ?? $1.updatedAt) }
+    }
+
+    func task(_ id: UUID) -> TaskItem? { tasks.first { $0.id == id } }
+
+    func runs(for taskId: UUID) -> [TaskRun] {
+        runs.filter { $0.taskId == taskId }.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    func approvals(for taskId: UUID) -> [ApprovalRecord] {
+        approvals.filter { $0.taskId == taskId }.sorted { $0.decidedAt > $1.decidedAt }
+    }
+
+    // MARK: - Task mutation
+
+    @discardableResult
+    func add(_ task: TaskItem) -> TaskItem {
+        var t = task
+        // New unpinned tasks land at the bottom of AI order until re-ranked.
+        if t.aiRank == 0 { t.aiRank = (tasks.map(\.aiRank).max() ?? 0) + 1 }
+        tasks.append(t)
+        persist()
+        return t
+    }
+
+    func update(_ task: TaskItem) {
+        guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        var t = task
+        t.updatedAt = Date()
+        tasks[idx] = t
+        persist()
+    }
+
+    func setStatus(_ id: UUID, _ status: TaskStatus) {
+        guard var t = task(id) else { return }
+        t.status = status
+        if status == .done { t.completedAt = Date() }
+        update(t)
+    }
+
+    func delete(_ id: UUID) {
+        tasks.removeAll { $0.id == id }
+        persist()
+    }
+
+    /// Accept an inbox task onto the board (FR34 — the ingestion gate).
+    func acceptFromInbox(_ id: UUID) {
+        guard var t = task(id), t.status == .inbox else { return }
+        t.status = .ready
+        update(t)
+        record(ApprovalRecord(taskId: id, gate: .inboxAccept, decision: .approved))
+    }
+
+    /// Pin a task at a board position (FR41). AI reflows around pins.
+    func pin(_ id: UUID, at position: Int) {
+        guard var t = task(id) else { return }
+        t.userPinnedRank = position
+        update(t)
+    }
+
+    func unpin(_ id: UUID) {
+        guard var t = task(id) else { return }
+        t.userPinnedRank = nil
+        update(t)
+    }
+
+    /// Apply an AI prioritization result (FR39): ordered ids + rationales.
+    /// Pinned tasks are never moved (FR41) — their aiRank updates are skipped.
+    func applyPrioritization(_ ordered: [(id: UUID, rationale: String, priority: TaskPriority)]) {
+        var rank = 1
+        for entry in ordered {
+            guard let idx = tasks.firstIndex(where: { $0.id == entry.id }) else { continue }
+            guard !tasks[idx].isPinned else { continue }
+            tasks[idx].aiRank = rank
+            tasks[idx].aiRationale = entry.rationale
+            tasks[idx].aiPriority = entry.priority
+            rank += 1
+        }
+        persist()
+    }
+
+    // MARK: - Runs
+
+    @discardableResult
+    func addRun(_ run: TaskRun) -> TaskRun {
+        runs.append(run)
+        persist()
+        return run
+    }
+
+    func updateRun(_ run: TaskRun) {
+        guard let idx = runs.firstIndex(where: { $0.id == run.id }) else { return }
+        runs[idx] = run
+        persist()
+    }
+
+    func run(_ id: UUID) -> TaskRun? { runs.first { $0.id == id } }
+
+    /// NFR13: mark runs orphaned by a crash/quit as failed, keep transcripts.
+    func failOrphanedRuns() {
+        for i in runs.indices where !runs[i].state.isTerminal {
+            runs[i].state = .failed
+            runs[i].failureReason = "Interrupted — app quit while the run was active."
+            runs[i].endedAt = Date()
+            if var t = task(runs[i].taskId),
+               [.executing, .planning, .queued, .awaitingPlanApproval].contains(t.status) {
+                t.status = .failed
+                update(t)
+            }
+        }
+        persist()
+    }
+
+    // MARK: - Audit
+
+    func record(_ approval: ApprovalRecord) {
+        approvals.append(approval)
+        persist()
+    }
+
+    // MARK: - Persistence
+
+    private func load() {
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        do {
+            let snap = try JSONDecoder.glance.decode(Snapshot.self, from: data)
+            tasks = snap.tasks
+            runs = snap.runs
+            approvals = snap.approvals
+        } catch {
+            // §10 DB corruption: back the file aside, start fresh, tell via log.
+            let backup = dir.appendingPathComponent("tasks.corrupt-\(Int(Date().timeIntervalSince1970)).json")
+            try? FileManager.default.moveItem(at: fileURL, to: backup)
+            NSLog("Glance: task store unreadable, backed up to \(backup.path)")
+        }
+    }
+
+    /// Debounced atomic write.
+    private func persist() {
+        saveWork?.cancel()
+        let snap = Snapshot(tasks: tasks, runs: runs, approvals: approvals)
+        let url = fileURL
+        let work = DispatchWorkItem {
+            guard let data = try? JSONEncoder.glance.encode(snap) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+        saveWork = work
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// Flush synchronously (app quit).
+    func flush() {
+        saveWork?.cancel()
+        let snap = Snapshot(tasks: tasks, runs: runs, approvals: approvals)
+        if let data = try? JSONEncoder.glance.encode(snap) {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    private func wakeSnoozed() {
+        let now = Date()
+        var changed = false
+        for i in tasks.indices where tasks[i].status == .snoozed {
+            if let until = tasks[i].snoozedUntil, until <= now {
+                tasks[i].status = .ready
+                tasks[i].snoozedUntil = nil
+                changed = true
+            }
+        }
+        if changed { persist() }
+    }
+}
+
+extension JSONEncoder {
+    static var glance: JSONEncoder {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        e.outputFormatting = [.sortedKeys]
+        return e
+    }
+}
+
+extension JSONDecoder {
+    static var glance: JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }
+}

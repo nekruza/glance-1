@@ -1,0 +1,384 @@
+import SwiftUI
+
+/// Task board overlay (PRD V2 F1). Same dark-glass system as the ask overlay.
+/// Layout: header (tabs + search) → quick-add → task list → footer.
+/// Selecting a task slides in the detail pane (edit, plan gate, run stream,
+/// review gate).
+struct TaskBoardView: View {
+    @ObservedObject var session: TaskBoardSession
+    @ObservedObject var store: TaskStore
+    @ObservedObject private var prefs = Preferences.shared
+    @FocusState private var quickAddFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if session.decomposeMode {
+                decomposeView
+            } else if let task = session.selectedTask {
+                TaskDetailView(session: session, task: task)
+            } else {
+                header
+                quickAddRow
+                list
+            }
+            footer
+        }
+        .frame(width: 700, height: 640)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                .fill(Theme.glassTint.opacity(prefs.overlayOpacity))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                .strokeBorder(Theme.glassBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(alignment: .topTrailing) { closeButton.padding(5) }
+        .foregroundStyle(Theme.fg)
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checklist")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+            Picker("", selection: $session.tab) {
+                ForEach(TaskBoardSession.Tab.allCases, id: \.self) { tab in
+                    Text(tabTitle(tab)).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 260)
+            .labelsHidden()
+
+            Spacer()
+
+            if session.isPrioritizing {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.mini)
+                    Text("Prioritizing…").font(.system(size: 10.5)).foregroundStyle(Theme.muted)
+                }
+            } else {
+                Button(action: { session.schedulePrioritize(force: true) }) {
+                    Image(systemName: "wand.and.stars").font(.system(size: 13))
+                        .foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+                .help("Re-prioritize with AI")
+            }
+
+            TextField("", text: $session.searchText,
+                      prompt: Text("Search").foregroundColor(Theme.faint))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .frame(width: 110)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Theme.field))
+        }
+        .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
+    }
+
+    private func tabTitle(_ tab: TaskBoardSession.Tab) -> String {
+        switch tab {
+        case .inbox:
+            let n = store.inboxTasks().count
+            return n > 0 ? "Inbox \(n)" : "Inbox"
+        default:
+            return tab.rawValue
+        }
+    }
+
+    // MARK: - Quick add (FR26)
+
+    private var quickAddRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.faint)
+            TextField("", text: $session.quickAdd,
+                      prompt: Text("Add a task…").foregroundColor(Theme.faint))
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .tint(Theme.accent)
+                .focused($quickAddFocused)
+                .onSubmit { session.submitQuickAdd() }
+            Button(action: { session.startDecompose() }) {
+                Label("From prompt", systemImage: "text.badge.plus")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.muted)
+            }
+            .buttonStyle(.plain)
+            .help("Paste a braindump — AI splits it into tasks you confirm")
+        }
+        .padding(.horizontal, 18).padding(.vertical, 8)
+        .background(Color.white.opacity(0.03))
+        .overlay(Divider().overlay(Theme.glassBorder), alignment: .bottom)
+    }
+
+    // MARK: - List (FR21–23)
+
+    private var list: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                let tasks = session.visibleTasks()
+                if tasks.isEmpty {
+                    Text(emptyText)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.faint)
+                        .padding(30)
+                }
+                ForEach(tasks) { task in
+                    Button(action: { session.selectedTaskId = task.id }) {
+                        TaskCardRow(session: session, task: task)
+                    }
+                    .buttonStyle(.plain)
+                    Divider().overlay(Theme.glassBorder.opacity(0.5))
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private var emptyText: String {
+        switch session.tab {
+        case .board: return "No tasks. Add one above, or ⌘-paste a braindump via “From prompt”."
+        case .inbox: return "Inbox empty — AI-created tasks land here for your accept."
+        case .done: return "Nothing finished yet."
+        }
+    }
+
+    // MARK: - Decompose flow (FR27)
+
+    private var decomposeView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button(action: { session.decomposeMode = false }) {
+                    Label("Back", systemImage: "chevron.left").font(.system(size: 12))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.muted)
+                Spacer()
+                Text("Create tasks from a prompt").font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .padding(.top, 14)
+
+            if session.decomposePreview.isEmpty {
+                TextEditor(text: $session.decomposeText)
+                    .font(.system(size: 13))
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+                    .frame(maxHeight: .infinity)
+                    .overlay(alignment: .topLeading) {
+                        if session.decomposeText.isEmpty {
+                            Text("Paste meeting notes, a Slack thread, an email, or just braindump…")
+                                .font(.system(size: 12.5)).foregroundStyle(Theme.faint)
+                                .padding(14).allowsHitTesting(false)
+                        }
+                    }
+                HStack {
+                    Spacer()
+                    Button(action: { session.runDecompose() }) {
+                        HStack(spacing: 6) {
+                            if session.decomposeBusy { ProgressView().controlSize(.small) }
+                            Text(session.decomposeBusy ? "Splitting…" : "Split into tasks")
+                        }
+                    }
+                    .disabled(session.decomposeBusy || session.decomposeText.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            } else {
+                Text("Uncheck anything you don't want, then confirm:")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(session.decomposePreview.enumerated()), id: \.offset) { i, t in
+                            HStack(alignment: .top, spacing: 8) {
+                                Toggle("", isOn: Binding(
+                                    get: { session.decomposeKeep.contains(i) },
+                                    set: { on in
+                                        if on { session.decomposeKeep.insert(i) }
+                                        else { session.decomposeKeep.remove(i) }
+                                    }
+                                )).labelsHidden().toggleStyle(.checkbox)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(t.title).font(.system(size: 12.5, weight: .medium))
+                                    if let d = t.description, !d.isEmpty {
+                                        Text(d).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(2)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                HStack {
+                    Button("Start over") { session.decomposePreview = [] }
+                        .buttonStyle(.plain).foregroundStyle(Theme.muted).font(.system(size: 12))
+                    Spacer()
+                    Button("Create \(session.decomposeKeep.count) task\(session.decomposeKeep.count == 1 ? "" : "s")") {
+                        session.confirmDecompose()
+                    }
+                    .disabled(session.decomposeKeep.isEmpty)
+                }
+            }
+        }
+        .padding(.horizontal, 18).padding(.bottom, 12)
+        .frame(maxHeight: .infinity)
+    }
+
+    // MARK: - Footer / close
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            let running = session.runner.activeRunIds.count
+            Circle()
+                .fill(running > 0 ? Theme.accent : Theme.success)
+                .frame(width: 6, height: 6)
+            Text(running > 0 ? "\(running) run\(running == 1 ? "" : "s") active" : "Idle")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+            Spacer()
+            Button(action: { session.settingsHandler?() }) {
+                Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.muted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 9)
+        .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+    }
+
+    private var closeButton: some View {
+        Button(action: { session.dismissHandler?() }) {
+            Image(systemName: "xmark")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(Theme.muted)
+                .padding(4)
+                .background(Circle().fill(Theme.field))
+                .overlay(Circle().strokeBorder(Theme.glassBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Close")
+    }
+}
+
+// MARK: - Card row (FR21/FR23)
+
+private struct TaskCardRow: View {
+    @ObservedObject var session: TaskBoardSession
+    let task: TaskItem
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: task.source.icon)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.faint)
+                .frame(width: 14)
+
+            priorityChip
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    if task.isPinned {
+                        Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(Theme.accent)
+                    }
+                    Text(task.title)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .lineLimit(1)
+                }
+                HStack(spacing: 6) {
+                    ForEach(task.labels.prefix(3), id: \.self) { label in
+                        Text(label)
+                            .font(.system(size: 9.5))
+                            .padding(.horizontal, 5).padding(.vertical, 1.5)
+                            .background(Capsule().fill(Theme.field))
+                            .foregroundStyle(Theme.muted)
+                    }
+                    if !task.aiRationale.isEmpty {
+                        Text(task.aiRationale)
+                            .font(.system(size: 10)).italic()
+                            .foregroundStyle(Theme.faint).lineLimit(1)
+                    }
+                }
+            }
+
+            Spacer()
+
+            statusBadge
+
+            if hovering { hoverActions }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 9)
+        .background(hovering ? Color.white.opacity(0.04) : .clear)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+
+    private var priorityChip: some View {
+        Text(task.aiPriority.rawValue)
+            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 4).fill(priorityColor.opacity(0.18)))
+            .foregroundStyle(priorityColor)
+    }
+
+    private var priorityColor: Color {
+        switch task.aiPriority {
+        case .p0: return Theme.danger
+        case .p1: return .orange
+        case .p2: return Theme.accent
+        case .p3: return Theme.muted
+        }
+    }
+
+    @ViewBuilder private var statusBadge: some View {
+        let (text, color): (String, Color) = {
+            switch task.status {
+            case .executing: return ("Running", Theme.accent)
+            case .planning: return ("Planning", Theme.accent)
+            case .awaitingPlanApproval: return ("Plan review", .orange)
+            case .awaitingReview: return ("Review", .orange)
+            case .failed: return ("Failed", Theme.danger)
+            case .queued: return ("Queued", Theme.muted)
+            case .done: return ("Done", Theme.success)
+            case .inbox: return ("New", Theme.accent)
+            default: return ("", .clear)
+            }
+        }()
+        if !text.isEmpty {
+            Text(text)
+                .font(.system(size: 10, weight: .medium))
+                .padding(.horizontal, 7).padding(.vertical, 2.5)
+                .background(Capsule().fill(color.opacity(0.16)))
+                .foregroundStyle(color)
+        }
+    }
+
+    @ViewBuilder private var hoverActions: some View {
+        HStack(spacing: 8) {
+            if task.status == .inbox {
+                iconButton("checkmark.circle", "Accept onto board") {
+                    session.store.acceptFromInbox(task.id)
+                }
+            }
+            if task.isRunnable {
+                iconButton("play.circle", "Run with AI") { session.run(task) }
+            }
+            iconButton(task.isPinned ? "pin.slash" : "pin", task.isPinned ? "Unpin" : "Pin to top") {
+                session.togglePin(task)
+            }
+            iconButton("moon.zzz", "Snooze 24h") { session.snooze(task) }
+            iconButton("archivebox", "Archive") { session.archive(task) }
+        }
+    }
+
+    private func iconButton(_ symbol: String, _ help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}

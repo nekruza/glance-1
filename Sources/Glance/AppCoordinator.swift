@@ -11,6 +11,12 @@ final class AppCoordinator {
     private let overlay = OverlayController()
     private let prefs = Preferences.shared
 
+    // V2 task system (created in start() once the CLI path is known).
+    let taskStore = TaskStore()
+    private(set) var taskRunner: TaskRunner?
+    private(set) var taskOverlay: TaskOverlayController?
+    let taskNotifications = TaskNotifications()
+
     /// Opens the Settings window (wired to the status-item controller).
     var onOpenSettings: (() -> Void)?
 
@@ -43,6 +49,8 @@ final class AppCoordinator {
             .sink { [weak self] combo in self?.hotkey.register(combo) }
             .store(in: &cancellables)
 
+        setupTasks()
+
         overlay.onDismiss = { [weak self] in self?.endSession() }
 
         // Warm ScreenCaptureKit's shareable-content cache so the first capture
@@ -53,6 +61,45 @@ final class AppCoordinator {
     /// Menu-driven summon (same as the hotkey).
     func summon() {
         if !overlay.isVisible { present() }
+    }
+
+    /// Menu-driven task board summon (V2 FR20).
+    func summonTasks() {
+        taskOverlay?.present()
+    }
+
+    // MARK: - V2 task system
+
+    private func setupTasks() {
+        // NFR13: mark runs orphaned by the previous quit.
+        taskStore.failOrphanedRuns()
+
+        // The task system needs the CLI; degrade silently if absent (the ask
+        // overlay already surfaces CLI problems on use).
+        guard case .ok(let path, _) = ClaudeLocator.check() else { return }
+        let ai = TaskAI(binaryPath: path)
+        let runner = TaskRunner(store: taskStore, binaryPath: path)
+        let overlayCtl = TaskOverlayController(store: taskStore, runner: runner, ai: ai)
+        overlayCtl.onOpenSettings = { [weak self] in self?.onOpenSettings?() }
+        runner.onEvent = { [weak self] message, taskId in
+            self?.taskNotifications.post(message: message, taskId: taskId)
+        }
+        taskNotifications.setup()
+        taskNotifications.onOpenTask = { [weak overlayCtl] taskId in
+            overlayCtl?.reveal(taskId: taskId)
+        }
+        taskRunner = runner
+        taskOverlay = overlayCtl
+
+        hotkey.register(prefs.taskHotkey, for: .tasks) { [weak self] in
+            self?.taskOverlay?.toggle()
+        }
+        prefs.$taskHotkey
+            .dropFirst()
+            .sink { [weak self] combo in
+                self?.hotkey.register(combo, for: .tasks)
+            }
+            .store(in: &cancellables)
     }
 
     /// Current backend status for the menu's status line.
@@ -278,9 +325,13 @@ final class AppCoordinator {
         overlay.session.attachImage = false
     }
 
-    /// App is quitting: don't leave an orphaned claude process behind.
+    /// App is quitting: don't leave orphaned claude processes behind, and
+    /// flush the task store (FR48: active runs are cancelled — their state is
+    /// already persisted as interrupted on next launch via failOrphanedRuns).
     func shutdown() {
         teardownBackend()
+        taskRunner?.cancelAll()
+        taskStore.flush()
     }
 
     private func teardownBackend() {

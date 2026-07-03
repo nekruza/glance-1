@@ -64,6 +64,31 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Tasks") {
+                LabeledContent {
+                    HotkeyRecorder(combo: $prefs.taskHotkey).frame(width: 150, height: 26)
+                } label: {
+                    settingLabel("Task board hotkey", "Summons the AI task board")
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    settingLabel("Repos", "Where AI agents run code tasks (isolated worktrees)")
+                    ForEach(prefs.repos) { repo in
+                        HStack {
+                            Text(repo.name).font(.system(size: 12, weight: .medium))
+                            Text(repo.path).font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button(role: .destructive) {
+                                prefs.repos.removeAll { $0.id == repo.id }
+                            } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    Button("Add repo…") { addRepo() }
+                        .controlSize(.small)
+                }
+            }
+
             Section("Status") {
                 LabeledContent {
                     if hasScreenPermission {
@@ -160,6 +185,19 @@ struct SettingsView: View {
             case .failure(let msg):
                 testResult = .fail(msg)
             }
+        }
+    }
+
+    private func addRepo() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a git repository the AI may work in"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let entry = RepoEntry(name: url.lastPathComponent, path: url.path)
+        if !prefs.repos.contains(where: { $0.path == entry.path }) {
+            prefs.repos.append(entry)
         }
     }
 

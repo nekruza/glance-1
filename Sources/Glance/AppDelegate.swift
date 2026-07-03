@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installMainMenu()
 
         statusItem.onAsk = { [weak coordinator] in coordinator?.summon() }
+        statusItem.onTasks = { [weak coordinator] in coordinator?.summonTasks() }
         coordinator.onOpenSettings = { [weak statusItem] in statusItem?.showSettings() }
         statusItem.statusProvider = { [weak coordinator] in
             coordinator?.backendStatusLine() ?? (false, "Claude CLI status unknown")

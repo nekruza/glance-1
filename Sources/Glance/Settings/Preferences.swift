@@ -12,6 +12,9 @@ final class Preferences: ObservableObject {
         static let hotkeyModifiers = "hotkey.modifiers"
         static let overlayOpacity = "overlay.opacity"
         static let accentHex = "overlay.accentHex"
+        static let taskHotkeyKeyCode = "taskHotkey.keyCode"
+        static let taskHotkeyModifiers = "taskHotkey.modifiers"
+        static let repos = "tasks.repos"
     }
 
     /// Default dark-tint opacity of the overlay background.
@@ -26,6 +29,23 @@ final class Preferences: ObservableObject {
         didSet {
             defaults.set(Int(hotkey.keyCode), forKey: Keys.hotkeyKeyCode)
             defaults.set(Int(hotkey.modifiers), forKey: Keys.hotkeyModifiers)
+        }
+    }
+
+    /// Task-board hotkey (V2 FR20). Default ⌥T.
+    @Published var taskHotkey: KeyCombo {
+        didSet {
+            defaults.set(Int(taskHotkey.keyCode), forKey: Keys.taskHotkeyKeyCode)
+            defaults.set(Int(taskHotkey.modifiers), forKey: Keys.taskHotkeyModifiers)
+        }
+    }
+
+    /// Repo registry (V2 FR60) — used by enrichment mapping + workspace picker.
+    @Published var repos: [RepoEntry] {
+        didSet {
+            if let data = try? JSONEncoder().encode(repos) {
+                defaults.set(data, forKey: Keys.repos)
+            }
         }
     }
 
@@ -59,6 +79,20 @@ final class Preferences: ObservableObject {
             overlayOpacity = Self.defaultOverlayOpacity
         }
         accentHex = defaults.string(forKey: Keys.accentHex) ?? Self.defaultAccentHex
+        if defaults.object(forKey: Keys.taskHotkeyKeyCode) != nil {
+            let code = UInt32(defaults.integer(forKey: Keys.taskHotkeyKeyCode))
+            let mods = UInt32(defaults.integer(forKey: Keys.taskHotkeyModifiers))
+            let combo = KeyCombo(keyCode: code, modifiers: mods)
+            taskHotkey = combo.isValid ? combo : .defaultTaskCombo
+        } else {
+            taskHotkey = .defaultTaskCombo
+        }
+        if let data = defaults.data(forKey: Keys.repos),
+           let decoded = try? JSONDecoder().decode([RepoEntry].self, from: data) {
+            repos = decoded
+        } else {
+            repos = []
+        }
     }
 }
 
