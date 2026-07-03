@@ -131,6 +131,33 @@ final class AppCoordinator {
         send(composed, image: nil, via: backend)
     }
 
+    /// FR31 auto-ingest: after a transcription stops, extract the user's
+    /// action items into the INBOX (ambient ingestion → accept gate, FR34) —
+    /// unlike the reader's explicit "Add my tasks", which goes straight to
+    /// ready.
+    func autoIngestMeeting(notesURL: URL) {
+        guard let taskAI,
+              let text = try? String(contentsOf: notesURL, encoding: .utf8),
+              text.count > 200 else { return } // skip empty/junk recordings
+        let title = notesURL.deletingPathExtension().lastPathComponent
+        taskAI.extractActionItems(meetingText: text) { [weak self] items in
+            guard let self, let items, !items.isEmpty else { return }
+            for d in items {
+                var t = TaskItem(title: d.title, source: .granola)
+                t.status = .inbox
+                t.descriptionMD = (d.description ?? "") + "\n\n_From: \(title)_"
+                t.labels = d.labels ?? []
+                t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
+                t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
+                t.aiFilledFields = ["description", "labels", "taskKind", "estimate"]
+                _ = self.taskStore.add(t)
+            }
+            self.taskNotifications.post(
+                message: "\(items.count) action item\(items.count == 1 ? "" : "s") from the meeting — review in Inbox",
+                taskId: self.taskStore.inboxTasks().first?.id ?? UUID())
+        }
+    }
+
     /// Extract the user's action items from saved notes → task board.
     private func extractMeetingTasks(_ entry: MeetingHistory.Entry,
                                      completion: @escaping (Int) -> Void) {

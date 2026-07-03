@@ -16,6 +16,9 @@ struct TaskBoardView: View {
                 decomposeView
             } else if let task = session.selectedTask {
                 TaskDetailView(session: session, task: task)
+            } else if session.tab == .activity {
+                header
+                activityView
             } else {
                 header
                 quickAddRow
@@ -50,7 +53,7 @@ struct TaskBoardView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 260)
+            .frame(width: 330)
             .labelsHidden()
 
             Spacer()
@@ -146,6 +149,53 @@ struct TaskBoardView: View {
         case .board: return "No tasks. Add one above, or ⌘-paste a braindump via “From prompt”."
         case .inbox: return "Inbox empty — AI-created tasks land here for your accept."
         case .done: return "Nothing finished yet."
+        case .activity: return ""
+        }
+    }
+
+    // MARK: - Activity (FR58–59)
+
+    private var activityView: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    let events = session.activityFeed()
+                    if events.isEmpty {
+                        Text("Nothing yet — run a task and every gate decision lands here.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.faint).padding(24)
+                    }
+                    ForEach(events) { e in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: e.icon)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.muted)
+                                .frame(width: 16)
+                            Text(e.text)
+                                .font(.system(size: 11.5))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(e.at.formatted(date: .abbreviated, time: .shortened))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Theme.faint)
+                        }
+                        .padding(.horizontal, 18).padding(.vertical, 6)
+                        Divider().overlay(Theme.glassBorder.opacity(0.4))
+                    }
+                }
+            }
+            .frame(maxHeight: .infinity)
+            HStack {
+                Spacer()
+                Button(action: {
+                    if let url = session.exportBoard() { NSWorkspace.shared.open(url) }
+                }) {
+                    Label("Export board + log as Markdown", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 8)
+            .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
         }
     }
 
@@ -287,6 +337,14 @@ private struct TaskCardRow: View {
                     Text(task.title)
                         .font(.system(size: 12.5, weight: .medium))
                         .lineLimit(1)
+                    if task.possibleDuplicateOf != nil {
+                        Text("dup?")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange.opacity(0.2)))
+                            .foregroundStyle(.orange)
+                            .help("Looks like existing work — open to merge or dismiss")
+                    }
                 }
                 HStack(spacing: 6) {
                     ForEach(task.labels.prefix(3), id: \.self) { label in

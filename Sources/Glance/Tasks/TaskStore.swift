@@ -68,9 +68,56 @@ final class TaskStore: ObservableObject {
         var t = task
         // New unpinned tasks land at the bottom of AI order until re-ranked.
         if t.aiRank == 0 { t.aiRank = (tasks.map(\.aiRank).max() ?? 0) + 1 }
+        // FR33: flag likely duplicates of live tasks (never auto-merge).
+        if let dup = likelyDuplicate(of: t) { t.possibleDuplicateOf = dup.id }
         tasks.append(t)
         persist()
         return t
+    }
+
+    // MARK: - Duplicates (FR33)
+
+    /// Word-overlap heuristic against live (non-terminal) tasks.
+    private func likelyDuplicate(of task: TaskItem) -> TaskItem? {
+        let live = tasks.filter {
+            ![.done, .archived, .cancelled].contains($0.status) && $0.id != task.id
+        }
+        let a = Self.titleWords(task.title)
+        guard a.count >= 2 else { return nil }
+        for candidate in live {
+            let b = Self.titleWords(candidate.title)
+            guard b.count >= 2 else { continue }
+            let overlap = Double(a.intersection(b).count) / Double(a.union(b).count)
+            if overlap >= 0.55 { return candidate }
+        }
+        return nil
+    }
+
+    private static func titleWords(_ s: String) -> Set<String> {
+        Set(s.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init).filter { $0.count > 2 })
+    }
+
+    /// Merge `dupId` into `intoId`: union labels, append description, archive
+    /// the duplicate. The surviving task keeps its state and runs.
+    func mergeDuplicate(_ dupId: UUID, into intoId: UUID) {
+        guard var survivor = task(intoId), var dup = task(dupId) else { return }
+        for label in dup.labels where !survivor.labels.contains(label) {
+            survivor.labels.append(label)
+        }
+        if !dup.descriptionMD.isEmpty {
+            survivor.descriptionMD += "\n\n---\n_Merged from “\(dup.title)” (\(dup.source.rawValue)):_\n\(dup.descriptionMD)"
+        }
+        update(survivor)
+        dup.status = .archived
+        dup.possibleDuplicateOf = nil
+        update(dup)
+    }
+
+    func dismissDuplicateFlag(_ id: UUID) {
+        guard var t = task(id) else { return }
+        t.possibleDuplicateOf = nil
+        update(t)
     }
 
     func update(_ task: TaskItem) {

@@ -7,7 +7,14 @@ import SwiftUI
 final class TaskBoardSession: ObservableObject {
 
     enum Tab: String, CaseIterable {
-        case board = "Board", inbox = "Inbox", done = "Done"
+        case board = "Board", inbox = "Inbox", done = "Done", activity = "Activity"
+    }
+
+    struct ActivityEvent: Identifiable {
+        let id = UUID()
+        let at: Date
+        let icon: String
+        let text: String
     }
 
     @Published var tab: Tab = .board
@@ -48,6 +55,7 @@ final class TaskBoardSession: ObservableObject {
         case .board: base = store.boardTasks()
         case .inbox: base = store.inboxTasks()
         case .done:  base = store.doneTasks()
+        case .activity: base = [] // activity tab renders its own feed
         }
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return base }
@@ -161,6 +169,84 @@ final class TaskBoardSession: ObservableObject {
                 return (id, e.rationale, p)
             }
             self.store.applyPrioritization(mapped.map { (id: $0.0, rationale: $0.1, priority: $0.2) })
+        }
+    }
+
+    // MARK: - Activity feed + export (FR58–59)
+
+    /// Chronological audit: every gate decision and run, newest first.
+    func activityFeed(limit: Int = 200) -> [ActivityEvent] {
+        func title(_ id: UUID) -> String {
+            store.task(id)?.title ?? "(deleted task)"
+        }
+        var events: [ActivityEvent] = []
+        for a in store.approvals {
+            let gate: String
+            switch a.gate {
+            case .plan: gate = "Plan \(a.decision == .rejected ? "rejected" : "approved")"
+            case .review: gate = "Result \(a.decision == .rejected ? "rejected" : "approved")"
+            case .boundaryAction: gate = "Boundary action approved: \(a.detail)"
+            case .destructiveRefusal: gate = "Destructive step refused"
+            case .inboxAccept: gate = "Accepted from Inbox"
+            }
+            events.append(.init(at: a.decidedAt,
+                                icon: a.decision == .rejected ? "xmark.circle" : "checkmark.circle",
+                                text: "\(gate) — \(title(a.taskId))"))
+        }
+        for r in store.runs {
+            events.append(.init(at: r.startedAt, icon: "play.circle",
+                                text: "Run started — \(title(r.taskId))"))
+            if let end = r.endedAt {
+                events.append(.init(at: end,
+                                    icon: r.state == .succeeded ? "flag.checkered" : "exclamationmark.circle",
+                                    text: "Run \(r.state.rawValue) — \(title(r.taskId))"))
+            }
+        }
+        return Array(events.sorted { $0.at > $1.at }.prefix(limit))
+    }
+
+    /// FR59: export the whole board + audit trail as Markdown; returns the file.
+    @discardableResult
+    func exportBoard() -> URL? {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH.mm"
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/Glance Tasks Export \(df.string(from: Date())).md")
+
+        var md = "# Glance Tasks — export \(df.string(from: Date()))\n"
+        let groups: [(String, [TaskItem])] = [
+            ("Board", store.boardTasks()),
+            ("Inbox", store.inboxTasks()),
+            ("Done / Archived", store.doneTasks())
+        ]
+        for (name, tasks) in groups where !tasks.isEmpty {
+            md += "\n## \(name)\n"
+            for t in tasks {
+                md += "\n### \(t.title)\n"
+                md += "- \(t.aiPriority.rawValue) · \(t.status.display) · \(t.taskKind.rawValue) · \(t.source.rawValue)"
+                if !t.labels.isEmpty { md += " · " + t.labels.joined(separator: ", ") }
+                md += "\n"
+                if !t.descriptionMD.isEmpty { md += "\n\(t.descriptionMD)\n" }
+                let runs = store.runs(for: t.id)
+                if !runs.isEmpty {
+                    md += "\nRuns:\n"
+                    for r in runs {
+                        md += "- \(r.startedAt.formatted()) — \(r.state.rawValue)"
+                        if let reason = r.failureReason { md += " (\(reason))" }
+                        md += "\n"
+                    }
+                }
+            }
+        }
+        md += "\n## Activity log\n"
+        for e in activityFeed(limit: 500) {
+            md += "- \(e.at.formatted()) — \(e.text)\n"
+        }
+        do {
+            try md.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
         }
     }
 

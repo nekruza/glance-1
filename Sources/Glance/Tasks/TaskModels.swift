@@ -28,6 +28,8 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var completedAt: Date?
     /// AI-filled field names (FR37 — glyph in UI; user edits win).
     var aiFilledFields: [String] = []
+    /// FR33: flagged by the store when a live task looks like the same work.
+    var possibleDuplicateOf: UUID?
 
     var isPinned: Bool { userPinnedRank != nil }
     var isRunnable: Bool { status == .ready || status == .failed }

@@ -55,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let url = await self.transcriber.stop() {
                     // Show the notes; the AI summary is prepended when ready.
                     NSWorkspace.shared.open(url)
+                    // FR31: action items → Inbox for review.
+                    self.coordinator.autoIngestMeeting(notesURL: url)
                 }
             }
             return

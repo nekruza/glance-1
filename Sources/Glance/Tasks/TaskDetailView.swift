@@ -23,6 +23,9 @@ struct TaskDetailView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     titleBlock
                     metaRow
+                    if let dupId = task.possibleDuplicateOf {
+                        duplicateBanner(dupId)
+                    }
                     descriptionBlock
 
                     switch task.status {
@@ -144,6 +147,27 @@ struct TaskDetailView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+    }
+
+    /// FR33: never auto-merged — user decides.
+    private func duplicateBanner(_ dupId: UUID) -> some View {
+        let other = session.store.task(dupId)
+        return gateBox(title: "POSSIBLE DUPLICATE", tint: .orange) {
+            Text("Looks like: “\(other?.title ?? "(deleted task)")”")
+                .font(.system(size: 12))
+            HStack {
+                Button("Not a duplicate") {
+                    session.store.dismissDuplicateFlag(task.id)
+                }
+                Spacer()
+                if other != nil {
+                    Button("Merge into that task") {
+                        session.store.mergeDuplicate(task.id, into: dupId)
+                        session.selectedTaskId = dupId
+                    }
+                }
+            }
+        }
     }
 
     private var descriptionBlock: some View {
