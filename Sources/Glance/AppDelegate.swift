@@ -23,6 +23,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusItem.onToggleTranscription = { [weak self] in self?.toggleTranscription() }
         statusItem.isTranscribing = { [weak self] in self?.transcriber.isRecording ?? false }
+
+        // Live transcript pane (V2): transcriber → shared panel model.
+        let panel = TranscriptPanelModel.shared
+        transcriber.onLiveSegment = { seg in panel.append(text: seg.text, at: seg.start) }
+        transcriber.onLiveReplaceLast = { seg in panel.replaceLast(text: seg.text, at: seg.start) }
+        transcriber.onLivePartial = { text in panel.updatePartial(text) }
+        panel.startHandler = { [weak self] in
+            guard let self, !self.transcriber.isRecording else { return }
+            self.toggleTranscription()
+        }
+        panel.stopHandler = { [weak self] in
+            guard let self, self.transcriber.isRecording else { return }
+            self.toggleTranscription()
+        }
         coordinator.onToggleTranscription = { [weak self] in self?.toggleTranscription() }
         transcriber.onStateChange = { [weak self] in
             guard let self else { return }
@@ -37,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if transcriber.isRecording {
             Task { [weak self] in
                 guard let self else { return }
+                TranscriptPanelModel.shared.recordingStopped()
                 if let url = await self.transcriber.stop() {
                     // Show the notes; the AI summary is prepended when ready.
                     NSWorkspace.shared.open(url)
@@ -53,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task {
                 do {
                     try await self.transcriber.start()
+                    TranscriptPanelModel.shared.recordingStarted()
                 } catch {
                     self.alert("Transcription failed to start", error.localizedDescription)
                 }

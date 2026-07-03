@@ -6,23 +6,32 @@ import SwiftUI
 struct OverlayView: View {
     @ObservedObject var session: OverlaySession
     @ObservedObject private var prefs = Preferences.shared
+    @ObservedObject private var liveTranscript = TranscriptPanelModel.shared
     @FocusState private var inputFocused: Bool
     @State private var showHistory = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if session.turns.isEmpty {
-                promptRow
-            } else {
-                transcript
-                if !session.suggestions.isEmpty && !session.isWorking {
-                    suggestionChips
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                if session.turns.isEmpty {
+                    promptRow
+                } else {
+                    transcript
+                    if !session.suggestions.isEmpty && !session.isWorking {
+                        suggestionChips
+                    }
+                    followUpBar
                 }
-                followUpBar
+                footer
             }
-            footer
+            .frame(width: Theme.overlayWidth)
+            if liveTranscript.isVisible {
+                Divider().overlay(Theme.glassBorder)
+                TranscriptPaneView(model: liveTranscript)
+                    .frame(width: Theme.transcriptPaneWidth)
+            }
         }
-        .frame(width: Theme.overlayWidth)
+        .frame(width: Theme.overlayWidth + (liveTranscript.isVisible ? Theme.transcriptPaneWidth + 1 : 0))
         .background(GeometryReader { geo in
             Color.clear
                 .onAppear { session.contentHeight = geo.size.height }
@@ -243,6 +252,18 @@ struct OverlayView: View {
         .help("Close overlay")
     }
 
+    /// Opens/closes the live-transcript side pane (next to the gear).
+    private var transcriptPaneButton: some View {
+        Button(action: { liveTranscript.isVisible.toggle() }) {
+            Image(systemName: liveTranscript.isVisible ? "sidebar.right" : "sidebar.right")
+                .font(.system(size: 15))
+                .foregroundStyle(liveTranscript.isVisible ? Theme.accent
+                                 : (liveTranscript.isRecording ? Theme.danger : Theme.muted))
+        }
+        .buttonStyle(.plain)
+        .help(liveTranscript.isVisible ? "Hide live transcript" : "Show live transcript")
+    }
+
     private var transcribeButton: some View {
         Button(action: { session.transcribeHandler?() }) {
             Image(systemName: session.isTranscribing ? "record.circle.fill" : "waveform.circle")
@@ -347,6 +368,7 @@ struct OverlayView: View {
             }
             historyButton
             attachButton
+            transcriptPaneButton
             Button(action: { session.settingsHandler?() }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 15))

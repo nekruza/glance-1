@@ -15,6 +15,7 @@ final class AppCoordinator {
     let taskStore = TaskStore()
     private(set) var taskRunner: TaskRunner?
     private(set) var taskOverlay: TaskOverlayController?
+    private var taskAI: TaskAI?
     let taskNotifications = TaskNotifications()
 
     /// Opens the Settings window (wired to the status-item controller).
@@ -78,6 +79,7 @@ final class AppCoordinator {
         // overlay already surfaces CLI problems on use).
         guard case .ok(let path, _) = ClaudeLocator.check() else { return }
         let ai = TaskAI(binaryPath: path)
+        taskAI = ai
         let runner = TaskRunner(store: taskStore, binaryPath: path)
         let overlayCtl = TaskOverlayController(store: taskStore, runner: runner, ai: ai)
         overlayCtl.onOpenSettings = { [weak self] in self?.onOpenSettings?() }
@@ -100,6 +102,59 @@ final class AppCoordinator {
                 self?.hotkey.register(combo, for: .tasks)
             }
             .store(in: &cancellables)
+
+        // Transcript-pane reader actions.
+        TranscriptPanelModel.shared.summarizeHandler = { [weak self] entry in
+            self?.summarizeMeeting(entry)
+        }
+        TranscriptPanelModel.shared.extractTasksHandler = { [weak self] entry, done in
+            self?.extractMeetingTasks(entry, completion: done)
+        }
+    }
+
+    // MARK: - Meeting reader actions
+
+    /// Summarize saved meeting notes into the main overlay conversation: the
+    /// visible turn is a short question; the notes ride along invisibly.
+    private func summarizeMeeting(_ entry: MeetingHistory.Entry) {
+        guard let backend,
+              let text = try? String(contentsOf: entry.url, encoding: .utf8) else { return }
+        overlay.session.turns.append(OverlaySession.Turn(question: "Summarize “\(entry.title)”"))
+        overlay.session.isWorking = true
+        overlay.session.suggestions = []
+        let composed = """
+        Saved meeting notes/transcript follow. Give a tight summary: 2-3 sentence \
+        overview, key decisions, action items (with owners when identifiable).
+        ---
+        \(String(text.prefix(50_000)))
+        """
+        send(composed, image: nil, via: backend)
+    }
+
+    /// Extract the user's action items from saved notes → task board.
+    private func extractMeetingTasks(_ entry: MeetingHistory.Entry,
+                                     completion: @escaping (Int) -> Void) {
+        guard let taskAI,
+              let text = try? String(contentsOf: entry.url, encoding: .utf8) else {
+            completion(0)
+            return
+        }
+        taskAI.extractActionItems(meetingText: text) { [weak self] items in
+            guard let self else { return }
+            let items = items ?? []
+            for d in items {
+                var t = TaskItem(title: d.title, source: .granola)
+                t.descriptionMD = (d.description ?? "") + "\n\n_From: \(entry.title)_"
+                t.labels = d.labels ?? []
+                t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
+                t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
+                t.aiFilledFields = ["description", "labels", "taskKind", "estimate"]
+                let added = self.taskStore.add(t)
+                self.taskNotifications.post(message: "Task added: \(added.title)", taskId: added.id)
+            }
+            if !items.isEmpty { self.taskOverlay?.session.schedulePrioritize(force: true) }
+            completion(items.count)
+        }
     }
 
     /// Current backend status for the menu's status line.
@@ -285,7 +340,26 @@ final class AppCoordinator {
     }
 
     private func send(_ question: String, image: Data?, via backend: ClaudeBackend) {
-        backend.ask(question: question, imagePNG: image) { [weak self] event in
+        // Real-time ask-about-the-call: while transcribing, the recent
+        // transcript rides along invisibly (the overlay shows only the
+        // question the user typed).
+        var composed = question
+        let excerpt = TranscriptPanelModel.shared.isRecording
+            ? TranscriptPanelModel.shared.contextExcerpt() : ""
+        if !excerpt.isEmpty {
+            composed = """
+            Live meeting transcript so far (automatic speech-to-text, may contain \
+            mis-heard words; timestamps are HH:mm):
+            ---
+            \(excerpt)
+            ---
+            Answer the user's question. Use the transcript when the question \
+            refers to the conversation/meeting; ignore it otherwise.
+
+            Question: \(question)
+            """
+        }
+        backend.ask(question: composed, imagePNG: image) { [weak self] event in
             guard let self else { return }
             switch event {
             case .token(let text): self.overlay.session.appendToken(text)

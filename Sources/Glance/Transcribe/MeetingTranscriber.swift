@@ -157,6 +157,10 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Called on main when recording state flips (menu refresh).
     var onStateChange: (() -> Void)?
+    /// Live feed for the overlay transcript pane (main thread).
+    var onLiveSegment: ((Segment) -> Void)?
+    var onLiveReplaceLast: ((Segment) -> Void)?
+    var onLivePartial: ((String) -> Void)?
 
     // MARK: - Permissions
 
@@ -191,6 +195,9 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let rec = ChannelRecognizer(speaker: "")
         rec.onSegment = { [weak self] seg in self?.append(seg) }
+        rec.onPartial = { [weak self] text in
+            DispatchQueue.main.async { self?.onLivePartial?(text) }
+        }
         channel = rec
         rec.start()
         mixer.onMixed = { [weak rec] buffer in rec?.append(buffer) }
@@ -250,8 +257,33 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
     private func append(_ seg: Segment) {
         guard !seg.text.isEmpty else { return }
         segmentLock.lock()
+        // Recognizer restarts can re-finalize the same utterance, exactly or
+        // near-exactly (error-flush then final of the same audio). Drop the
+        // shorter of overlapping consecutive lines.
+        if let last = segments.last, Self.overlaps(last.text, seg.text) {
+            if seg.text.count <= last.text.count {
+                segmentLock.unlock()
+                return
+            }
+            segments.removeLast()
+            segments.append(seg)
+            segmentLock.unlock()
+            DispatchQueue.main.async { [weak self] in self?.onLiveReplaceLast?(seg) }
+            return
+        }
         segments.append(seg)
         segmentLock.unlock()
+        DispatchQueue.main.async { [weak self] in self?.onLiveSegment?(seg) }
+    }
+
+    /// Near-duplicate heuristic: one line starts with most of the other
+    /// (case-insensitive, first 40 chars of the shorter).
+    static func overlaps(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        let (short, long) = a.count <= b.count ? (a, b) : (b, a)
+        let probe = String(short.lowercased().prefix(40))
+        guard probe.count >= 12 else { return long.lowercased().hasPrefix(short.lowercased()) }
+        return long.lowercased().hasPrefix(probe)
     }
 
     // MARK: - SCStreamOutput (system audio → "Them")
@@ -369,12 +401,18 @@ private final class ChannelRecognizer {
 
     let speaker: String
     var onSegment: ((MeetingTranscriber.Segment) -> Void)?
+    var onPartial: ((String) -> Void)?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var segmentStart = Date()
     private var lastText = ""
+    /// Longest hypothesis seen this request. Finals sometimes COLLAPSE to a
+    /// fragment of what the partials showed (observed live: 45 s of speech
+    /// finalized as "Calling Rose") — never commit less than the best partial
+    /// unless the final is at least comparably informative.
+    private var bestPartial = ""
     private var running = false
     private var restartTimer: Timer?
     private let stateQueue = DispatchQueue(label: "com.h57q3wq0c.glance.recognizer")
@@ -403,12 +441,11 @@ private final class ChannelRecognizer {
             running = true
             beginRequest()
         }
-        // Force a segment boundary every 45 s: endAudio() → isFinal → new request.
-        let timer = Timer(timeInterval: 45, repeats: true) { [weak self] _ in
-            self?.stateQueue.async { self?.request?.endAudio() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        restartTimer = timer
+        // NO forced rolling restarts: audio arriving between endAudio() and
+        // the next request went into a dead request and was lost (observed as
+        // mid-paragraph gaps). Natural pause-finals segment the transcript;
+        // the recognizer's ~1-minute request cap surfaces as an error, and the
+        // error path salvages the best hypothesis before restarting.
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
@@ -470,22 +507,42 @@ private final class ChannelRecognizer {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.taskHint = .dictation
+        req.addsPunctuation = true
         if useOnDevice && recognizer?.supportsOnDeviceRecognition == true {
             req.requiresOnDeviceRecognition = true
         }
         segmentStart = Date()
         requestStartedAt = Date()
         lastText = ""
+        bestPartial = ""
         request = req
         task = recognizer?.recognitionTask(with: req) { [weak self] result, error in
             guard let self else { return }
             self.stateQueue.async {
                 if let result {
-                    self.lastText = result.bestTranscription.formattedString
+                    let text = result.bestTranscription.formattedString
                     if result.isFinal {
-                        self.emit(self.lastText)
+                        // Forced endAudio (rolling restart) can deliver an
+                        // empty or COLLAPSED final. Commit the final only when
+                        // it's at least ~60% the size of the best hypothesis;
+                        // otherwise the best partial carries more real content.
+                        let toEmit = text.count >= (self.bestPartial.count * 6) / 10
+                            ? text : self.bestPartial
+                        self.emit(toEmit)
                         self.lastText = ""
+                        self.bestPartial = ""
+                        self.onPartial?("")
                         if self.running { self.beginRequest() }
+                    } else {
+                        // Stamp the segment when speech first shows up, not at
+                        // request start — concurrent late finals were sorting
+                        // out of order in the saved notes.
+                        if self.lastText.isEmpty && self.bestPartial.isEmpty {
+                            self.segmentStart = Date()
+                        }
+                        self.lastText = text
+                        if text.count > self.bestPartial.count { self.bestPartial = text }
+                        self.onPartial?(text)
                     }
                 } else if let error {
                     self.handleTaskError(error)
@@ -498,10 +555,13 @@ private final class ChannelRecognizer {
     /// restart with a throttle so a failing recognizer can't spin-loop.
     private func handleTaskError(_ error: Error) {
         meetingLog("\(speaker) recognizer error: \(error.localizedDescription)")
-        if !lastText.isEmpty {
-            emit(lastText)
-            lastText = ""
+        let salvage = bestPartial.count > lastText.count ? bestPartial : lastText
+        if !salvage.isEmpty {
+            emit(salvage)
         }
+        lastText = ""
+        bestPartial = ""
+        onPartial?("") // never leave a stale/vanishing partial on screen
         guard running else { return }
 
         // Task died almost immediately → recognizer itself is broken for this

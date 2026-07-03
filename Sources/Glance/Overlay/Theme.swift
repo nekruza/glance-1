@@ -26,5 +26,6 @@ enum Theme {
     // Geometry / motion
     static let radius: CGFloat = 18
     static let overlayWidth: CGFloat = 640
+    static let transcriptPaneWidth: CGFloat = 300
     static let popAnimation = Animation.spring(response: 0.28, dampingFraction: 0.82)
 }
