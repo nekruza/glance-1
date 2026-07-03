@@ -4,6 +4,9 @@ import SwiftUI
 /// (FR52–53). Shown inside the board panel when a task is selected.
 struct TaskDetailView: View {
     @ObservedObject var session: TaskBoardSession
+    // Observed so the repo picker rebuilds when repos are added in Settings —
+    // reading Preferences.shared statically left the menu stuck on empty.
+    @ObservedObject private var prefs = Preferences.shared
     let task: TaskItem
 
     @State private var guidance = ""
@@ -82,24 +85,48 @@ struct TaskDetailView: View {
         HStack(spacing: 8) {
             chip(task.aiPriority.rawValue)
             chip(task.status.display)
-            chip(task.taskKind.rawValue)
+            kindPicker
             if let e = task.estimate { chip("~\(e.rawValue)") }
             ForEach(task.labels, id: \.self) { chip($0) }
             Spacer()
-            repoPicker
+            // Repo only matters for code tasks — everything else runs in a
+            // scratch workspace and needs no repo.
+            if task.taskKind == .code {
+                repoPicker
+            }
         }
+    }
+
+    /// Kind is editable so a misclassified task can be flipped to `code`
+    /// (which reveals the repo picker) or away from it.
+    private var kindPicker: some View {
+        Menu {
+            ForEach(TaskKind.allCases, id: \.self) { kind in
+                Button(kind.rawValue) {
+                    var t = task
+                    t.taskKind = kind
+                    if kind != .code { t.workspacePath = nil }
+                    session.store.update(t)
+                }
+            }
+        } label: {
+            chip(task.taskKind.rawValue)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Task kind — code tasks run in a repo worktree")
     }
 
     private var repoPicker: some View {
         Menu {
-            ForEach(Preferences.shared.repos) { repo in
+            ForEach(prefs.repos) { repo in
                 Button(repo.name) {
                     var t = task
                     t.workspacePath = repo.path
                     session.store.update(t)
                 }
             }
-            if Preferences.shared.repos.isEmpty {
+            if prefs.repos.isEmpty {
                 Text("Add repos in Settings")
             }
             if task.workspacePath != nil {
@@ -111,7 +138,7 @@ struct TaskDetailView: View {
                 }
             }
         } label: {
-            let name = Preferences.shared.repos.first { $0.path == task.workspacePath }?.name
+            let name = prefs.repos.first { $0.path == task.workspacePath }?.name
             Label(name ?? "repo…", systemImage: "folder")
                 .font(.system(size: 11)).foregroundStyle(name == nil ? Theme.faint : Theme.muted)
         }
