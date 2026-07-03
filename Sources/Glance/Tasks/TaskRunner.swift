@@ -518,13 +518,23 @@ enum GitWorktree {
         _ = run(["git", "worktree", "remove", "--force", dir.path], cwd: repoPath)
         _ = run(["git", "branch", "-D", branch], cwd: repoPath)
 
-        let result = run(["git", "worktree", "add", "-b", branch, dir.path, defaultBranch(repoPath)],
+        // Hooks OFF for our plumbing: repo hooks (husky post-checkout etc.)
+        // assume a dev shell — SSH agent, node — that a GUI app doesn't have,
+        // and a failing hook aborts `worktree add` even though the checkout
+        // itself succeeded (seen live with kato's submodule clone over SSH).
+        let result = run(["git", "-c", "core.hooksPath=/dev/null",
+                          "worktree", "add", "-b", branch, dir.path, defaultBranch(repoPath)],
                          cwd: repoPath)
         guard result.status == 0 else {
             return .failure(NSError(domain: "Glance", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: String(result.output.suffix(300))
             ]))
         }
+        // Submodules: best-effort — private submodules over SSH may be
+        // unreachable from a GUI session; the agent can still work without
+        // them and will surface it if a task truly needs one.
+        _ = run(["git", "-c", "core.hooksPath=/dev/null",
+                 "submodule", "update", "--init", "--recursive"], cwd: dir.path)
         return .success(Worktree(dir: dir, branch: branch))
     }
 
