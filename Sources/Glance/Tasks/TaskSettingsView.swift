@@ -281,6 +281,9 @@ struct TaskSettingsView: View {
     // MARK: - Agents
 
     @State private var editingAgentId: UUID?
+    @State private var generateRequest = ""
+    @State private var generating = false
+    @State private var generateError: String?
 
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -292,7 +295,34 @@ struct TaskSettingsView: View {
                 agentRow(agent)
             }
 
-            Button("Add agent…") {
+            // AI-generated agent: describe the need, Opus designs the profile.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CREATE WITH AI").font(.system(size: 8.5, weight: .bold)).tracking(0.5)
+                    .foregroundStyle(Theme.faint)
+                HStack(spacing: 8) {
+                    TextField("Describe the agent you need — e.g. “SQL analyst for our metrics DB, careful with joins”",
+                              text: $generateRequest)
+                        .textFieldStyle(.roundedBorder).font(.system(size: 11))
+                        .onSubmit { generateAgent() }
+                    Button(action: { generateAgent() }) {
+                        HStack(spacing: 5) {
+                            if generating { ProgressView().controlSize(.mini) }
+                            Text(generating ? "Designing…" : "Generate")
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(generating || generateRequest.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if let err = generateError {
+                    Text(err).font(.system(size: 10.5)).foregroundStyle(Theme.danger)
+                }
+                Text("Opus writes the persona, picks the model and least-privilege tools. Review and tweak before first use.")
+                    .font(.system(size: 9.5)).foregroundStyle(Theme.faint)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+
+            Button("Add agent manually…") {
                 let fresh = AgentProfile(name: "New agent", icon: "person",
                                          skills: "Describe what this agent is best at",
                                          systemPrompt: "", preferredModel: nil,
@@ -301,6 +331,23 @@ struct TaskSettingsView: View {
                 editingAgentId = fresh.id
             }
             .controlSize(.small)
+        }
+    }
+
+    private func generateAgent() {
+        let request = generateRequest.trimmingCharacters(in: .whitespaces)
+        guard !request.isEmpty, !generating else { return }
+        generating = true
+        generateError = nil
+        session.generateAgent(request: request) { profile in
+            generating = false
+            guard let profile else {
+                generateError = "Couldn't design an agent — try rephrasing."
+                return
+            }
+            prefs.agents.append(profile)
+            editingAgentId = profile.id
+            generateRequest = ""
         }
     }
 

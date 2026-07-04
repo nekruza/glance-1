@@ -119,6 +119,40 @@ final class TaskAI {
         runJSON(prompt: prompt, model: nil, completion: completion)
     }
 
+    // MARK: - Agent generation (Settings ▸ Agents)
+
+    struct GeneratedAgent: Decodable {
+        var name: String
+        var icon: String?
+        var skills: String
+        var systemPrompt: String
+        var preferredModel: String?
+        var allowedTools: [String]?
+    }
+
+    /// Opus writes a full agent profile from a natural-language request.
+    func generateAgent(request: String, existingNames: [String],
+                       completion: @escaping (GeneratedAgent?) -> Void) {
+        let prompt = """
+        Design an AI agent profile for a personal task-execution system. The \
+        user describes what they need; you produce the profile. Output JSON \
+        only (no prose, no fences): {"name": "<1-2 words, distinct from: \
+        \(existingNames.joined(separator: ", "))>", "icon": "<one SF Symbol \
+        name, e.g. chart.bar, doc.text, hammer, globe, tray.full, \
+        table, terminal, paintbrush, envelope, brain>", "skills": "<one line \
+        describing what tasks it's best at — used to route tasks to it>", \
+        "systemPrompt": "<150-350 words: persona, method/discipline, quality \
+        bar, output expectations. Write it as instructions to the agent.>", \
+        "preferredModel": "haiku|sonnet|opus|null (null = default; haiku for \
+        mechanical work, sonnet for routine, opus for hard reasoning)", \
+        "allowedTools": [subset of: Bash, Edit, Write, Read, Glob, Grep, \
+        WebFetch, WebSearch — only what the role needs; least privilege]}.
+
+        User's request: \(request)
+        """
+        runJSON(prompt: prompt, model: "opus", completion: completion)
+    }
+
     // MARK: - Meeting action items (transcript pane reader)
 
     /// Extract ONLY the user's own action items from meeting notes.

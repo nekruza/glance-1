@@ -65,6 +65,30 @@ final class TaskBoardSession: ObservableObject {
         self.ingest = ingest
     }
 
+    /// Settings ▸ Agents passthrough: Opus designs a profile from a request.
+    func generateAgent(request: String, completion: @escaping (AgentProfile?) -> Void) {
+        let existing = Preferences.shared.agents.map(\.name)
+        ai.generateAgent(request: request, existingNames: existing) { g in
+            guard let g else {
+                completion(nil)
+                return
+            }
+            let tools = (g.allowedTools ?? ["Read", "Glob", "Grep"])
+                .filter { AgentProfile.toolVocabulary.contains($0) }
+            let model: String? = ["haiku", "sonnet", "opus"].contains(g.preferredModel ?? "")
+                ? g.preferredModel : nil
+            let profile = AgentProfile(
+                name: String(g.name.prefix(40)),
+                icon: g.icon?.isEmpty == false ? g.icon! : "person",
+                skills: g.skills,
+                systemPrompt: g.systemPrompt,
+                preferredModel: model,
+                allowedTools: tools.isEmpty ? ["Read", "Glob", "Grep"] : tools
+            )
+            completion(profile)
+        }
+    }
+
     /// Settings ▸ Connections passthrough (ingest is private).
     func listConnections(completion: @escaping ([ComposioIngest.Connection]?, String?) -> Void) {
         ingest.listConnections(completion: completion)
