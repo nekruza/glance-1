@@ -69,6 +69,17 @@ final class AppCoordinator {
         taskOverlay?.present()
     }
 
+    /// Settings lives as a page inside the Tasks window; fall back to the
+    /// legacy Settings window when the task system is unavailable.
+    func summonTaskSettings() {
+        if let taskOverlay {
+            taskOverlay.session.showSettings = true
+            taskOverlay.present()
+        } else {
+            onOpenSettings?()
+        }
+    }
+
     // MARK: - V2 task system
 
     private func setupTasks() {
@@ -309,14 +320,7 @@ final class AppCoordinator {
         overlay.session.settingsHandler = { [weak self] in
             guard let self else { return }
             self.overlay.dismiss()
-            // Same in-pane settings as the board's gear; fall back to the
-            // old Settings window when the task system is unavailable.
-            if let taskOverlay = self.taskOverlay {
-                taskOverlay.session.showSettings = true
-                taskOverlay.present()
-            } else {
-                self.onOpenSettings?()
-            }
+            self.summonTaskSettings()
         }
         overlay.session.historyHandler = { [weak self] summary in
             self?.resumeHistorySession(summary)

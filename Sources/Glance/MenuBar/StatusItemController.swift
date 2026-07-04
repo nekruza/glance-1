@@ -10,6 +10,7 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     var onAsk: (() -> Void)?
     /// Summons the V2 task board.
     var onTasks: (() -> Void)?
+    var onSettings: (() -> Void)?
     /// Toggles meeting transcription; provider reports the live state.
     var onToggleTranscription: (() -> Void)?
     var isTranscribing: (() -> Bool)?
@@ -117,12 +118,17 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     @objc private func toggleTranscription() { onToggleTranscription?() }
 
-    /// Public entry so the overlay's gear button can open the same window.
-    func showSettings() { openSettings() }
+    /// Legacy small Settings window — fallback used only when the task
+    /// system (and its in-window settings page) is unavailable.
+    func showSettings() { openLegacySettings() }
 
     @objc private func openSettings() {
+        if let onSettings { onSettings() } else { openLegacySettings() }
+    }
+
+    private func openLegacySettings() {
         if let window = settingsWindow {
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.acquire("settings-legacy")
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -134,13 +140,16 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
         window.delegate = self
         window.center()
         settingsWindow = window
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.acquire("settings-legacy")
         window.makeKeyAndOrderFront(nil)
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
 
-    func windowWillClose(_ notification: Notification) { settingsWindow = nil }
+    func windowWillClose(_ notification: Notification) {
+        settingsWindow = nil
+        AppActivation.release("settings-legacy")
+    }
 
     // MARK: - Helpers
 
