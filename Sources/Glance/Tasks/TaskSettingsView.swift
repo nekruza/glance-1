@@ -170,7 +170,7 @@ struct TaskSettingsView: View {
                     .font(.system(size: 10.5)).foregroundStyle(Theme.faint)
                 Spacer()
                 Button("Open dashboard") {
-                    NSWorkspace.shared.open(URL(string: "https://app.composio.dev")!)
+                    NSWorkspace.shared.open(URL(string: "https://dashboard.composio.dev/")!)
                 }
                 .controlSize(.small)
             }
