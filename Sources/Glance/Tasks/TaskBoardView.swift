@@ -47,14 +47,7 @@ struct TaskBoardView: View {
             Image(systemName: "checklist")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.accent)
-            Picker("", selection: $session.tab) {
-                ForEach(TaskBoardSession.Tab.allCases, id: \.self) { tab in
-                    Text(tabTitle(tab)).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 330)
-            .labelsHidden()
+            tabBar
 
             Spacer()
 
@@ -126,15 +119,45 @@ struct TaskBoardView: View {
         .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
     }
 
-    private func tabTitle(_ tab: TaskBoardSession.Tab) -> String {
-        let n: Int
-        switch tab {
-        case .inbox: n = store.inboxTasks().count
-        case .board: n = store.boardTasks().count
-        case .done: n = store.doneTasks().count
-        case .activity: return tab.rawValue
+    /// Custom segmented control: the system Picker can't render count badges.
+    private var tabBar: some View {
+        HStack(spacing: 2) {
+            ForEach(TaskBoardSession.Tab.allCases, id: \.self) { tab in
+                let selected = session.tab == tab
+                Button(action: { session.tab = tab }) {
+                    HStack(spacing: 5) {
+                        Text(tab.rawValue)
+                            .font(.system(size: 11.5, weight: selected ? .semibold : .regular))
+                            .foregroundStyle(selected ? Theme.fg : Theme.muted)
+                        if let n = tabCount(tab), n > 0 {
+                            Text(n > 99 ? "99+" : "\(n)")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.black.opacity(0.8))
+                                .frame(minWidth: 13, minHeight: 13)
+                                .background(Circle().fill(tab == .inbox ? Theme.accent : Theme.muted))
+                        }
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(selected ? Color.white.opacity(0.12) : .clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        return n > 0 ? "\(tab.rawValue) \(n)" : tab.rawValue
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+    }
+
+    private func tabCount(_ tab: TaskBoardSession.Tab) -> Int? {
+        switch tab {
+        case .inbox: return store.inboxTasks().count
+        case .board: return store.boardTasks().count
+        case .done: return store.doneTasks().count
+        case .activity: return nil
+        }
     }
 
     // MARK: - Quick add (FR26)
