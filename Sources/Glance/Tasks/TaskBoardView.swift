@@ -66,6 +66,8 @@ struct TaskBoardView: View {
                 }
             } else {
                 Menu {
+                    Button("Pull from all") { session.pullAll() }
+                    Divider()
                     ForEach(ComposioIngest.Source.allCases, id: \.self) { src in
                         Button("Pull from \(src.rawValue)") { session.pull(src) }
                     }

@@ -61,30 +61,71 @@ final class TaskBoardSession: ObservableObject {
     // MARK: - Composio pulls (manual, read-only)
 
     func pull(_ source: ComposioIngest.Source) {
-        guard pullingSource == nil else { return }
-        guard !Preferences.shared.composioKey.isEmpty else {
-            pullStatus = "Set your Composio API key in Settings first."
-            return
-        }
+        guard pullingSource == nil, ensureComposioConfigured() else { return }
         pullingSource = source
         pullStatus = nil
         ingest.pull(source, store: store) { [weak self] result in
             guard let self else { return }
             self.pullingSource = nil
-            if let error = result.error {
-                self.pullStatus = "\(source.rawValue): \(error)"
-            } else if result.created == 0 {
-                self.pullStatus = "\(source.rawValue): nothing new"
-                    + (result.skippedDuplicates > 0 ? " (\(result.skippedDuplicates) already on board)" : "")
-            } else {
-                self.pullStatus = "\(source.rawValue): \(result.created) new in Inbox"
-                    + (result.skippedDuplicates > 0 ? ", \(result.skippedDuplicates) known" : "")
-                self.tab = .inbox
+            self.showPullStatus(Self.describe(source, result))
+            if result.created > 0 { self.tab = .inbox }
+        }
+    }
+
+    /// Pull every source, one at a time (a single agent call each), then show
+    /// an aggregate status line.
+    func pullAll() {
+        guard pullingSource == nil, ensureComposioConfigured() else { return }
+        pullStatus = nil
+        var summary: [String] = []
+        var totalCreated = 0
+        let sources = ComposioIngest.Source.allCases
+
+        func next(_ index: Int) {
+            guard index < sources.count else {
+                pullingSource = nil
+                showPullStatus(summary.joined(separator: " · "))
+                if totalCreated > 0 { tab = .inbox }
+                return
             }
-            // Status fades after a while.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
-                self?.pullStatus = nil
+            let source = sources[index]
+            pullingSource = source
+            ingest.pull(source, store: store) { [weak self] result in
+                guard let self else { return }
+                totalCreated += result.created
+                if result.error != nil {
+                    summary.append("\(source.rawValue) ✗")
+                } else {
+                    summary.append("\(source.rawValue) +\(result.created)")
+                }
+                next(index + 1)
             }
+        }
+        next(0)
+    }
+
+    private func ensureComposioConfigured() -> Bool {
+        if Preferences.shared.composioKey.isEmpty {
+            pullStatus = "Set your Composio API key in Settings first."
+            return false
+        }
+        return true
+    }
+
+    private static func describe(_ source: ComposioIngest.Source, _ result: ComposioIngest.Result) -> String {
+        if let error = result.error { return "\(source.rawValue): \(error)" }
+        if result.created == 0 {
+            return "\(source.rawValue): nothing new"
+                + (result.skippedDuplicates > 0 ? " (\(result.skippedDuplicates) already on board)" : "")
+        }
+        return "\(source.rawValue): \(result.created) new in Inbox"
+            + (result.skippedDuplicates > 0 ? ", \(result.skippedDuplicates) known" : "")
+    }
+
+    private func showPullStatus(_ text: String) {
+        pullStatus = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            self?.pullStatus = nil
         }
     }
 

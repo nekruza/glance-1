@@ -13,12 +13,14 @@ final class ComposioIngest {
         case jira = "Jira"
         case granola = "Granola"
         case slack = "Slack"
+        case calendar = "Calendar"
 
         var taskSource: TaskSource {
             switch self {
             case .jira: return .jira
             case .granola: return .granola
             case .slack: return .slack
+            case .calendar: return .calendar
             }
         }
     }
@@ -221,6 +223,19 @@ final class ComposioIngest {
             One task per actionable item — ignore FYIs and resolved threads. \
             sourceKey = the message permalink or channel+ts; sourceURL = the \
             permalink. Quote the relevant message in the description. \(outputRules)
+            """
+        case .calendar:
+            return """
+            Using the composio tools, fetch my Google Calendar events for the \
+            next 3 days (primary calendar). Read actions only. \(readOnlyRules)
+            Create tasks ONLY for events that imply work from me: meetings I \
+            organize or present at (prep task), events whose title/description \
+            asks something of me, and deadline-like all-day events. Skip \
+            routine attend-only meetings — do not create a task per event. \
+            sourceKey = the calendar event id; sourceURL = the event's \
+            htmlLink. Include the event time and attendees context in the \
+            description, and set the estimate to the prep effort, not the \
+            event length. \(outputRules)
             """
         }
     }
