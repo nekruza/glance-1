@@ -7,7 +7,8 @@ import SwiftUI
 final class TaskBoardSession: ObservableObject {
 
     enum Tab: String, CaseIterable {
-        case board = "Board", inbox = "Inbox", done = "Done", activity = "Activity"
+        // Declaration order = tab order: Inbox (triage) first.
+        case inbox = "Inbox", board = "Board", done = "Done", activity = "Activity"
     }
 
     struct ActivityEvent: Identifiable {

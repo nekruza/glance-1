@@ -127,13 +127,14 @@ struct TaskBoardView: View {
     }
 
     private func tabTitle(_ tab: TaskBoardSession.Tab) -> String {
+        let n: Int
         switch tab {
-        case .inbox:
-            let n = store.inboxTasks().count
-            return n > 0 ? "Inbox \(n)" : "Inbox"
-        default:
-            return tab.rawValue
+        case .inbox: n = store.inboxTasks().count
+        case .board: n = store.boardTasks().count
+        case .done: n = store.doneTasks().count
+        case .activity: return tab.rawValue
         }
+        return n > 0 ? "\(tab.rawValue) \(n)" : tab.rawValue
     }
 
     // MARK: - Quick add (FR26)
