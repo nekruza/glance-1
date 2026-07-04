@@ -77,7 +77,8 @@ final class AppCoordinator {
 
         // The task system needs the CLI; degrade silently if absent (the ask
         // overlay already surfaces CLI problems on use).
-        guard case .ok(let path, _) = ClaudeLocator.check() else { return }
+        guard case .ok(let path, let version) = ClaudeLocator.check() else { return }
+        ModelCatalog.shared.refresh(binaryPath: path, cliVersion: version)
         let ai = TaskAI(binaryPath: path)
         taskAI = ai
         let runner = TaskRunner(store: taskStore, binaryPath: path)

@@ -102,15 +102,16 @@ struct TaskDetailView: View {
     }
 
     /// OQ-V2-3: per-task model for agent runs. Default = CLI's own default.
+    /// Labels carry the resolved model names once the catalog has probed.
     private var modelPicker: some View {
         Menu {
-            Button("default") {
+            Button(menuLabel("default") + " (CLI setting)") {
                 var t = task
                 t.runModel = nil
                 session.store.update(t)
             }
             ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in
-                Button(m) {
+                Button(menuLabel(m)) {
                     var t = task
                     t.runModel = m
                     session.store.update(t)
@@ -124,6 +125,13 @@ struct TaskDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Model for AI runs on this task (plan + execution)")
+    }
+
+    private func menuLabel(_ alias: String) -> String {
+        if let resolved = ModelCatalog.shared.displayName(for: alias) {
+            return "\(alias) — \(resolved)"
+        }
+        return alias
     }
 
     /// Kind is editable so a misclassified task can be flipped to `code`
