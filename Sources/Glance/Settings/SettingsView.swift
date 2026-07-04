@@ -144,11 +144,11 @@ struct SettingsView: View {
             Section("Status") {
                 LabeledContent {
                     if hasScreenPermission {
-                        pill("Granted", .green)
+                        pill("Granted", DS.success)
                     } else {
                         HStack(spacing: 8) {
                             Button("Grant") { PermissionOnboarding.promptForScreenRecording() }
-                            pill("Not granted", .orange)
+                            pill("Not granted", DS.warning)
                         }
                     }
                 } label: {
@@ -160,9 +160,9 @@ struct SettingsView: View {
                         if case .ok(_, let v) = status {
                             Text(shortVersion(v)).font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.secondary)
-                            pill("Connected", .green)
+                            pill("Connected", DS.success)
                         } else {
-                            pill("Not connected", .orange)
+                            pill("Not connected", DS.warning)
                         }
                     }
                 } label: {
@@ -217,9 +217,9 @@ struct SettingsView: View {
     @ViewBuilder private func resultRow(_ r: TestResult) -> some View {
         switch r {
         case .ok(let m):
-            Label(m, systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.callout)
+            Label(m, systemImage: "checkmark.circle.fill").foregroundStyle(DS.success).font(.callout)
         case .fail(let m):
-            Label(m, systemImage: "exclamationmark.circle.fill").foregroundStyle(.orange).font(.callout)
+            Label(m, systemImage: "exclamationmark.circle.fill").foregroundStyle(DS.warning).font(.callout)
         }
     }
 

@@ -35,8 +35,9 @@ final class Preferences: ObservableObject {
     /// Default dark-tint opacity of the overlay background.
     static let defaultOverlayOpacity: Double = 0.7
 
-    /// Default accent — Uber Eats green.
-    static let defaultAccentHex = "06C167"
+    /// Default accent — mint green (DS light design). Existing installs keep
+    /// their saved color until Reset.
+    static let defaultAccentHex = "66E194"
 
     private let defaults = UserDefaults.standard
 
