@@ -64,8 +64,6 @@ struct TaskSettingsView: View {
             Text("SETTINGS")
                 .font(.system(size: 9, weight: .bold)).tracking(1)
                 .foregroundStyle(Theme.faint)
-            Text(section.rawValue)
-                .font(.system(size: 14, weight: .semibold))
             Spacer()
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
