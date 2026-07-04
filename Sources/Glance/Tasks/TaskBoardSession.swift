@@ -80,7 +80,6 @@ final class TaskBoardSession: ObservableObject {
                 self.pullStatus = "\(source.rawValue): \(result.created) new in Inbox"
                     + (result.skippedDuplicates > 0 ? ", \(result.skippedDuplicates) known" : "")
                 self.tab = .inbox
-                self.schedulePrioritize(force: true)
             }
             // Status fades after a while.
             DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
@@ -136,7 +135,6 @@ final class TaskBoardSession: ObservableObject {
         quickAdd = ""
         let task = store.add(TaskItem(title: text, source: .manual))
         enrich(task)
-        schedulePrioritize()
     }
 
     func startDecompose() {
@@ -171,7 +169,6 @@ final class TaskBoardSession: ObservableObject {
         }
         decomposeMode = false
         decomposePreview = []
-        schedulePrioritize(force: true)
     }
 
     // MARK: - AI triggers
@@ -204,9 +201,11 @@ final class TaskBoardSession: ObservableObject {
         }
     }
 
-    /// FR39/FR42: re-prioritize, batched unless forced.
+    /// Prioritization is MANUAL-ONLY (user decision, overriding FR39's
+    /// automatic triggers): it runs solely from the wand button. New tasks
+    /// simply land at the bottom until the user asks for a re-rank.
     func schedulePrioritize(force: Bool = false) {
-        guard force || Date().timeIntervalSince(lastPrioritized) > reflowInterval else { return }
+        guard force else { return } // no automatic reflows
         let board = store.boardTasks()
         guard board.count > 1 else { return }
         lastPrioritized = Date()
@@ -320,12 +319,9 @@ final class TaskBoardSession: ObservableObject {
         store.setStatus(task.id, .archived)
     }
 
-    /// FR39 triggers beyond creation: completion and inbox-accept reshuffle
-    /// what "do first" means — re-rank (batched throttle still applies via
-    /// force only here, where board composition actually changed).
-    func boardCompositionChanged() {
-        schedulePrioritize(force: true)
-    }
+    /// Prioritization is manual-only — composition changes no longer trigger
+    /// a re-rank (kept as a hook in case scheduled prompts revive it).
+    func boardCompositionChanged() {}
 
     func togglePin(_ task: TaskItem) {
         if task.isPinned {

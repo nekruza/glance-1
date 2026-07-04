@@ -171,7 +171,6 @@ struct TaskBoardView: View {
                 if session.tab == .inbox && tasks.count > 1 {
                     bulkBar("Accept all \(tasks.count)", icon: "checkmark.circle") {
                         for t in tasks { session.store.acceptFromInbox(t.id) }
-                        session.schedulePrioritize(force: true)
                     }
                 }
                 if session.tab == .done && tasks.contains(where: { $0.status == .done }) {

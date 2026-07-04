@@ -184,7 +184,6 @@ final class AppCoordinator {
                 let added = self.taskStore.add(t)
                 self.taskNotifications.post(message: "Task added: \(added.title)", taskId: added.id)
             }
-            if !items.isEmpty { self.taskOverlay?.session.schedulePrioritize(force: true) }
             completion(items.count)
         }
     }
@@ -416,8 +415,6 @@ final class AppCoordinator {
             let item = taskStore.add(TaskCapture.makeTaskItem(c))
             taskNotifications.post(message: "Task added: \(item.title)", taskId: item.id)
         }
-        // New work on the board → let the ranking catch up (batched).
-        taskOverlay?.session.schedulePrioritize(force: true)
     }
 
     /// Fill the suggestion chips from the just-finished turn (cheap one-shot

@@ -41,8 +41,6 @@ final class TaskOverlayController {
         position()
         panel.makeKeyAndOrderFront(nil)
         if let host = hostingView { panel.makeFirstResponder(host) }
-        // Re-prioritize opportunistically on summon (batched inside).
-        session.schedulePrioritize()
     }
 
     func dismiss() {
