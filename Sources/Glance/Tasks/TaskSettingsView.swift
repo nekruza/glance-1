@@ -301,34 +301,41 @@ struct TaskSettingsView: View {
 
     private var scheduleSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            row("Scheduled pulls", "Fetch new work automatically into the Inbox") {
+            row("Scheduled pulls",
+                prefs.schedEnabled
+                    ? "Pulling \(prefs.schedSource == "All" ? "all sources" : prefs.schedSource) \(prefs.schedMode == .daily ? "daily" : prefs.schedMode.rawValue.lowercased()) into the Inbox"
+                    : "Fetch new work automatically into the Inbox") {
                 Toggle("", isOn: $prefs.schedEnabled)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
-            if prefs.schedEnabled {
-                row("Schedule", "") {
-                    HStack(spacing: 6) {
-                        Picker("", selection: $prefs.schedSource) {
-                            Text("All sources").tag("All")
-                            ForEach(ComposioIngest.Source.allCases, id: \.rawValue) { s in
-                                Text(s.rawValue).tag(s.rawValue)
-                            }
+            row("Pull from", "Which source the schedule fetches") {
+                Picker("", selection: $prefs.schedSource) {
+                    Text("All sources").tag("All")
+                    ForEach(ComposioIngest.Source.allCases, id: \.rawValue) { s in
+                        Text(s.rawValue).tag(s.rawValue)
+                    }
+                }
+                .labelsHidden().controlSize(.small).frame(width: 120)
+            }
+            .opacity(prefs.schedEnabled ? 1 : 0.45)
+            .disabled(!prefs.schedEnabled)
+            row("How often", "") {
+                HStack(spacing: 6) {
+                    Picker("", selection: $prefs.schedMode) {
+                        ForEach(Preferences.ScheduleMode.allCases, id: \.self) { m in
+                            Text(m.rawValue).tag(m)
                         }
-                        .labelsHidden().controlSize(.small).frame(width: 105)
-                        Picker("", selection: $prefs.schedMode) {
-                            ForEach(Preferences.ScheduleMode.allCases, id: \.self) { m in
-                                Text(m.rawValue).tag(m)
-                            }
-                        }
-                        .labelsHidden().controlSize(.small).frame(width: 120)
-                        if prefs.schedMode == .daily {
-                            DatePicker("", selection: dailyTimeBinding,
-                                       displayedComponents: .hourAndMinute)
-                                .labelsHidden().controlSize(.small)
-                        }
+                    }
+                    .labelsHidden().controlSize(.small).frame(width: 130)
+                    if prefs.schedMode == .daily {
+                        DatePicker("", selection: dailyTimeBinding,
+                                   displayedComponents: .hourAndMinute)
+                            .labelsHidden().controlSize(.small)
                     }
                 }
             }
+            .opacity(prefs.schedEnabled ? 1 : 0.45)
+            .disabled(!prefs.schedEnabled)
         }
     }
 
