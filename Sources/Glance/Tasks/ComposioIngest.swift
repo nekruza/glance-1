@@ -83,6 +83,85 @@ final class ComposioIngest {
         }
     }
 
+    // MARK: - Connections (settings page)
+
+    struct Connection: Decodable, Identifiable {
+        var app: String
+        var status: String
+        var id: String { app }
+        var isActive: Bool { status.lowercased().contains("active") }
+    }
+
+    /// List the account's Composio connections with statuses. Read-only.
+    func listConnections(completion: @escaping ([Connection]?, String?) -> Void) {
+        let prompt = """
+        Use COMPOSIO_MANAGE_CONNECTIONS to list ALL connections for this \
+        account (read/list only — do not create, refresh, or delete anything). \
+        Output ONLY a JSON array (no prose, no fences) of \
+        {"app": "<toolkit name, lowercase>", "status": "<exact status>"} — one \
+        entry per app (dedupe multiple accounts to the healthiest status).
+        """
+        runPrompt(prompt) { text, error in
+            guard let text else {
+                completion(nil, error)
+                return
+            }
+            if let parsed = TaskAI.decodeLenient([Connection].self, from: text) {
+                completion(parsed, nil)
+            } else {
+                completion(nil, String(text.prefix(200)))
+            }
+        }
+    }
+
+    /// Run one read-only Composio prompt; main-thread completion with stdout.
+    private func runPrompt(_ prompt: String, completion: @escaping (String?, String?) -> Void) {
+        queue.async { [binaryPath] in
+            guard let configURL = Self.writeMCPConfig() else {
+                DispatchQueue.main.async { completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.") }
+                return
+            }
+            defer { try? FileManager.default.removeItem(at: configURL) }
+
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: binaryPath)
+            proc.arguments = [
+                "-p",
+                "--mcp-config", configURL.path,
+                "--strict-mcp-config",
+                "--allowedTools", "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+                "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
+                "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+                "mcp__composio__COMPOSIO_MANAGE_CONNECTIONS"
+            ]
+            proc.currentDirectoryURL = FileManager.default.temporaryDirectory
+            let inPipe = Pipe()
+            let out = Pipe()
+            proc.standardInput = inPipe
+            proc.standardOutput = out
+            proc.standardError = Pipe()
+            let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: killer)
+            do {
+                try proc.run()
+                if let data = prompt.data(using: .utf8) {
+                    try? inPipe.fileHandleForWriting.write(contentsOf: data)
+                }
+                try? inPipe.fileHandleForWriting.close()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                killer.cancel()
+                let text = proc.terminationStatus == 0 ? String(data: data, encoding: .utf8) : nil
+                DispatchQueue.main.async {
+                    completion(text, text == nil ? "Composio call failed (claude exited \(proc.terminationStatus))." : nil)
+                }
+            } catch {
+                killer.cancel()
+                DispatchQueue.main.async { completion(nil, error.localizedDescription) }
+            }
+        }
+    }
+
     // MARK: - Fetch (background)
 
     private func fetch(_ source: Source, completion: @escaping ([FetchedTask]?, String?) -> Void) {

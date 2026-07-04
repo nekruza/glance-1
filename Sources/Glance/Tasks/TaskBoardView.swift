@@ -13,7 +13,7 @@ struct TaskBoardView: View {
     var body: some View {
         VStack(spacing: 0) {
             if session.showSettings {
-                TaskSettingsView(onClose: { session.showSettings = false })
+                TaskSettingsView(session: session, onClose: { session.showSettings = false })
             } else if session.decomposeMode {
                 decomposeView
             } else if let task = session.selectedTask {

@@ -11,6 +11,7 @@ struct TaskSettingsView: View {
         case ai = "AI & Runs"
         case repos = "Repos"
         case sources = "Sources"
+        case connections = "Connections"
         case about = "About"
 
         var icon: String {
@@ -20,6 +21,7 @@ struct TaskSettingsView: View {
             case .ai: return "cpu"
             case .repos: return "folder"
             case .sources: return "tray.and.arrow.down"
+            case .connections: return "link"
             case .about: return "info.circle"
             }
         }
@@ -32,6 +34,12 @@ struct TaskSettingsView: View {
     @State private var testing = false
     @State private var testResult: String?
 
+    @State private var connections: [ComposioIngest.Connection] = []
+    @State private var connectionsLoading = false
+    @State private var connectionsError: String?
+    @State private var connectionsCheckedAt: Date?
+
+    @ObservedObject var session: TaskBoardSession
     var onClose: () -> Void
 
     var body: some View {
@@ -104,7 +112,94 @@ struct TaskSettingsView: View {
         case .ai: aiSection
         case .repos: reposSection
         case .sources: sourcesSection
+        case .connections: connectionsSection
         case .about: aboutSection
+        }
+    }
+
+    private var connectionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Apps linked to your Composio account. Pulls only work for active connections.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                Spacer()
+                Button(action: refreshConnections) {
+                    HStack(spacing: 5) {
+                        if connectionsLoading { ProgressView().controlSize(.mini) }
+                        Text(connectionsLoading ? "Checking…" : "Refresh")
+                    }
+                }
+                .controlSize(.small)
+                .disabled(connectionsLoading)
+            }
+
+            if let err = connectionsError {
+                Text(err).font(.system(size: 11)).foregroundStyle(Theme.danger)
+            }
+
+            if connections.isEmpty && !connectionsLoading && connectionsError == nil {
+                Text(connectionsCheckedAt == nil
+                     ? "Click Refresh to check your connections."
+                     : "No connections found.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.faint)
+            }
+
+            ForEach(connections) { c in
+                HStack(spacing: 10) {
+                    Image(systemName: iconForApp(c.app))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                        .frame(width: 16)
+                    Text(c.app.capitalized).font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    pill(c.isActive ? "Active" : c.status.capitalized,
+                         c.isActive ? Theme.success : .orange)
+                }
+                .padding(.vertical, 5).padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.field))
+            }
+
+            if let at = connectionsCheckedAt {
+                Text("Checked \(at.formatted(date: .omitted, time: .shortened))")
+                    .font(.system(size: 9.5)).foregroundStyle(Theme.faint)
+            }
+
+            Divider().overlay(Theme.glassBorder)
+            HStack {
+                Text("Add or repair connections in the Composio dashboard.")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.faint)
+                Spacer()
+                Button("Open dashboard") {
+                    NSWorkspace.shared.open(URL(string: "https://app.composio.dev")!)
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func refreshConnections() {
+        connectionsLoading = true
+        connectionsError = nil
+        session.listConnections { list, error in
+            connectionsLoading = false
+            connectionsCheckedAt = Date()
+            if let list {
+                connections = list.sorted { $0.app < $1.app }
+            } else {
+                connectionsError = error
+            }
+        }
+    }
+
+    private func iconForApp(_ app: String) -> String {
+        switch app.lowercased() {
+        case let a where a.contains("jira"): return "ticket"
+        case let a where a.contains("slack"): return "number"
+        case let a where a.contains("granola"): return "mic"
+        case let a where a.contains("calendar"): return "calendar"
+        case let a where a.contains("gmail"): return "envelope"
+        case let a where a.contains("github"): return "chevron.left.forwardslash.chevron.right"
+        default: return "app.connected.to.app.below.fill"
         }
     }
 

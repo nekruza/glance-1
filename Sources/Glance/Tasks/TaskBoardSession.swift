@@ -65,6 +65,11 @@ final class TaskBoardSession: ObservableObject {
         self.ingest = ingest
     }
 
+    /// Settings ▸ Connections passthrough (ingest is private).
+    func listConnections(completion: @escaping ([ComposioIngest.Connection]?, String?) -> Void) {
+        ingest.listConnections(completion: completion)
+    }
+
     // MARK: - Composio pulls (manual, read-only)
 
     func pull(_ source: ComposioIngest.Source) {
