@@ -23,6 +23,7 @@ final class TaskBoardSession: ObservableObject {
     }
 
     @Published var tab: Tab = .board
+    @Published var showSettings = false
     @Published var sortMode: SortMode = .aiRank
     @Published var quickAdd: String = ""
     @Published var searchText: String = ""

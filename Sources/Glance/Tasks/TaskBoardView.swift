@@ -12,7 +12,9 @@ struct TaskBoardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if session.decomposeMode {
+            if session.showSettings {
+                TaskSettingsView(onClose: { session.showSettings = false })
+            } else if session.decomposeMode {
                 decomposeView
             } else if let task = session.selectedTask {
                 TaskDetailView(session: session, task: task)
@@ -389,8 +391,10 @@ struct TaskBoardView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button(action: { session.settingsHandler?() }) {
-                Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.muted)
+            Button(action: { session.showSettings.toggle() }) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14))
+                    .foregroundStyle(session.showSettings ? Theme.accent : Theme.muted)
             }
             .buttonStyle(.plain)
         }
