@@ -226,16 +226,16 @@ final class ComposioIngest {
             """
         case .calendar:
             return """
-            Using the composio tools, fetch my Google Calendar events for the \
-            next 3 days (primary calendar). Read actions only. \(readOnlyRules)
-            Create tasks ONLY for events that imply work from me: meetings I \
-            organize or present at (prep task), events whose title/description \
-            asks something of me, and deadline-like all-day events. Skip \
-            routine attend-only meetings — do not create a task per event. \
-            sourceKey = the calendar event id; sourceURL = the event's \
-            htmlLink. Include the event time and attendees context in the \
-            description, and set the estimate to the prep effort, not the \
-            event length. \(outputRules)
+            Using the composio tools, fetch my Google Calendar events for \
+            TODAY (primary calendar, from now until end of day). Read actions \
+            only. \(readOnlyRules)
+            Create one task per meeting/call today. Skip: events I've \
+            declined, all-day placeholders (focus time, OOO, holidays), and \
+            events already ended. Title format: "<HH:mm> <event title>". \
+            Description: attendees, meet/zoom link if present, and the \
+            agenda/description excerpt. taskKind = "other"; estimate = the \
+            event duration bucket. sourceKey = the calendar event id; \
+            sourceURL = the event's htmlLink. \(outputRules)
             """
         }
     }
