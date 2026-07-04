@@ -10,8 +10,8 @@ struct TaskSettingsView: View {
         case appearance = "Appearance"
         case ai = "AI & Runs"
         case repos = "Repos"
-        case sources = "Sources"
         case connections = "Connections"
+        case schedule = "Schedule"
         case about = "About"
 
         var icon: String {
@@ -20,8 +20,8 @@ struct TaskSettingsView: View {
             case .appearance: return "sun.max"
             case .ai: return "cpu"
             case .repos: return "folder"
-            case .sources: return "tray.and.arrow.down"
             case .connections: return "link"
+            case .schedule: return "clock.arrow.2.circlepath"
             case .about: return "info.circle"
             }
         }
@@ -111,14 +111,23 @@ struct TaskSettingsView: View {
         case .appearance: appearanceSection
         case .ai: aiSection
         case .repos: reposSection
-        case .sources: sourcesSection
         case .connections: connectionsSection
+        case .schedule: scheduleSection
         case .about: aboutSection
         }
     }
 
     private var connectionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            row("Composio MCP", "Read-only pulls: Jira / Granola / Slack / Calendar → Inbox") {
+                VStack(alignment: .trailing, spacing: 4) {
+                    TextField("MCP URL", text: $prefs.composioURL)
+                        .textFieldStyle(.roundedBorder).frame(width: 200).font(.system(size: 10.5))
+                    SecureField("API key (ck_…)", text: $prefs.composioKey)
+                        .textFieldStyle(.roundedBorder).frame(width: 200).font(.system(size: 10.5))
+                }
+            }
+            Divider().overlay(Theme.glassBorder)
             HStack {
                 Text("Apps linked to your Composio account. Pulls only work for active connections.")
                     .font(.system(size: 11)).foregroundStyle(Theme.muted)
@@ -290,17 +299,9 @@ struct TaskSettingsView: View {
         }
     }
 
-    private var sourcesSection: some View {
+    private var scheduleSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            row("Composio MCP", "Read-only pulls: Jira / Granola / Slack / Calendar → Inbox") {
-                VStack(alignment: .trailing, spacing: 4) {
-                    TextField("MCP URL", text: $prefs.composioURL)
-                        .textFieldStyle(.roundedBorder).frame(width: 200).font(.system(size: 10.5))
-                    SecureField("API key (ck_…)", text: $prefs.composioKey)
-                        .textFieldStyle(.roundedBorder).frame(width: 200).font(.system(size: 10.5))
-                }
-            }
-            row("Scheduled pulls", "Fetch new work automatically") {
+            row("Scheduled pulls", "Fetch new work automatically into the Inbox") {
                 Toggle("", isOn: $prefs.schedEnabled)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
