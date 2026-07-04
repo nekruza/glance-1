@@ -1,13 +1,12 @@
 import SwiftUI
 
-/// Task board overlay (PRD V2 F1). Same dark-glass system as the ask overlay.
+/// Task board app window (PRD V2 F1), dark theme.
 /// Layout: header (tabs + search) → quick-add → task list → footer.
 /// Selecting a task slides in the detail pane (edit, plan gate, run stream,
 /// review gate).
 struct TaskBoardView: View {
     @ObservedObject var session: TaskBoardSession
     @ObservedObject var store: TaskStore
-    @ObservedObject private var prefs = Preferences.shared
     @FocusState private var quickAddFocused: Bool
 
     var body: some View {
@@ -28,17 +27,8 @@ struct TaskBoardView: View {
             }
             footer
         }
-        .frame(width: 700, height: 640)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-                .fill(Theme.glassTint.opacity(prefs.overlayOpacity))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-                .strokeBorder(Theme.glassBorder, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-        .overlay(alignment: .topTrailing) { closeButton.padding(5) }
+        .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
+        .background(Theme.glassTint)
         .foregroundStyle(Theme.fg)
     }
 
@@ -413,18 +403,6 @@ struct TaskBoardView: View {
         .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
     }
 
-    private var closeButton: some View {
-        Button(action: { session.dismissHandler?() }) {
-            Image(systemName: "xmark")
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(Theme.muted)
-                .padding(4)
-                .background(Circle().fill(Theme.field))
-                .overlay(Circle().strokeBorder(Theme.glassBorder, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .help("Close")
-    }
 }
 
 // MARK: - Card row (FR21/FR23)
