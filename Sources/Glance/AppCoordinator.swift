@@ -301,8 +301,16 @@ final class AppCoordinator {
         // Reflect CLI connection in the footer (present() only reaches here when
         // the CLI is OK, so show the connected version).
         overlay.session.settingsHandler = { [weak self] in
-            self?.overlay.dismiss()
-            self?.onOpenSettings?()
+            guard let self else { return }
+            self.overlay.dismiss()
+            // Same in-pane settings as the board's gear; fall back to the
+            // old Settings window when the task system is unavailable.
+            if let taskOverlay = self.taskOverlay {
+                taskOverlay.session.showSettings = true
+                taskOverlay.present()
+            } else {
+                self.onOpenSettings?()
+            }
         }
         overlay.session.historyHandler = { [weak self] summary in
             self?.resumeHistorySession(summary)
