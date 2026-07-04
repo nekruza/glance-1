@@ -17,7 +17,12 @@ final class TaskBoardSession: ObservableObject {
         let text: String
     }
 
+    enum SortMode: String, CaseIterable {
+        case aiRank = "AI order", priority = "Priority", dateAdded = "Date added"
+    }
+
     @Published var tab: Tab = .board
+    @Published var sortMode: SortMode = .aiRank
     @Published var quickAdd: String = ""
     @Published var searchText: String = ""
     @Published var selectedTaskId: UUID?
@@ -50,12 +55,22 @@ final class TaskBoardSession: ObservableObject {
     // MARK: - Lists
 
     func visibleTasks() -> [TaskItem] {
-        let base: [TaskItem]
+        var base: [TaskItem]
         switch tab {
         case .board: base = store.boardTasks()
         case .inbox: base = store.inboxTasks()
         case .done:  base = store.doneTasks()
         case .activity: base = [] // activity tab renders its own feed
+        }
+        // Alternative sorts for the board (AI order comes pre-sorted, pins first).
+        if tab == .board {
+            switch sortMode {
+            case .aiRank: break
+            case .priority:
+                base.sort { ($0.aiPriority, $0.aiRank) < ($1.aiPriority, $1.aiRank) }
+            case .dateAdded:
+                base.sort { $0.createdAt > $1.createdAt }
+            }
         }
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return base }

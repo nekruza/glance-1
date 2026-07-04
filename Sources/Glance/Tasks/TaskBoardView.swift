@@ -58,6 +58,26 @@ struct TaskBoardView: View {
 
             Spacer()
 
+            if session.tab == .board {
+                Menu {
+                    ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
+                        Button(action: { session.sortMode = mode }) {
+                            HStack {
+                                Text(mode.rawValue)
+                                if session.sortMode == mode { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 12))
+                        .foregroundStyle(session.sortMode == .aiRank ? Theme.muted : Theme.accent)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Sort: \(session.sortMode.rawValue)")
+            }
+
             if session.isPrioritizing {
                 HStack(spacing: 5) {
                     ProgressView().controlSize(.mini)
@@ -391,7 +411,12 @@ private struct TaskCardRow: View {
 
             Spacer()
 
-            statusBadge
+            VStack(alignment: .trailing, spacing: 3) {
+                statusBadge
+                Text(Self.addedLabel(task.createdAt))
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.faint)
+            }
 
             if hovering { hoverActions }
         }
@@ -399,6 +424,17 @@ private struct TaskCardRow: View {
         .background(hovering ? Color.white.opacity(0.04) : .clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+    }
+
+    /// "12m", "3h", "2d" — or the date once it's over a week old.
+    static func addedLabel(_ date: Date) -> String {
+        let s = Date().timeIntervalSince(date)
+        switch s {
+        case ..<3600: return "\(max(1, Int(s / 60)))m"
+        case ..<86_400: return "\(Int(s / 3600))h"
+        case ..<(7 * 86_400): return "\(Int(s / 86_400))d"
+        default: return date.formatted(.dateTime.day().month(.abbreviated))
+        }
     }
 
     private var priorityChip: some View {
