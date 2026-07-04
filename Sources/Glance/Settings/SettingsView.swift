@@ -91,6 +91,37 @@ struct SettingsView: View {
                     settingLabel("Composio (read-only pulls)",
                                  "Jira / Slack / Granola → Inbox. Fetch only — Glance never writes to them.")
                 }
+                LabeledContent {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Toggle("", isOn: $prefs.schedEnabled)
+                            .labelsHidden().toggleStyle(.switch)
+                        if prefs.schedEnabled {
+                            HStack(spacing: 6) {
+                                Picker("", selection: $prefs.schedSource) {
+                                    Text("All sources").tag("All")
+                                    ForEach(ComposioIngest.Source.allCases, id: \.rawValue) { s in
+                                        Text(s.rawValue).tag(s.rawValue)
+                                    }
+                                }
+                                .labelsHidden().frame(width: 110)
+                                Picker("", selection: $prefs.schedMode) {
+                                    ForEach(Preferences.ScheduleMode.allCases, id: \.self) { m in
+                                        Text(m.rawValue).tag(m)
+                                    }
+                                }
+                                .labelsHidden().frame(width: 130)
+                            }
+                            if prefs.schedMode == .daily {
+                                DatePicker("", selection: dailyTimeBinding,
+                                           displayedComponents: .hourAndMinute)
+                                    .labelsHidden()
+                            }
+                        }
+                    }
+                } label: {
+                    settingLabel("Scheduled pulls",
+                                 "Automatically fetch new work into the Inbox on a cadence")
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     settingLabel("Repos", "Where AI agents run code tasks (isolated worktrees)")
                     ForEach(prefs.repos) { repo in
@@ -207,6 +238,20 @@ struct SettingsView: View {
                 testResult = .fail(msg)
             }
         }
+    }
+
+    /// Bridges "minutes since midnight" to a DatePicker time.
+    private var dailyTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.startOfDay(for: Date())
+                    .addingTimeInterval(TimeInterval(prefs.schedDailyMinutes * 60))
+            },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                prefs.schedDailyMinutes = (c.hour ?? 9) * 60 + (c.minute ?? 0)
+            }
+        )
     }
 
     private func addRepo() {

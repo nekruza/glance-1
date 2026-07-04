@@ -46,6 +46,9 @@ final class TaskBoardSession: ObservableObject {
 
     var dismissHandler: (() -> Void)?
     var settingsHandler: (() -> Void)?
+    /// Wired to notifications — fired when a pull lands new Inbox items
+    /// (matters for scheduled pulls with the overlay closed).
+    var pullNotifyHandler: ((String) -> Void)?
 
     private var lastPrioritized = Date.distantPast
     /// FR42: at most one automatic reflow per 10 minutes.
@@ -68,7 +71,10 @@ final class TaskBoardSession: ObservableObject {
             guard let self else { return }
             self.pullingSource = nil
             self.showPullStatus(Self.describe(source, result))
-            if result.created > 0 { self.tab = .inbox }
+            if result.created > 0 {
+                self.tab = .inbox
+                self.pullNotifyHandler?("\(source.rawValue): \(result.created) new task\(result.created == 1 ? "" : "s") in Inbox")
+            }
         }
     }
 
@@ -85,7 +91,10 @@ final class TaskBoardSession: ObservableObject {
             guard index < sources.count else {
                 pullingSource = nil
                 showPullStatus(summary.joined(separator: " · "))
-                if totalCreated > 0 { tab = .inbox }
+                if totalCreated > 0 {
+                    tab = .inbox
+                    pullNotifyHandler?("Pull finished: \(totalCreated) new task\(totalCreated == 1 ? "" : "s") in Inbox (\(summary.joined(separator: ", ")))")
+                }
                 return
             }
             let source = sources[index]

@@ -108,12 +108,61 @@ final class AppCoordinator {
             }
             .store(in: &cancellables)
 
+        // Scheduled pulls: notify even when the overlay is closed.
+        overlayCtl.session.pullNotifyHandler = { [weak self] message in
+            self?.taskNotifications.post(message: message,
+                                         taskId: self?.taskStore.inboxTasks().first?.id ?? UUID())
+        }
+        startPullScheduler()
+
         // Transcript-pane reader actions.
         TranscriptPanelModel.shared.summarizeHandler = { [weak self] entry in
             self?.summarizeMeeting(entry)
         }
         TranscriptPanelModel.shared.extractTasksHandler = { [weak self] entry, done in
             self?.extractMeetingTasks(entry, completion: done)
+        }
+    }
+
+    // MARK: - Scheduled pulls
+
+    private var schedulerTimer: DispatchSourceTimer?
+
+    /// Minute tick; fires the configured pull when due. Overlap-safe: the
+    /// session ignores pulls while one is running, and lastRun only advances
+    /// when we actually trigger.
+    private func startPullScheduler() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 60, repeating: 60)
+        timer.setEventHandler { [weak self] in self?.schedulerTick() }
+        timer.resume()
+        schedulerTimer = timer
+    }
+
+    private func schedulerTick() {
+        let prefs = Preferences.shared
+        guard prefs.schedEnabled, !prefs.composioKey.isEmpty,
+              let session = taskOverlay?.session, session.pullingSource == nil else { return }
+
+        let now = Date()
+        let last = prefs.schedLastRun ?? .distantPast
+        let due: Bool
+        switch prefs.schedMode {
+        case .hourly:  due = now.timeIntervalSince(last) >= 3600
+        case .every4h: due = now.timeIntervalSince(last) >= 4 * 3600
+        case .daily:
+            let cal = Calendar.current
+            let todayAt = cal.startOfDay(for: now)
+                .addingTimeInterval(TimeInterval(prefs.schedDailyMinutes * 60))
+            due = now >= todayAt && last < todayAt
+        }
+        guard due else { return }
+        prefs.schedLastRun = now
+
+        if let source = ComposioIngest.Source(rawValue: prefs.schedSource) {
+            session.pull(source)
+        } else {
+            session.pullAll()
         }
     }
 

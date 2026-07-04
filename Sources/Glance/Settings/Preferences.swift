@@ -18,6 +18,17 @@ final class Preferences: ObservableObject {
         static let autoPlanApprove = "tasks.autoPlanApprove"
         static let composioURL = "composio.url"
         static let composioKey = "composio.key"
+        static let schedEnabled = "sched.enabled"
+        static let schedSource = "sched.source"
+        static let schedMode = "sched.mode"
+        static let schedDailyMinutes = "sched.dailyMinutes"
+        static let schedLastRun = "sched.lastRun"
+    }
+
+    enum ScheduleMode: String, CaseIterable {
+        case hourly = "Every hour"
+        case every4h = "Every 4 hours"
+        case daily = "Daily at…"
     }
 
     /// Default dark-tint opacity of the overlay background.
@@ -68,6 +79,26 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(composioKey, forKey: Keys.composioKey) }
     }
 
+    /// Scheduled pulls: run a Composio pull automatically on a cadence.
+    @Published var schedEnabled: Bool {
+        didSet { defaults.set(schedEnabled, forKey: Keys.schedEnabled) }
+    }
+    /// "All" or a ComposioIngest.Source rawValue.
+    @Published var schedSource: String {
+        didSet { defaults.set(schedSource, forKey: Keys.schedSource) }
+    }
+    @Published var schedMode: ScheduleMode {
+        didSet { defaults.set(schedMode.rawValue, forKey: Keys.schedMode) }
+    }
+    /// Minutes since midnight for the daily mode (default 09:00).
+    @Published var schedDailyMinutes: Int {
+        didSet { defaults.set(schedDailyMinutes, forKey: Keys.schedDailyMinutes) }
+    }
+    var schedLastRun: Date? {
+        get { defaults.object(forKey: Keys.schedLastRun) as? Date }
+        set { defaults.set(newValue, forKey: Keys.schedLastRun) }
+    }
+
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
     @Published var overlayOpacity: Double {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
@@ -116,6 +147,11 @@ final class Preferences: ObservableObject {
             ? true : defaults.bool(forKey: Keys.autoPlanApprove)
         composioURL = defaults.string(forKey: Keys.composioURL) ?? "https://connect.composio.dev/mcp"
         composioKey = defaults.string(forKey: Keys.composioKey) ?? ""
+        schedEnabled = defaults.bool(forKey: Keys.schedEnabled)
+        schedSource = defaults.string(forKey: Keys.schedSource) ?? "All"
+        schedMode = ScheduleMode(rawValue: defaults.string(forKey: Keys.schedMode) ?? "") ?? .daily
+        schedDailyMinutes = defaults.object(forKey: Keys.schedDailyMinutes) == nil
+            ? 9 * 60 : defaults.integer(forKey: Keys.schedDailyMinutes)
     }
 }
 
