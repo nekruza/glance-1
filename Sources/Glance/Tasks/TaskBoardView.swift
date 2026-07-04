@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Task board app window (PRD V2 F1), dark theme.
+/// Task board app window (PRD V2 F1), light design (DS tokens).
 /// Layout: header (tabs + search) → quick-add → task list → footer.
 /// Selecting a task slides in the detail pane (edit, plan gate, run stream,
 /// review gate).
@@ -8,6 +8,7 @@ struct TaskBoardView: View {
     @ObservedObject var session: TaskBoardSession
     @ObservedObject var store: TaskStore
     @FocusState private var quickAddFocused: Bool
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,87 +29,109 @@ struct TaskBoardView: View {
             footer
         }
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
-        .background(Theme.glassTint)
-        .foregroundStyle(Theme.fg)
+        .background(DS.bg)
+        .foregroundStyle(DS.textPrimary)
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: DS.Space.sm) {
             Image(systemName: "checklist")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.accent)
+                .font(DS.Typo.headline)
+                .foregroundStyle(DS.accentText)
             tabBar
 
             Spacer()
 
             // Manual Composio pulls (read-only → Inbox).
             if let src = session.pullingSource {
-                HStack(spacing: 5) {
+                HStack(spacing: DS.Space.xxs) {
                     ProgressView().controlSize(.mini)
-                    Text("Pulling \(src.rawValue)…").font(.system(size: 10.5)).foregroundStyle(Theme.muted)
+                    Text("Pulling \(src.rawValue)…").font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                 }
             } else {
-                Menu {
-                    Button("Pull from all") { session.pullAll() }
-                    Divider()
-                    ForEach(ComposioIngest.Source.allCases, id: \.self) { src in
-                        Button("Pull from \(src.rawValue)") { session.pull(src) }
+                Hover { hovering in
+                    Menu {
+                        Button("Pull from all") { session.pullAll() }
+                        Divider()
+                        ForEach(ComposioIngest.Source.allCases, id: \.self) { src in
+                            Button("Pull from \(src.rawValue)") { session.pull(src) }
+                        }
+                    } label: {
+                        Image(systemName: "tray.and.arrow.down")
+                            .font(DS.Typo.label)
+                            .foregroundStyle(DS.textSecondary)
                     }
-                } label: {
-                    Image(systemName: "tray.and.arrow.down")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.muted)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .padding(DS.Space.xxs)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                        .fill(hovering ? DS.surfaceHover : .clear))
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
                 .help("Fetch new work into the Inbox (read-only)")
             }
 
             if session.tab == .board {
-                Menu {
-                    ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
-                        Button(action: { session.sortMode = mode }) {
-                            HStack {
-                                Text(mode.rawValue)
-                                if session.sortMode == mode { Image(systemName: "checkmark") }
+                Hover { hovering in
+                    Menu {
+                        ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
+                            Button(action: { session.sortMode = mode }) {
+                                HStack {
+                                    Text(mode.rawValue)
+                                    if session.sortMode == mode { Image(systemName: "checkmark") }
+                                }
                             }
                         }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(DS.Typo.label)
+                            .foregroundStyle(session.sortMode == .aiRank ? DS.textSecondary : DS.accentText)
                     }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.system(size: 12))
-                        .foregroundStyle(session.sortMode == .aiRank ? Theme.muted : Theme.accent)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .padding(DS.Space.xxs)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                        .fill(hovering ? DS.surfaceHover : .clear))
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
                 .help("Sort: \(session.sortMode.rawValue)")
             }
 
             if session.isPrioritizing {
-                HStack(spacing: 5) {
+                HStack(spacing: DS.Space.xxs) {
                     ProgressView().controlSize(.mini)
-                    Text("Prioritizing…").font(.system(size: 10.5)).foregroundStyle(Theme.muted)
+                    Text("Prioritizing…").font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                 }
             } else {
-                Button(action: { session.schedulePrioritize(force: true) }) {
-                    Image(systemName: "wand.and.stars").font(.system(size: 13))
-                        .foregroundStyle(Theme.muted)
+                Hover { hovering in
+                    Button(action: { session.schedulePrioritize(force: true) }) {
+                        Image(systemName: "wand.and.stars").font(DS.Typo.headline)
+                            .foregroundStyle(DS.textSecondary)
+                            .padding(DS.Space.xxs)
+                            .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                                .fill(hovering ? DS.surfaceHover : .clear))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 .help("Re-prioritize with AI")
             }
 
-            TextField("", text: $session.searchText,
-                      prompt: Text("Search").foregroundColor(Theme.faint))
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .frame(width: 110)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Theme.field))
+            HStack(spacing: DS.Space.xxs) {
+                Image(systemName: "magnifyingglass")
+                    .font(DS.Typo.caption)
+                    .foregroundStyle(DS.textTertiary)
+                TextField("", text: $session.searchText,
+                          prompt: Text("Search").foregroundColor(DS.textTertiary))
+                    .textFieldStyle(.plain)
+                    .font(DS.Typo.body)
+                    .focused($searchFocused)
+            }
+            .frame(width: 160)
+            .dsField(focused: searchFocused)
         }
-        .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
+        .padding(.horizontal, DS.Space.md).padding(.top, DS.Space.md).padding(.bottom, DS.Space.xs)
+        .background(DS.bg)
+        .overlay(Divider().overlay(DS.divider), alignment: .bottom)
     }
 
     /// Custom segmented control: the system Picker can't render count badges.
@@ -116,31 +139,39 @@ struct TaskBoardView: View {
         HStack(spacing: 2) {
             ForEach(TaskBoardSession.Tab.allCases, id: \.self) { tab in
                 let selected = session.tab == tab
-                Button(action: { session.tab = tab }) {
-                    HStack(spacing: 5) {
-                        Text(tab.rawValue)
-                            .font(.system(size: 11.5, weight: selected ? .semibold : .regular))
-                            .foregroundStyle(selected ? Theme.fg : Theme.muted)
-                        if let n = tabCount(tab), n > 0 {
-                            Text(n > 99 ? "99+" : "\(n)")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.black.opacity(0.8))
-                                .frame(minWidth: 13, minHeight: 13)
-                                .background(Circle().fill(tab == .inbox ? Theme.accent : Theme.muted))
+                Hover { hovering in
+                    Button(action: { session.tab = tab }) {
+                        HStack(spacing: DS.Space.xxs) {
+                            Text(tab.rawValue)
+                                .font(selected ? DS.Typo.headline : DS.Typo.body)
+                                .foregroundStyle(selected ? DS.textPrimary : DS.textSecondary)
+                            if let n = tabCount(tab), n > 0 {
+                                Text(n > 99 ? "99+" : "\(n)")
+                                    .font(DS.Typo.overline)
+                                    .foregroundStyle(tab == .inbox ? DS.accentText : DS.textSecondary)
+                                    .padding(.horizontal, DS.Space.xxs)
+                                    .frame(minWidth: 15, minHeight: 15)
+                                    .background(Capsule().fill(tab == .inbox ? DS.accentSoft : DS.surfaceHover))
+                            }
                         }
+                        .padding(.horizontal, DS.Space.xs + 2).padding(.vertical, DS.Space.xxs)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.Radius.small)
+                                .fill(selected ? DS.bg : (hovering ? DS.surfaceHover : .clear))
+                                .shadow(color: selected ? .black.opacity(0.06) : .clear, radius: 2, y: 1)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DS.Radius.small)
+                                .strokeBorder(selected ? DS.border : .clear, lineWidth: 1)
+                        )
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(selected ? Color.white.opacity(0.12) : .clear)
-                    )
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(2)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+        .background(RoundedRectangle(cornerRadius: DS.Radius.small + 2).fill(DS.surface))
     }
 
     private func tabCount(_ tab: TaskBoardSession.Tab) -> Int? {
@@ -155,28 +186,33 @@ struct TaskBoardView: View {
     // MARK: - Quick add (FR26)
 
     private var quickAddRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: DS.Space.xs) {
             Image(systemName: "plus")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Theme.faint)
+                .font(DS.Typo.label)
+                .foregroundStyle(DS.textTertiary)
             TextField("", text: $session.quickAdd,
-                      prompt: Text("Add a task…").foregroundColor(Theme.faint))
+                      prompt: Text("Add a task…").foregroundColor(DS.textTertiary))
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .tint(Theme.accent)
+                .font(DS.Typo.body)
+                .tint(DS.accentText)
                 .focused($quickAddFocused)
                 .onSubmit { session.submitQuickAdd() }
             Button(action: { session.startDecompose() }) {
                 Label("From prompt", systemImage: "text.badge.plus")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.muted)
+                    .font(DS.Typo.caption)
+                    .foregroundStyle(DS.textSecondary)
             }
             .buttonStyle(.plain)
             .help("Paste a braindump — AI splits it into tasks you confirm")
         }
-        .padding(.horizontal, 18).padding(.vertical, 8)
-        .background(Color.white.opacity(0.03))
-        .overlay(Divider().overlay(Theme.glassBorder), alignment: .bottom)
+        .padding(DS.Space.sm)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.medium).fill(DS.bg))
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.medium)
+                .strokeBorder(quickAddFocused ? DS.accent : DS.border, lineWidth: 1)
+        )
+        .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.sm)
+        .onAppear { quickAddFocused = true }
     }
 
     // MARK: - List (FR21–23)
@@ -199,17 +235,14 @@ struct TaskBoardView: View {
                     }
                 }
                 if tasks.isEmpty {
-                    Text(emptyText)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(Theme.faint)
-                        .padding(30)
+                    emptyState
                 }
                 ForEach(tasks) { task in
                     Button(action: { session.selectedTaskId = task.id }) {
                         TaskCardRow(session: session, task: task)
                     }
                     .buttonStyle(.plain)
-                    Divider().overlay(Theme.glassBorder.opacity(0.5))
+                    Divider().overlay(DS.divider)
                 }
             }
         }
@@ -220,20 +253,53 @@ struct TaskBoardView: View {
         HStack {
             Spacer()
             Button(action: action) {
-                Label(title, systemImage: icon).font(.system(size: 11, weight: .medium))
+                Label(title, systemImage: icon).font(DS.Typo.label)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Theme.accent)
+            .foregroundStyle(DS.accentText)
         }
-        .padding(.horizontal, 18).padding(.vertical, 6)
-        .background(Color.white.opacity(0.02))
+        .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.xxs)
+        .background(DS.surface)
     }
 
-    private var emptyText: String {
+    private var emptyState: some View {
+        VStack(spacing: DS.Space.xs) {
+            Image(systemName: emptyIcon)
+                .font(.system(size: 28))
+                .foregroundStyle(DS.textTertiary)
+            Text(emptyTitle)
+                .font(DS.Typo.headline)
+                .foregroundStyle(DS.textSecondary)
+            Text(emptyHint)
+                .font(DS.Typo.caption)
+                .foregroundStyle(DS.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(DS.Space.xl)
+    }
+
+    private var emptyIcon: String {
         switch session.tab {
-        case .board: return "No tasks. Add one above, or ⌘-paste a braindump via “From prompt”."
-        case .inbox: return "Inbox empty — AI-created tasks land here for your accept."
-        case .done: return "Nothing finished yet."
+        case .inbox: return "tray"
+        case .done: return "checkmark.circle"
+        default: return "checklist"
+        }
+    }
+
+    private var emptyTitle: String {
+        switch session.tab {
+        case .board: return "No tasks yet"
+        case .inbox: return "Inbox empty"
+        case .done: return "Nothing finished yet"
+        case .activity: return ""
+        }
+    }
+
+    private var emptyHint: String {
+        switch session.tab {
+        case .board: return "Add one above, or paste a braindump via “From prompt”."
+        case .inbox: return "AI-created tasks land here for your accept."
+        case .done: return "Completed tasks show up here."
         case .activity: return ""
         }
     }
@@ -246,24 +312,35 @@ struct TaskBoardView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     let events = session.activityFeed()
                     if events.isEmpty {
-                        Text("Nothing yet — run a task and every gate decision lands here.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.faint).padding(24)
+                        VStack(spacing: DS.Space.xs) {
+                            Image(systemName: "clock")
+                                .font(.system(size: 28))
+                                .foregroundStyle(DS.textTertiary)
+                            Text("No activity yet")
+                                .font(DS.Typo.headline)
+                                .foregroundStyle(DS.textSecondary)
+                            Text("Run a task and every gate decision lands here.")
+                                .font(DS.Typo.caption)
+                                .foregroundStyle(DS.textTertiary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(DS.Space.xl)
                     }
                     ForEach(events) { e in
-                        HStack(alignment: .top, spacing: 10) {
+                        HStack(alignment: .top, spacing: DS.Space.xs) {
                             Image(systemName: e.icon)
-                                .font(.system(size: 11))
-                                .foregroundStyle(Theme.muted)
+                                .font(DS.Typo.caption)
+                                .foregroundStyle(DS.textSecondary)
                                 .frame(width: 16)
                             Text(e.text)
-                                .font(.system(size: 11.5))
+                                .font(DS.Typo.body)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Text(e.at.formatted(date: .abbreviated, time: .shortened))
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(Theme.faint)
+                                .font(DS.Typo.mono)
+                                .foregroundStyle(DS.textTertiary)
                         }
-                        .padding(.horizontal, 18).padding(.vertical, 6)
-                        Divider().overlay(Theme.glassBorder.opacity(0.4))
+                        .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.xxs + 2)
+                        Divider().overlay(DS.divider)
                     }
                 }
             }
@@ -274,62 +351,59 @@ struct TaskBoardView: View {
                     if let url = session.exportBoard() { NSWorkspace.shared.open(url) }
                 }) {
                     Label("Export board + log as Markdown", systemImage: "square.and.arrow.up")
-                        .font(.system(size: 11))
+                        .font(DS.Typo.label)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.accent)
+                .buttonStyle(DSSecondaryButtonStyle())
+                .foregroundStyle(DS.textPrimary)
             }
-            .padding(.horizontal, 18).padding(.vertical, 8)
-            .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+            .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.xs)
+            .overlay(Divider().overlay(DS.divider), alignment: .top)
         }
     }
 
     // MARK: - Decompose flow (FR27)
 
     private var decomposeView: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
             HStack {
-                Button(action: { session.decomposeMode = false }) {
-                    Label("Back", systemImage: "chevron.left").font(.system(size: 12))
-                }
-                .buttonStyle(.plain).foregroundStyle(Theme.muted)
+                BackButton(label: "Back") { session.decomposeMode = false }
                 Spacer()
-                Text("Create tasks from a prompt").font(.system(size: 13, weight: .semibold))
+                Text("Create tasks from a prompt").font(DS.Typo.headline)
                 Spacer()
             }
-            .padding(.top, 14)
+            .padding(.top, DS.Space.md)
 
             if session.decomposePreview.isEmpty {
                 TextEditor(text: $session.decomposeText)
-                    .font(.system(size: 13))
+                    .font(DS.Typo.body)
                     .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+                    .dsField()
                     .frame(maxHeight: .infinity)
                     .overlay(alignment: .topLeading) {
                         if session.decomposeText.isEmpty {
                             Text("Paste meeting notes, a Slack thread, an email, or just braindump…")
-                                .font(.system(size: 12.5)).foregroundStyle(Theme.faint)
-                                .padding(14).allowsHitTesting(false)
+                                .font(DS.Typo.body).foregroundStyle(DS.textTertiary)
+                                .padding(DS.Space.sm).allowsHitTesting(false)
                         }
                     }
                 HStack {
                     Spacer()
                     Button(action: { session.runDecompose() }) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: DS.Space.xxs) {
                             if session.decomposeBusy { ProgressView().controlSize(.small) }
                             Text(session.decomposeBusy ? "Splitting…" : "Split into tasks")
                         }
                     }
+                    .buttonStyle(DSPrimaryButtonStyle())
                     .disabled(session.decomposeBusy || session.decomposeText.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             } else {
                 Text("Uncheck anything you don't want, then confirm:")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .font(DS.Typo.body).foregroundStyle(DS.textSecondary)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
                         ForEach(Array(session.decomposePreview.enumerated()), id: \.offset) { i, t in
-                            HStack(alignment: .top, spacing: 8) {
+                            HStack(alignment: .top, spacing: DS.Space.xs) {
                                 Toggle("", isOn: Binding(
                                     get: { session.decomposeKeep.contains(i) },
                                     set: { on in
@@ -338,71 +412,111 @@ struct TaskBoardView: View {
                                     }
                                 )).labelsHidden().toggleStyle(.checkbox)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(t.title).font(.system(size: 12.5, weight: .medium))
+                                    Text(t.title).font(DS.Typo.body).fontWeight(.medium)
                                     if let d = t.description, !d.isEmpty {
-                                        Text(d).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(2)
+                                        Text(d).font(DS.Typo.caption).foregroundStyle(DS.textSecondary).lineLimit(2)
                                     }
                                 }
                             }
-                            .padding(.vertical, 4)
+                            .padding(.vertical, DS.Space.xxs)
                         }
                     }
                 }
                 .frame(maxHeight: .infinity)
                 HStack {
                     Button("Start over") { session.decomposePreview = [] }
-                        .buttonStyle(.plain).foregroundStyle(Theme.muted).font(.system(size: 12))
+                        .buttonStyle(.plain).foregroundStyle(DS.textSecondary).font(DS.Typo.label)
                     Spacer()
                     Button("Create \(session.decomposeKeep.count) task\(session.decomposeKeep.count == 1 ? "" : "s")") {
                         session.confirmDecompose()
                     }
+                    .buttonStyle(DSPrimaryButtonStyle())
                     .disabled(session.decomposeKeep.isEmpty)
                 }
             }
         }
-        .padding(.horizontal, 18).padding(.bottom, 12)
+        .padding(.horizontal, DS.Space.md).padding(.bottom, DS.Space.sm)
         .frame(maxHeight: .infinity)
     }
 
-    // MARK: - Footer / close
+    // MARK: - Footer
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DS.Space.xs) {
             let running = session.runner.activeRunIds.count
             Circle()
-                .fill(running > 0 ? Theme.accent : Theme.success)
+                .fill(running > 0 ? DS.accent : DS.textTertiary)
                 .frame(width: 6, height: 6)
             Text(running > 0 ? "\(running) run\(running == 1 ? "" : "s") active" : "Idle")
-                .font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+                .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
             if let status = session.pullStatus {
                 Text("·  \(status)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.muted)
+                    .font(DS.Typo.caption)
+                    .foregroundStyle(DS.textSecondary)
                     .lineLimit(1)
             }
             Spacer()
             if session.showSettings {
                 // On the settings page the gear is pointless — offer jumps to
-                // the two overlays instead.
-                Button(action: { session.openAskHandler?() }) {
-                    Image(systemName: "sparkle").font(.system(size: 14)).foregroundStyle(Theme.muted)
-                }
-                .buttonStyle(.plain)
-                Button(action: { session.showSettings = false }) {
-                    Image(systemName: "checklist").font(.system(size: 14)).foregroundStyle(Theme.muted)
-                }
-                .buttonStyle(.plain)
+                // the ask overlay and back to the board instead.
+                footerIcon("sparkle", help: "Open the ask overlay") { session.openAskHandler?() }
+                footerIcon("checklist", help: "Back to the board") { session.showSettings = false }
             } else {
-                Button(action: { session.showSettings = true }) {
-                    Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.muted)
-                }
-                .buttonStyle(.plain)
+                footerIcon("gearshape", help: "Settings") { session.showSettings = true }
             }
         }
-        .padding(.horizontal, 18).padding(.vertical, 9)
-        .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+        .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.xs)
+        .overlay(Divider().overlay(DS.divider), alignment: .top)
     }
 
+    private func footerIcon(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Hover { hovering in
+            Button(action: action) {
+                Image(systemName: symbol).font(DS.Typo.headline)
+                    .foregroundStyle(hovering ? DS.textPrimary : DS.textSecondary)
+                    .padding(DS.Space.xxs)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                        .fill(hovering ? DS.surfaceHover : .clear))
+            }
+            .buttonStyle(.plain)
+        }
+        .help(help)
+    }
+
+}
+
+// MARK: - Hover helper
+
+/// Reads hover state and hands it to the content builder — keeps hover
+/// styling declarative without a @State per control.
+struct Hover<Content: View>: View {
+    @ViewBuilder let content: (Bool) -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        content(hovering).onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Back button (shared nav pattern)
+
+/// Standardized back affordance: chevron + label, hover capsule.
+struct BackButton: View {
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Hover { hovering in
+            Button(action: action) {
+                Label(label, systemImage: "chevron.left")
+                    .font(DS.Typo.label)
+                    .foregroundStyle(hovering ? DS.textPrimary : DS.textSecondary)
+                    .padding(.horizontal, DS.Space.xs).padding(.vertical, DS.Space.xxs)
+                    .background(Capsule().fill(hovering ? DS.surfaceHover : .clear))
+            }
+            .buttonStyle(.plain)
+        }
+    }
 }
 
 // MARK: - Card row (FR21/FR23)
@@ -411,95 +525,64 @@ private struct TaskCardRow: View {
     @ObservedObject var session: TaskBoardSession
     let task: TaskItem
     @State private var hovering = false
-    /// Custom tooltip: .help() never fires on a nonactivating panel.
-    @State private var hoverTip: String?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: DS.Space.xs + 2) {
             Image(systemName: task.source.icon)
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.faint)
+                .font(DS.Typo.caption)
+                .foregroundStyle(DS.textTertiary)
                 .frame(width: 14)
-                .onHover { inside in
-                    hoverTip = inside ? task.source.displayName
-                                      : (hoverTip == task.source.displayName ? nil : hoverTip)
-                }
+                .help(task.source.displayName)
 
             priorityChip
 
             if let agent = Preferences.shared.agent(task.agentId) {
                 Text(agent.icon)
-                    .font(.system(size: 11))
+                    .font(DS.Typo.caption)
                     .frame(width: 15)
-                    .onHover { inside in
-                        hoverTip = inside ? agent.name : (hoverTip == agent.name ? nil : hoverTip)
-                    }
+                    .help(agent.name)
             }
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: DS.Space.xxs - 1) {
+                HStack(spacing: DS.Space.xxs + 2) {
                     if task.isPinned {
-                        Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(Theme.accent)
+                        Image(systemName: "pin.fill").font(DS.Typo.overline).foregroundStyle(DS.accentText)
                     }
                     Text(task.title)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(DS.Typo.body).fontWeight(.medium)
                         .lineLimit(1)
                     if task.possibleDuplicateOf != nil {
-                        Text("dup?")
-                            .font(.system(size: 8.5, weight: .bold))
-                            .padding(.horizontal, 4).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.orange.opacity(0.2)))
-                            .foregroundStyle(.orange)
+                        dsBadge("dup?", tint: DS.warning, soft: DS.warningSoft)
                             .help("Looks like existing work — open to merge or dismiss")
                     }
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: DS.Space.xxs + 2) {
                     ForEach(task.labels.prefix(3), id: \.self) { label in
-                        Text(label)
-                            .font(.system(size: 9.5))
-                            .padding(.horizontal, 5).padding(.vertical, 1.5)
-                            .background(Capsule().fill(Theme.field))
-                            .foregroundStyle(Theme.muted)
+                        dsBadge(label, tint: DS.textSecondary, soft: DS.surface)
                     }
                     if !task.aiRationale.isEmpty {
                         Text(task.aiRationale)
-                            .font(.system(size: 10)).italic()
-                            .foregroundStyle(Theme.faint).lineLimit(1)
+                            .font(DS.Typo.caption).italic()
+                            .foregroundStyle(DS.textTertiary).lineLimit(1)
                     }
                 }
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 3) {
+            VStack(alignment: .trailing, spacing: DS.Space.xxs - 1) {
                 statusBadge
                 Text(Self.addedLabel(task.createdAt))
-                    .font(.system(size: 9))
-                    .foregroundStyle(Theme.faint)
+                    .font(DS.Typo.mono)
+                    .foregroundStyle(DS.textTertiary)
             }
 
             if hovering { hoverActions }
         }
-        .padding(.horizontal, 18).padding(.vertical, 9)
-        .background(hovering ? Color.white.opacity(0.04) : .clear)
+        .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.xs)
+        .background(hovering ? DS.surfaceHover : .clear)
         .contentShape(Rectangle())
-        .onHover {
-            hovering = $0
-            if !$0 { hoverTip = nil }
-        }
-        .overlay(alignment: .top) {
-            if let tip = hoverTip {
-                Text(tip)
-                    .font(.system(size: 10))
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(Capsule().fill(Color(red: 0.16, green: 0.17, blue: 0.2)))
-                    .overlay(Capsule().strokeBorder(Theme.glassBorderHi, lineWidth: 1))
-                    .foregroundStyle(Theme.fg.opacity(0.9))
-                    .offset(y: -13)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            }
-        }
+        .onHover { hovering = $0 }
     }
 
     /// "12m", "3h", "2d" — or the date once it's over a week old.
@@ -514,47 +597,39 @@ private struct TaskCardRow: View {
     }
 
     private var priorityChip: some View {
-        Text(task.aiPriority.rawValue)
-            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(RoundedRectangle(cornerRadius: 4).fill(priorityColor.opacity(0.18)))
-            .foregroundStyle(priorityColor)
+        dsBadge(task.aiPriority.rawValue, tint: priorityColor.tint, soft: priorityColor.soft)
     }
 
-    private var priorityColor: Color {
+    private var priorityColor: (tint: Color, soft: Color) {
         switch task.aiPriority {
-        case .p0: return Theme.danger
-        case .p1: return .orange
-        case .p2: return Theme.accent
-        case .p3: return Theme.muted
+        case .p0: return (DS.danger, DS.dangerSoft)
+        case .p1: return (DS.warning, DS.warningSoft)
+        case .p2: return (DS.textSecondary, DS.surface)
+        case .p3: return (DS.textTertiary, DS.surface)
         }
     }
 
     @ViewBuilder private var statusBadge: some View {
-        let (text, color): (String, Color) = {
+        let (text, tint, soft): (String, Color, Color) = {
             switch task.status {
-            case .executing: return ("Running", Theme.accent)
-            case .planning: return ("Planning", Theme.accent)
-            case .awaitingPlanApproval: return ("Plan review", .orange)
-            case .awaitingReview: return ("Review", .orange)
-            case .failed: return ("Failed", Theme.danger)
-            case .queued: return ("Queued", Theme.muted)
-            case .done: return ("Done", Theme.success)
-            case .inbox: return ("New", Theme.accent)
-            default: return ("", .clear)
+            case .executing: return ("Running", DS.accentText, DS.accentSoft)
+            case .planning: return ("Planning", DS.accentText, DS.accentSoft)
+            case .awaitingPlanApproval: return ("Plan review", DS.warning, DS.warningSoft)
+            case .awaitingReview: return ("Review", DS.warning, DS.warningSoft)
+            case .failed: return ("Failed", DS.danger, DS.dangerSoft)
+            case .queued: return ("Queued", DS.textSecondary, DS.surface)
+            case .done: return ("Done", DS.success, DS.successSoft)
+            case .inbox: return ("New", DS.accentText, DS.accentSoft)
+            default: return ("", .clear, .clear)
             }
         }()
         if !text.isEmpty {
-            Text(text)
-                .font(.system(size: 10, weight: .medium))
-                .padding(.horizontal, 7).padding(.vertical, 2.5)
-                .background(Capsule().fill(color.opacity(0.16)))
-                .foregroundStyle(color)
+            dsBadge(text, tint: tint, soft: soft)
         }
     }
 
     @ViewBuilder private var hoverActions: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DS.Space.xs) {
             if task.status == .inbox {
                 iconButton("checkmark.circle", "Accept onto board") {
                     session.store.acceptFromInbox(task.id)
@@ -572,13 +647,13 @@ private struct TaskCardRow: View {
     }
 
     private func iconButton(_ symbol: String, _ help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+        Hover { hovering in
+            Button(action: action) {
+                Image(systemName: symbol).font(DS.Typo.label)
+                    .foregroundStyle(hovering ? DS.textPrimary : DS.textSecondary)
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         .help(help)
-        .onHover { inside in
-            hoverTip = inside ? help : (hoverTip == help ? nil : hoverTip)
-        }
     }
 }

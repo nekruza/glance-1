@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Task detail (FR24) + the two gates: plan approval (FR44.2) and review
-/// (FR52–53). Shown inside the board panel when a task is selected.
+/// (FR52–53). Shown inside the Tasks window when a task is selected.
 struct TaskDetailView: View {
     @ObservedObject var session: TaskBoardSession
     // Observed so the repo picker rebuilds when repos are added in Settings —
@@ -13,6 +13,8 @@ struct TaskDetailView: View {
     @State private var rejectReason = ""
     @State private var editingDescription = false
     @State private var draftDescription = ""
+    @FocusState private var guidanceFocused: Bool
+    @FocusState private var rejectFocused: Bool
 
     private var run: TaskRun? { session.selectedRun }
 
@@ -20,7 +22,7 @@ struct TaskDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             headerBar
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: DS.Space.md) {
                     titleBlock
                     metaRow
                     if let dupId = task.possibleDuplicateOf {
@@ -39,7 +41,7 @@ struct TaskDetailView: View {
 
                     runHistory
                 }
-                .padding(.horizontal, 18).padding(.vertical, 12)
+                .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.sm)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: .infinity)
@@ -50,42 +52,38 @@ struct TaskDetailView: View {
 
     private var headerBar: some View {
         HStack {
-            Button(action: { session.selectedTaskId = nil }) {
-                Label("Board", systemImage: "chevron.left").font(.system(size: 12))
-            }
-            .buttonStyle(.plain).foregroundStyle(Theme.muted)
+            BackButton(label: "Board") { session.selectedTaskId = nil }
             Spacer()
             if task.isRunnable {
                 Button(action: { session.run(task) }) {
-                    Label("Run with AI", systemImage: "play.fill").font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
+                    Label("Run with AI", systemImage: "play.fill")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DSPrimaryButtonStyle())
                 .disabled(task.taskKind == .code && (task.workspacePath ?? "").isEmpty)
                 .help(task.taskKind == .code && (task.workspacePath ?? "").isEmpty
                       ? "Set a repo first (code task)" : "Plan → approve → execute")
             }
             if task.status == .executing || task.status == .planning {
                 Button(action: { if let r = run { session.runner.cancelRun(runId: r.id) } }) {
-                    Label("Cancel", systemImage: "stop.fill").font(.system(size: 12))
-                        .foregroundStyle(Theme.danger)
+                    Label("Cancel", systemImage: "stop.fill")
+                        .foregroundStyle(DS.danger)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DSSecondaryButtonStyle())
             }
         }
-        .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 10)
-        .overlay(Divider().overlay(Theme.glassBorder), alignment: .bottom)
+        .padding(.horizontal, DS.Space.md).padding(.top, DS.Space.md).padding(.bottom, DS.Space.xs)
+        .overlay(Divider().overlay(DS.divider), alignment: .bottom)
     }
 
     private var titleBlock: some View {
-        HStack(spacing: 8) {
-            Image(systemName: task.source.icon).font(.system(size: 13)).foregroundStyle(Theme.faint)
-            Text(task.title).font(.system(size: 15, weight: .semibold))
+        HStack(spacing: DS.Space.xs) {
+            Image(systemName: task.source.icon).font(DS.Typo.headline).foregroundStyle(DS.textTertiary)
+            Text(task.title).font(DS.Typo.title)
         }
     }
 
     private var metaRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DS.Space.xs) {
             chip(task.aiPriority.rawValue)
             chip(task.status.display)
             kindPicker
@@ -122,9 +120,8 @@ struct TaskDetailView: View {
                 }
             }
         } label: {
-            Text(current == nil ? "🤖 agent" : "\(current!.icon) \(current!.name)")
-                .font(.system(size: 11))
-                .foregroundStyle(current == nil ? Theme.faint : Theme.muted)
+            pickerChip(current == nil ? "🤖 agent" : "\(current!.icon) \(current!.name)",
+                       isSet: current != nil)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -148,9 +145,9 @@ struct TaskDetailView: View {
                 }
             }
         } label: {
-            Label(task.runModel ?? "auto", systemImage: "cpu")
-                .font(.system(size: 11))
-                .foregroundStyle(task.runModel == nil ? Theme.faint : Theme.muted)
+            pickerChip(nil, isSet: task.runModel != nil) {
+                Label(task.runModel ?? "auto", systemImage: "cpu")
+            }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -206,8 +203,9 @@ struct TaskDetailView: View {
             }
         } label: {
             let name = prefs.repos.first { $0.path == task.workspacePath }?.name
-            Label(name ?? "repo…", systemImage: "folder")
-                .font(.system(size: 11)).foregroundStyle(name == nil ? Theme.faint : Theme.muted)
+            pickerChip(nil, isSet: name != nil) {
+                Label(name ?? "repo…", systemImage: "folder")
+            }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -216,31 +214,32 @@ struct TaskDetailView: View {
     /// FR33: never auto-merged — user decides.
     private func duplicateBanner(_ dupId: UUID) -> some View {
         let other = session.store.task(dupId)
-        return gateBox(title: "POSSIBLE DUPLICATE", tint: .orange) {
+        return gateBox(title: "POSSIBLE DUPLICATE", tint: DS.warning, soft: DS.warningSoft) {
             Text("Looks like: “\(other?.title ?? "(deleted task)")”")
-                .font(.system(size: 12))
+                .font(DS.Typo.body)
             HStack {
                 Button("Not a duplicate") {
                     session.store.dismissDuplicateFlag(task.id)
                 }
+                .buttonStyle(DSSecondaryButtonStyle())
                 Spacer()
                 if other != nil {
                     Button("Merge into that task") {
                         session.store.mergeDuplicate(task.id, into: dupId)
                         session.selectedTaskId = dupId
                     }
+                    .buttonStyle(DSSecondaryButtonStyle())
                 }
             }
         }
     }
 
     private var descriptionBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
             HStack {
-                Text("DESCRIPTION").font(.system(size: 10, weight: .semibold)).tracking(0.5)
-                    .foregroundStyle(Theme.faint)
+                overline("Description")
                 if task.aiFilledFields.contains("description") {
-                    Image(systemName: "sparkle").font(.system(size: 8)).foregroundStyle(Theme.accent)
+                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
                         .help("AI-filled — edit freely, your version wins")
                 }
                 Spacer()
@@ -254,19 +253,19 @@ struct TaskDetailView: View {
                     }
                     editingDescription.toggle()
                 }
-                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.accent)
+                .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
             }
             if editingDescription {
                 TextEditor(text: $draftDescription)
-                    .font(.system(size: 12))
+                    .font(DS.Typo.body)
                     .scrollContentBackground(.hidden)
                     .frame(height: 100)
-                    .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+                    .dsField()
             } else if task.descriptionMD.isEmpty {
-                Text("No description").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                Text("No description — Edit to add one")
+                    .font(DS.Typo.body).foregroundStyle(DS.textTertiary)
             } else {
-                MarkdownText(text: task.descriptionMD).font(.system(size: 12))
+                MarkdownText(text: task.descriptionMD, palette: .light).font(DS.Typo.body)
             }
         }
     }
@@ -274,22 +273,23 @@ struct TaskDetailView: View {
     // MARK: - Plan gate (FR44.2)
 
     private var planGate: some View {
-        gateBox(title: "PLAN — YOUR APPROVAL NEEDED", tint: .orange) {
+        gateBox(title: "PLAN — YOUR APPROVAL NEEDED", tint: DS.warning, soft: DS.warningSoft) {
             if let plan = run?.plan {
-                MarkdownText(text: plan).font(.system(size: 12))
+                MarkdownText(text: plan, palette: .light).font(DS.Typo.body)
             }
             TextField("", text: $guidance,
-                      prompt: Text("Optional guidance to append…").foregroundColor(Theme.faint))
+                      prompt: Text("Optional guidance to append…").foregroundColor(DS.textTertiary))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.field))
+                .font(DS.Typo.body)
+                .focused($guidanceFocused)
+                .dsField(focused: guidanceFocused)
             HStack {
                 Button("Reject") {
                     if let r = run { session.runner.rejectPlan(runId: r.id, reason: guidance) }
                     guidance = ""
                 }
-                .foregroundStyle(Theme.danger)
+                .buttonStyle(DSSecondaryButtonStyle())
+                .foregroundStyle(DS.danger)
                 Spacer()
                 Button("Approve & execute") {
                     if let r = run {
@@ -298,6 +298,7 @@ struct TaskDetailView: View {
                     }
                     guidance = ""
                 }
+                .buttonStyle(DSPrimaryButtonStyle())
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -306,16 +307,16 @@ struct TaskDetailView: View {
     // MARK: - Execution stream (FR44.3)
 
     private var executionStream: some View {
-        gateBox(title: "RUNNING", tint: Theme.accent) {
+        gateBox(title: "RUNNING", tint: DS.accentText, soft: DS.accentSoft) {
             workingRow("Agent working in \(run?.branchName ?? "scratch")…")
             if let tail = run?.progressTail, !tail.isEmpty {
                 Text(tail)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(Theme.muted)
+                    .font(DS.Typo.mono)
+                    .foregroundStyle(DS.textSecondary)
                     .lineLimit(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.codeBg))
+                    .padding(DS.Space.xs)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
             }
         }
     }
@@ -323,28 +324,30 @@ struct TaskDetailView: View {
     // MARK: - Review gate (FR52–53)
 
     private var reviewGate: some View {
-        gateBox(title: "REVIEW — RESULT READY", tint: .orange) {
+        gateBox(title: "REVIEW — RESULT READY", tint: DS.warning, soft: DS.warningSoft) {
             if let run {
                 ForEach(run.artifacts) { artifact in
                     artifactRow(artifact, run: run)
                 }
             }
             TextField("", text: $rejectReason,
-                      prompt: Text("Rejection reason / retry guidance…").foregroundColor(Theme.faint))
+                      prompt: Text("Rejection reason / retry guidance…").foregroundColor(DS.textTertiary))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.field))
+                .font(DS.Typo.body)
+                .focused($rejectFocused)
+                .dsField(focused: rejectFocused)
             HStack {
                 Button("Reject") {
                     if let r = run { session.runner.rejectReview(runId: r.id, reason: rejectReason) }
                     rejectReason = ""
                 }
-                .foregroundStyle(Theme.danger)
+                .buttonStyle(DSSecondaryButtonStyle())
+                .foregroundStyle(DS.danger)
                 Spacer()
                 Button("Approve") {
                     if let r = run { session.runner.approveReview(runId: r.id, releaseBoundary: false) }
                 }
+                .buttonStyle(DSPrimaryButtonStyle())
                 .help("Accept the work. Boundary actions (push/PR) stay individually gated below.")
                 .keyboardShortcut(.defaultAction)
             }
@@ -352,33 +355,42 @@ struct TaskDetailView: View {
     }
 
     private func artifactRow(_ artifact: RunArtifact, run: TaskRun) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: DS.Space.xs) {
             Image(systemName: artifactIcon(artifact.kind))
-                .font(.system(size: 11)).foregroundStyle(artifact.boundary ? .orange : Theme.muted)
+                .font(DS.Typo.caption)
+                .foregroundStyle(artifact.boundary ? DS.warning : DS.textSecondary)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 2) {
-                Text(artifact.summary).font(.system(size: 11.5))
+                Text(artifact.summary).font(DS.Typo.body)
                 if artifact.kind == .draftText {
                     Text(artifact.payloadRef)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.muted)
+                        .font(DS.Typo.caption)
+                        .foregroundStyle(DS.textSecondary)
                         .lineLimit(8)
                         .textSelection(.enabled)
                 }
                 if artifact.kind == .prURL {
-                    Link(artifact.payloadRef, destination: URL(string: artifact.payloadRef) ?? URL(fileURLWithPath: "/"))
-                        .font(.system(size: 11))
+                    if let url = URL(string: artifact.payloadRef) {
+                        Link(artifact.payloadRef, destination: url)
+                            .font(DS.Typo.caption)
+                            .foregroundStyle(DS.accentText)
+                    } else {
+                        Text(artifact.payloadRef)
+                            .font(DS.Typo.mono)
+                            .textSelection(.enabled)
+                    }
                 }
             }
             Spacer()
             if artifact.boundary {
                 if artifact.released {
-                    Label("Done", systemImage: "checkmark").font(.system(size: 10.5)).foregroundStyle(Theme.success)
+                    Label("Done", systemImage: "checkmark").font(DS.Typo.caption).foregroundStyle(DS.success)
                 } else {
                     Button("Approve & push") {
                         session.runner.releaseBoundaryAction(runId: run.id, artifactId: artifact.id)
                     }
-                    .font(.system(size: 11))
+                    .buttonStyle(DSSecondaryButtonStyle())
+                    .foregroundStyle(DS.warning)
                     .help("Boundary action — nothing leaves this machine until you click")
                 }
             }
@@ -386,10 +398,10 @@ struct TaskDetailView: View {
                 Button("Open") {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: artifact.payloadRef)
                 }
-                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.accent)
+                .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, DS.Space.xxs - 1)
     }
 
     private func artifactIcon(_ kind: ArtifactKind) -> String {
@@ -407,12 +419,13 @@ struct TaskDetailView: View {
     // MARK: - Failure (FR51)
 
     private var failureBlock: some View {
-        gateBox(title: "FAILED", tint: Theme.danger) {
+        gateBox(title: "FAILED", tint: DS.danger, soft: DS.dangerSoft) {
             Text(run?.failureReason ?? "Unknown failure")
-                .font(.system(size: 12)).foregroundStyle(Theme.danger)
+                .font(DS.Typo.body).foregroundStyle(DS.danger)
             HStack {
                 Spacer()
                 Button("Retry") { session.run(task) }
+                    .buttonStyle(DSPrimaryButtonStyle())
             }
         }
     }
@@ -422,22 +435,26 @@ struct TaskDetailView: View {
     @ViewBuilder private var runHistory: some View {
         let runs = session.store.runs(for: task.id)
         if !runs.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("RUNS").font(.system(size: 10, weight: .semibold)).tracking(0.5)
-                    .foregroundStyle(Theme.faint)
+            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
+                overline("Runs")
                 ForEach(runs) { r in
-                    HStack(spacing: 8) {
-                        Text(r.startedAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.system(size: 10.5)).foregroundStyle(Theme.muted)
-                        Text(r.state.rawValue).font(.system(size: 10.5, design: .monospaced))
-                            .foregroundStyle(r.state == .succeeded ? Theme.success : Theme.muted)
-                        Spacer()
-                        if let path = r.transcriptPath {
-                            Button("transcript") {
-                                NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+                    Hover { hovering in
+                        HStack(spacing: DS.Space.xs) {
+                            Text(r.startedAt.formatted(date: .abbreviated, time: .shortened))
+                                .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+                            Text(r.state.rawValue).font(DS.Typo.mono)
+                                .foregroundStyle(r.state == .succeeded ? DS.success : DS.textSecondary)
+                            Spacer()
+                            if let path = r.transcriptPath {
+                                Button("transcript") {
+                                    NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+                                }
+                                .buttonStyle(.plain).font(DS.Typo.caption).foregroundStyle(DS.accentText)
                             }
-                            .buttonStyle(.plain).font(.system(size: 10.5)).foregroundStyle(Theme.accent)
                         }
+                        .padding(.horizontal, DS.Space.xxs).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                            .fill(hovering ? DS.surfaceHover : .clear))
                     }
                 }
             }
@@ -446,30 +463,59 @@ struct TaskDetailView: View {
 
     // MARK: - Bits
 
-    private func gateBox<Content: View>(title: String, tint: Color,
+    private func overline(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(DS.Typo.overline).tracking(0.8)
+            .foregroundStyle(DS.textTertiary)
+    }
+
+    private func gateBox<Content: View>(title: String, tint: Color, soft: Color,
                                         @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.system(size: 10, weight: .bold)).tracking(0.6).foregroundStyle(tint)
+        VStack(alignment: .leading, spacing: DS.Space.xs + 2) {
+            Text(title).font(DS.Typo.overline).tracking(0.8).foregroundStyle(tint)
             content()
         }
-        .padding(12)
+        .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(tint.opacity(0.07)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(0.35), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: DS.Radius.medium).fill(soft))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.medium)
+            .strokeBorder(tint.opacity(0.35), lineWidth: 1))
     }
 
     private func chip(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 10))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(Theme.field))
-            .foregroundStyle(Theme.muted)
+            .font(DS.Typo.caption)
+            .padding(.horizontal, DS.Space.xxs + 2).padding(.vertical, 2)
+            .background(Capsule().fill(DS.surface))
+            .foregroundStyle(DS.textSecondary)
+    }
+
+    /// Picker chip: like `chip` but signals unset state (lighter text +
+    /// dashed border) so it reads as actionable, and shows hover feedback.
+    private func pickerChip(_ text: String?, isSet: Bool) -> some View {
+        pickerChip(text, isSet: isSet) { Text(text ?? "") }
+    }
+
+    private func pickerChip<L: View>(_ text: String?, isSet: Bool,
+                                     @ViewBuilder label: () -> L) -> some View {
+        let content = label()
+        return Hover { hovering in
+            content
+                .font(DS.Typo.caption)
+                .foregroundStyle(isSet ? DS.textSecondary : DS.textTertiary)
+                .padding(.horizontal, DS.Space.xxs + 2).padding(.vertical, 2)
+                .background(Capsule().fill(hovering ? DS.surfaceHover : DS.surface))
+                .overlay(
+                    Capsule().strokeBorder(DS.border,
+                                           style: StrokeStyle(lineWidth: 1, dash: isSet ? [] : [3, 2]))
+                )
+        }
     }
 
     private func workingRow(_ label: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DS.Space.xs) {
             ProgressView().controlSize(.small)
-            Text(label).font(.system(size: 12)).foregroundStyle(Theme.muted)
+            Text(label).font(DS.Typo.body).foregroundStyle(DS.textSecondary)
         }
     }
 }

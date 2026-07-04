@@ -1,5 +1,29 @@
 import SwiftUI
 
+/// Colors for MarkdownText rendering. `.dark` matches the overlay's original
+/// values exactly; `.light` maps to the DS tokens for the task surfaces.
+struct MarkdownPalette {
+    let bullet: Color
+    let heading: Color
+    let codeFg: Color
+    let codeBg: Color
+    let codeBorder: Color
+
+    static let dark = MarkdownPalette(
+        bullet: Theme.accent,
+        heading: Theme.muted,
+        codeFg: Color(red: 0xdf/255, green: 0xe4/255, blue: 0xf0/255),
+        codeBg: Theme.codeBg,
+        codeBorder: Theme.glassBorder)
+
+    static let light = MarkdownPalette(
+        bullet: DS.accentText,
+        heading: DS.textSecondary,
+        codeFg: DS.textPrimary,
+        codeBg: DS.codeBg,
+        codeBorder: DS.border)
+}
+
 /// FR11 subset Markdown renderer for streamed answers. Required: fenced code
 /// blocks (monospaced, no syntax highlighting), lists, headings, inline
 /// emphasis / `code`. Anything else degrades to plain text — acceptable per FR11.
@@ -8,11 +32,14 @@ import SwiftUI
 /// as code-in-progress rather than breaking.
 struct MarkdownText: View {
     let text: String
+    /// Rendering palette — defaults to the overlay's dark glass; the light
+    /// task surfaces pass `.light`.
+    var palette: MarkdownPalette = .dark
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(Self.parse(text).enumerated()), id: \.offset) { _, block in
-                block.view
+                block.view(palette)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -27,7 +54,7 @@ struct MarkdownText: View {
         case code(String)
         case paragraph(String)
 
-        @ViewBuilder var view: some View {
+        @ViewBuilder func view(_ palette: MarkdownPalette) -> some View {
             switch self {
             case .heading(let level, let t):
                 if level >= 2 {
@@ -35,7 +62,7 @@ struct MarkdownText: View {
                     Text(t.uppercased())
                         .font(.system(size: 11, weight: .semibold))
                         .tracking(0.4)
-                        .foregroundStyle(Theme.muted)
+                        .foregroundStyle(palette.heading)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 6)
                 } else {
@@ -45,23 +72,23 @@ struct MarkdownText: View {
                 }
             case .bullet(let t):
                 HStack(alignment: .top, spacing: 8) {
-                    Text("•").foregroundStyle(Theme.accent)
+                    Text("•").foregroundStyle(palette.bullet)
                     Text(inline(t)).fixedSize(horizontal: false, vertical: true)
                 }
             case .ordered(let n, let t):
                 HStack(alignment: .top, spacing: 8) {
-                    Text("\(n).").foregroundStyle(Theme.accent).monospacedDigit()
+                    Text("\(n).").foregroundStyle(palette.bullet).monospacedDigit()
                     Text(inline(t)).fixedSize(horizontal: false, vertical: true)
                 }
             case .code(let code):
                 Text(code)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Color(red: 0xdf/255, green: 0xe4/255, blue: 0xf0/255))
+                    .foregroundStyle(palette.codeFg)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Theme.codeBg))
-                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.glassBorder, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.codeBg))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.codeBorder, lineWidth: 1))
             case .paragraph(let t):
                 Text(inline(t))
                     .lineSpacing(3)

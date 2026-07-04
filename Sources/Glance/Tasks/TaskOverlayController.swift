@@ -62,8 +62,9 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
         w.title = "Glance Tasks"
         w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         w.contentMinSize = NSSize(width: 760, height: 560)
-        w.appearance = NSAppearance(named: .darkAqua)
-        w.backgroundColor = NSColor(red: 22/255, green: 24/255, blue: 29/255, alpha: 1)
+        w.appearance = NSAppearance(named: .aqua)
+        w.backgroundColor = .white
+        w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false
         w.delegate = self
         w.setContentSize(NSSize(width: 1000, height: 700))
