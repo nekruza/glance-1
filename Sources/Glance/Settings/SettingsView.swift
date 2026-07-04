@@ -78,6 +78,19 @@ struct SettingsView: View {
                     settingLabel("Auto-approve small plans",
                                  "Skip the plan gate for non-code tasks ≤1h with no external actions. Code tasks are always gated.")
                 }
+                LabeledContent {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        TextField("MCP URL", text: $prefs.composioURL)
+                            .textFieldStyle(.roundedBorder).frame(width: 220)
+                            .font(.system(size: 11))
+                        SecureField("API key (ck_…)", text: $prefs.composioKey)
+                            .textFieldStyle(.roundedBorder).frame(width: 220)
+                            .font(.system(size: 11))
+                    }
+                } label: {
+                    settingLabel("Composio (read-only pulls)",
+                                 "Jira / Slack / Granola → Inbox. Fetch only — Glance never writes to them.")
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     settingLabel("Repos", "Where AI agents run code tasks (isolated worktrees)")
                     ForEach(prefs.repos) { repo in

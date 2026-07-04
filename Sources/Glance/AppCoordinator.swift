@@ -82,7 +82,8 @@ final class AppCoordinator {
         let ai = TaskAI(binaryPath: path)
         taskAI = ai
         let runner = TaskRunner(store: taskStore, binaryPath: path)
-        let overlayCtl = TaskOverlayController(store: taskStore, runner: runner, ai: ai)
+        let ingest = ComposioIngest(binaryPath: path)
+        let overlayCtl = TaskOverlayController(store: taskStore, runner: runner, ai: ai, ingest: ingest)
         overlayCtl.onOpenSettings = { [weak self] in self?.onOpenSettings?() }
         runner.onEvent = { [weak self] message, taskId in
             self?.taskNotifications.post(message: message, taskId: taskId)

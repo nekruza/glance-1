@@ -58,6 +58,27 @@ struct TaskBoardView: View {
 
             Spacer()
 
+            // Manual Composio pulls (read-only → Inbox).
+            if let src = session.pullingSource {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.mini)
+                    Text("Pulling \(src.rawValue)…").font(.system(size: 10.5)).foregroundStyle(Theme.muted)
+                }
+            } else {
+                Menu {
+                    ForEach(ComposioIngest.Source.allCases, id: \.self) { src in
+                        Button("Pull from \(src.rawValue)") { session.pull(src) }
+                    }
+                } label: {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Fetch new work into the Inbox (read-only)")
+            }
+
             if session.tab == .board {
                 Menu {
                     ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
@@ -336,6 +357,12 @@ struct TaskBoardView: View {
                 .frame(width: 6, height: 6)
             Text(running > 0 ? "\(running) run\(running == 1 ? "" : "s") active" : "Idle")
                 .font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+            if let status = session.pullStatus {
+                Text("·  \(status)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+            }
             Spacer()
             Button(action: { session.settingsHandler?() }) {
                 Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.muted)

@@ -35,9 +35,14 @@ final class TaskBoardSession: ObservableObject {
     @Published var decomposePreview: [TaskAI.DecomposedTask] = []
     @Published var decomposeKeep: Set<Int> = []
 
+    /// Composio pull state (header button + status line).
+    @Published var pullingSource: ComposioIngest.Source?
+    @Published var pullStatus: String?
+
     let store: TaskStore
     let runner: TaskRunner
     private let ai: TaskAI
+    private let ingest: ComposioIngest
 
     var dismissHandler: (() -> Void)?
     var settingsHandler: (() -> Void)?
@@ -46,10 +51,42 @@ final class TaskBoardSession: ObservableObject {
     /// FR42: at most one automatic reflow per 10 minutes.
     private let reflowInterval: TimeInterval = 10 * 60
 
-    init(store: TaskStore, runner: TaskRunner, ai: TaskAI) {
+    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest) {
         self.store = store
         self.runner = runner
         self.ai = ai
+        self.ingest = ingest
+    }
+
+    // MARK: - Composio pulls (manual, read-only)
+
+    func pull(_ source: ComposioIngest.Source) {
+        guard pullingSource == nil else { return }
+        guard !Preferences.shared.composioKey.isEmpty else {
+            pullStatus = "Set your Composio API key in Settings first."
+            return
+        }
+        pullingSource = source
+        pullStatus = nil
+        ingest.pull(source, store: store) { [weak self] result in
+            guard let self else { return }
+            self.pullingSource = nil
+            if let error = result.error {
+                self.pullStatus = "\(source.rawValue): \(error)"
+            } else if result.created == 0 {
+                self.pullStatus = "\(source.rawValue): nothing new"
+                    + (result.skippedDuplicates > 0 ? " (\(result.skippedDuplicates) already on board)" : "")
+            } else {
+                self.pullStatus = "\(source.rawValue): \(result.created) new in Inbox"
+                    + (result.skippedDuplicates > 0 ? ", \(result.skippedDuplicates) known" : "")
+                self.tab = .inbox
+                self.schedulePrioritize(force: true)
+            }
+            // Status fades after a while.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+                self?.pullStatus = nil
+            }
+        }
     }
 
     // MARK: - Lists

@@ -14,9 +14,9 @@ final class TaskOverlayController {
     var isVisible: Bool { panel.isVisible }
     var onOpenSettings: (() -> Void)?
 
-    init(store: TaskStore, runner: TaskRunner, ai: TaskAI) {
+    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest) {
         self.store = store
-        session = TaskBoardSession(store: store, runner: runner, ai: ai)
+        session = TaskBoardSession(store: store, runner: runner, ai: ai, ingest: ingest)
         session.dismissHandler = { [weak self] in self?.dismiss() }
         session.settingsHandler = { [weak self] in
             self?.dismiss()

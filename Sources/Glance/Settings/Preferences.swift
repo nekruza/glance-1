@@ -16,6 +16,8 @@ final class Preferences: ObservableObject {
         static let taskHotkeyModifiers = "taskHotkey.modifiers"
         static let repos = "tasks.repos"
         static let autoPlanApprove = "tasks.autoPlanApprove"
+        static let composioURL = "composio.url"
+        static let composioKey = "composio.key"
     }
 
     /// Default dark-tint opacity of the overlay background.
@@ -54,6 +56,16 @@ final class Preferences: ObservableObject {
     /// actions. Code tasks are always gated regardless.
     @Published var autoPlanApprove: Bool {
         didSet { defaults.set(autoPlanApprove, forKey: Keys.autoPlanApprove) }
+    }
+
+    /// Composio MCP endpoint + API key (read-only ingestion for Jira/Slack/
+    /// Granola). Stored in defaults — single-user personal tool; NFR11's
+    /// "no external credentials" posture is knowingly relaxed here.
+    @Published var composioURL: String {
+        didSet { defaults.set(composioURL, forKey: Keys.composioURL) }
+    }
+    @Published var composioKey: String {
+        didSet { defaults.set(composioKey, forKey: Keys.composioKey) }
     }
 
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
@@ -102,6 +114,8 @@ final class Preferences: ObservableObject {
         }
         autoPlanApprove = defaults.object(forKey: Keys.autoPlanApprove) == nil
             ? true : defaults.bool(forKey: Keys.autoPlanApprove)
+        composioURL = defaults.string(forKey: Keys.composioURL) ?? "https://connect.composio.dev/mcp"
+        composioKey = defaults.string(forKey: Keys.composioKey) ?? ""
     }
 }
 
