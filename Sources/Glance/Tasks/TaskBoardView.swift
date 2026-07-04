@@ -394,6 +394,8 @@ private struct TaskCardRow: View {
     @ObservedObject var session: TaskBoardSession
     let task: TaskItem
     @State private var hovering = false
+    /// Custom tooltip: .help() never fires on a nonactivating panel.
+    @State private var hoverTip: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -451,7 +453,24 @@ private struct TaskCardRow: View {
         .padding(.horizontal, 18).padding(.vertical, 9)
         .background(hovering ? Color.white.opacity(0.04) : .clear)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover {
+            hovering = $0
+            if !$0 { hoverTip = nil }
+        }
+        .overlay(alignment: .topTrailing) {
+            if let tip = hoverTip {
+                Text(tip)
+                    .font(.system(size: 10))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(Color(red: 0.16, green: 0.17, blue: 0.2)))
+                    .overlay(Capsule().strokeBorder(Theme.glassBorderHi, lineWidth: 1))
+                    .foregroundStyle(Theme.fg.opacity(0.9))
+                    .offset(y: -14)
+                    .padding(.trailing, 18)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
     }
 
     /// "12m", "3h", "2d" — or the date once it's over a week old.
@@ -529,5 +548,8 @@ private struct TaskCardRow: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .onHover { inside in
+            hoverTip = inside ? help : (hoverTip == help ? nil : hoverTip)
+        }
     }
 }
