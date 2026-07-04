@@ -7,20 +7,25 @@ import Foundation
 /// answer, creates tasks, and replaces the blocks with a confirmation line.
 enum TaskCapture {
 
-    /// Appended to the ask-overlay session's system prompt.
-    static let systemPrompt = """
-    You have one extra capability inside the Glance app: creating tasks on the \
-    user's local task board. When (and ONLY when) the user explicitly asks to \
-    add/create/save a task or todo — e.g. "add a task to fix this", "put this \
-    on my todo list", possibly referring to the attached screenshot — emit one \
-    fenced code block per task, language tag exactly `glance-task`, containing \
-    a single JSON object: {"title": "<imperative, <=120 chars>", \
-    "description": "<markdown context; if a screenshot was attached, describe \
-    the relevant on-screen context here so the task is self-contained>", \
-    "labels": ["<1-4 short lowercase tags>"], "taskKind": "code|writing|research|other", \
-    "estimate": "minutes|hour|halfday|day+"}. Keep any surrounding prose brief. \
-    Do not emit glance-task blocks for anything the user didn't ask to track.
-    """
+    /// Appended to the ask-overlay session's system prompt. Computed so the
+    /// agent roster reflects current profiles at backend spawn.
+    static var systemPrompt: String {
+        """
+        You have one extra capability inside the Glance app: creating tasks on the \
+        user's local task board. When (and ONLY when) the user explicitly asks to \
+        add/create/save a task or todo — e.g. "add a task to fix this", "put this \
+        on my todo list", possibly referring to the attached screenshot — emit one \
+        fenced code block per task, language tag exactly `glance-task`, containing \
+        a single JSON object: {"title": "<imperative, <=120 chars>", \
+        "description": "<markdown context; if a screenshot was attached, describe \
+        the relevant on-screen context here so the task is self-contained>", \
+        "labels": ["<1-4 short lowercase tags>"], "taskKind": "code|writing|research|other", \
+        "estimate": "minutes|hour|halfday|day+", "agent": "<best-fit agent NAME \
+        from this roster, or null: \(TaskAI.agentRoster().replacingOccurrences(of: "\n", with: "; "))>"}. \
+        Keep any surrounding prose brief. \
+        Do not emit glance-task blocks for anything the user didn't ask to track.
+        """
+    }
 
     struct CapturedTask: Decodable {
         var title: String
@@ -28,6 +33,7 @@ enum TaskCapture {
         var labels: [String]?
         var taskKind: String?
         var estimate: String?
+        var agent: String?
     }
 
     /// Extract glance-task blocks from a finished answer. Returns the cleaned
@@ -78,7 +84,8 @@ enum TaskCapture {
         t.labels = captured.labels ?? []
         t.taskKind = TaskKind(rawValue: captured.taskKind ?? "") ?? .other
         t.estimate = TaskEstimate(rawValue: captured.estimate ?? "")
-        t.aiFilledFields = ["description", "labels", "taskKind", "estimate"]
+        t.agentId = AgentProfile.idFor(name: captured.agent)
+        t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
         return t
     }
 }

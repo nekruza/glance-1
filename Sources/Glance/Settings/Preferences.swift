@@ -15,6 +15,7 @@ final class Preferences: ObservableObject {
         static let taskHotkeyKeyCode = "taskHotkey.keyCode"
         static let taskHotkeyModifiers = "taskHotkey.modifiers"
         static let repos = "tasks.repos"
+        static let agents = "tasks.agents"
         static let autoPlanApprove = "tasks.autoPlanApprove"
         static let composioURL = "composio.url"
         static let composioKey = "composio.key"
@@ -61,6 +62,20 @@ final class Preferences: ObservableObject {
                 defaults.set(data, forKey: Keys.repos)
             }
         }
+    }
+
+    /// Agent roster (built-ins seeded on first launch + user customs).
+    @Published var agents: [AgentProfile] {
+        didSet {
+            if let data = try? JSONEncoder().encode(agents) {
+                defaults.set(data, forKey: Keys.agents)
+            }
+        }
+    }
+
+    func agent(_ id: UUID?) -> AgentProfile? {
+        guard let id else { return nil }
+        return agents.first { $0.id == id }
     }
 
     /// §6 A7: auto-approve plans for small non-code tasks with no boundary
@@ -145,6 +160,17 @@ final class Preferences: ObservableObject {
         }
         autoPlanApprove = defaults.object(forKey: Keys.autoPlanApprove) == nil
             ? true : defaults.bool(forKey: Keys.autoPlanApprove)
+        if let data = defaults.data(forKey: Keys.agents),
+           let decoded = try? JSONDecoder().decode([AgentProfile].self, from: data),
+           !decoded.isEmpty {
+            agents = decoded
+        } else {
+            agents = AgentProfile.builtIns
+            // didSet doesn't fire during init — persist the seed explicitly.
+            if let data = try? JSONEncoder().encode(AgentProfile.builtIns) {
+                defaults.set(data, forKey: Keys.agents)
+            }
+        }
         composioURL = defaults.string(forKey: Keys.composioURL) ?? "https://connect.composio.dev/mcp"
         composioKey = defaults.string(forKey: Keys.composioKey) ?? ""
         schedEnabled = defaults.bool(forKey: Keys.schedEnabled)

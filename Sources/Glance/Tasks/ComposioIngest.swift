@@ -33,6 +33,7 @@ final class ComposioIngest {
         var estimate: String?
         var sourceKey: String?
         var sourceURL: String?
+        var agent: String?
     }
 
     struct Result {
@@ -75,7 +76,8 @@ final class ComposioIngest {
                 if let key = f.sourceKey {
                     t.sourceRef = SourceRef(key: key, url: f.sourceURL)
                 }
-                t.aiFilledFields = ["description", "labels", "taskKind", "estimate"]
+                t.agentId = AgentProfile.idFor(name: f.agent)
+                t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
                 _ = store.add(t)
                 created += 1
             }
@@ -262,16 +264,19 @@ final class ComposioIngest {
     needed action would write, skip it. You are fetching data only.
     """
 
-    private static let outputRules = """
-    Output ONLY a JSON array (no prose, no fences) of task objects: \
-    {"title": "<imperative, <=120 chars>", "description": "<markdown context, \
-    include source details/links>", "labels": [1-4 short lowercase tags], \
-    "taskKind": "code|writing|research|other", "estimate": \
-    "minutes|hour|halfday|day+", "sourceKey": "<stable unique id, see below>", \
-    "sourceURL": "<deep link if available, else null>"}. \
-    Empty array [] if nothing found. If the app is NOT connected in Composio, \
-    output the single line: NOT_CONNECTED.
-    """
+    private static var outputRules: String {
+        """
+        Output ONLY a JSON array (no prose, no fences) of task objects: \
+        {"title": "<imperative, <=120 chars>", "description": "<markdown context, \
+        include source details/links>", "labels": [1-4 short lowercase tags], \
+        "taskKind": "code|writing|research|other", "estimate": \
+        "minutes|hour|halfday|day+", "sourceKey": "<stable unique id, see below>", \
+        "sourceURL": "<deep link if available, else null>", "agent": "<best-fit \
+        agent NAME from this roster, or null: \(TaskAI.agentRoster().replacingOccurrences(of: "\n", with: "; "))>"}. \
+        Empty array [] if nothing found. If the app is NOT connected in Composio, \
+        output the single line: NOT_CONNECTED.
+        """
+    }
 
     private static func prompt(for source: Source) -> String {
         switch source {

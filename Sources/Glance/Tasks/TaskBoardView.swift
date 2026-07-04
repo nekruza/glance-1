@@ -449,6 +449,16 @@ private struct TaskCardRow: View {
 
             priorityChip
 
+            if let agent = Preferences.shared.agent(task.agentId) {
+                Image(systemName: agent.icon)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.accent.opacity(0.8))
+                    .frame(width: 13)
+                    .onHover { inside in
+                        hoverTip = inside ? agent.name : (hoverTip == agent.name ? nil : hoverTip)
+                    }
+            }
+
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if task.isPinned {

@@ -97,15 +97,45 @@ struct TaskDetailView: View {
             if task.taskKind == .code {
                 repoPicker
             }
+            agentPicker
             modelPicker
         }
+    }
+
+    /// Skill profile executing this task (AI-routed; user override wins).
+    private var agentPicker: some View {
+        let current = prefs.agent(task.agentId)
+        return Menu {
+            Button("None (generic)") {
+                var t = task
+                t.agentId = nil
+                session.store.update(t)
+            }
+            Divider()
+            ForEach(prefs.agents) { agent in
+                Button {
+                    var t = task
+                    t.agentId = agent.id
+                    session.store.update(t)
+                } label: {
+                    Label("\(agent.name) — \(agent.skills)", systemImage: agent.icon)
+                }
+            }
+        } label: {
+            Label(current?.name ?? "agent", systemImage: current?.icon ?? "person")
+                .font(.system(size: 11))
+                .foregroundStyle(current == nil ? Theme.faint : Theme.muted)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Which skill profile runs this task")
     }
 
     /// OQ-V2-3: per-task model for agent runs. Default = CLI's own default.
     /// Labels carry the resolved model names once the catalog has probed.
     private var modelPicker: some View {
         Menu {
-            Button(menuLabel("default") + " (CLI setting)") {
+            Button("auto — agent's choice, else opus") {
                 var t = task
                 t.runModel = nil
                 session.store.update(t)
@@ -118,7 +148,7 @@ struct TaskDetailView: View {
                 }
             }
         } label: {
-            Label(task.runModel ?? "model", systemImage: "cpu")
+            Label(task.runModel ?? "auto", systemImage: "cpu")
                 .font(.system(size: 11))
                 .foregroundStyle(task.runModel == nil ? Theme.faint : Theme.muted)
         }

@@ -73,7 +73,10 @@ final class TaskRunner: ObservableObject {
         \(task.sourceSnapshot.isEmpty ? "" : "Source context:\n\(task.sourceSnapshot)")
         """
 
-        runOneShot(prompt: prompt, cwd: task.workspacePath, model: task.runModel) { [weak self] output in
+        let profile = Preferences.shared.agent(task.agentId)
+        runOneShot(prompt: prompt, cwd: task.workspacePath,
+                   model: Self.resolveModel(task: task, profile: profile),
+                   systemPrompt: profile?.systemPrompt) { [weak self] output in
             guard let self, var run = self.store.run(run.id) else { return }
             guard var task = self.store.task(taskId) else { return }
             if let plan = output, !plan.isEmpty {
@@ -98,6 +101,11 @@ final class TaskRunner: ObservableObject {
                 self.finishRun(run.id, state: .failed, reason: "Couldn't generate a plan (Claude CLI error).")
             }
         }
+    }
+
+    /// Model precedence: explicit task override → agent preference → opus.
+    static func resolveModel(task: TaskItem, profile: AgentProfile?) -> String? {
+        task.runModel ?? profile?.preferredModel ?? "opus"
     }
 
     /// A7 policy: ALL of — policy enabled; kind research/writing/other;
@@ -194,12 +202,24 @@ final class TaskRunner: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: binaryPath)
         // Prompt goes via STDIN: --allowedTools/--disallowedTools are variadic
         // and would swallow a trailing positional prompt argument.
-        var args = [
-            "-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose",
-            "--allowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch",
-            "--disallowedTools", "Bash(git push:*)", "Bash(gh pr:*)", "Bash(gh api:*)"
-        ]
-        if let model = task.runModel { args += ["--model", model] }
+        let profile = Preferences.shared.agent(task.agentId)
+        // Profiles can NARROW the toolset; boundary denies below apply always.
+        let tools = profile?.allowedTools
+            ?? ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"]
+        var args = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose",
+                    "--allowedTools"] + tools
+        // --allowedTools only ADDS grants — the user's global settings may
+        // already allow e.g. Bash. Deny wins, so explicitly disallow every
+        // vocabulary tool the profile leaves out, plus the boundary rules.
+        let denied = AgentProfile.toolVocabulary.filter { !tools.contains($0) }
+        args += ["--disallowedTools"] + denied
+        args += ["Bash(git push:*)", "Bash(gh pr:*)", "Bash(gh api:*)"]
+        if let persona = profile?.systemPrompt, !persona.isEmpty {
+            args += ["--append-system-prompt", persona]
+        }
+        if let model = Self.resolveModel(task: task, profile: profile) {
+            args += ["--model", model]
+        }
         proc.arguments = args
         proc.currentDirectoryURL = workspace
 
@@ -489,12 +509,16 @@ final class TaskRunner: ObservableObject {
     // MARK: - One-shot helper (plan phase)
 
     private func runOneShot(prompt: String, cwd: String?, model: String? = nil,
+                            systemPrompt: String? = nil,
                             completion: @escaping (String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async { [binaryPath] in
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: binaryPath)
             var args = ["-p"]
             if let model { args += ["--model", model] }
+            if let systemPrompt, !systemPrompt.isEmpty {
+                args += ["--append-system-prompt", systemPrompt]
+            }
             args.append(prompt)
             proc.arguments = args
             if let cwd, !cwd.isEmpty {

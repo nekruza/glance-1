@@ -22,6 +22,14 @@ final class TaskAI {
         var taskKind: String?
         var estimate: String?
         var repoName: String?
+        var agent: String?
+    }
+
+    /// "name — skills" roster lines for routing prompts.
+    static func agentRoster() -> String {
+        Preferences.shared.agents
+            .map { "\($0.name) — \($0.skills)" }
+            .joined(separator: "\n")
     }
 
     func enrich(title: String, description: String, repoNames: [String],
@@ -33,7 +41,11 @@ final class TaskAI {
         bullets ONLY if clearly inferable), "labels" (array, 1-4 short lowercase \
         tags), "taskKind" (one of: code, writing, research, other), "estimate" \
         (one of: minutes, hour, halfday, day+), "repoName" (one of \(repoNames) \
-        if the task clearly belongs to that repo, else null).
+        if the task clearly belongs to that repo, else null), "agent" (the \
+        best-fit agent NAME from the roster below, or null if none clearly fits).
+
+        Agent roster:
+        \(Self.agentRoster())
 
         Task title: \(title)
         Task description: \(description.isEmpty ? "(none)" : description)
@@ -85,6 +97,7 @@ final class TaskAI {
         var labels: [String]?
         var taskKind: String?
         var estimate: String?
+        var agent: String?
     }
 
     func decompose(prompt userText: String, completion: @escaping ([DecomposedTask]?) -> Void) {
@@ -93,8 +106,12 @@ final class TaskAI {
         Output JSON only (no prose, no fences): array of 1-10 objects \
         {"title": "<imperative, <=120 chars>", "description": "<markdown context \
         from the source text>", "labels": [..], "taskKind": "code|writing|research|other", \
-        "estimate": "minutes|hour|halfday|day+"}. Split independent work items; \
+        "estimate": "minutes|hour|halfday|day+", "agent": "<best-fit agent NAME \
+        from the roster below, or null>"}. Split independent work items; \
         don't invent work not implied by the text.
+
+        Agent roster:
+        \(Self.agentRoster())
 
         Text:
         \(userText)
@@ -113,8 +130,12 @@ final class TaskAI {
         fences): array of 0-8 objects {"title": "<imperative, <=120 chars>", \
         "description": "<context from the meeting incl. any deadline>", \
         "labels": [..], "taskKind": "code|writing|research|other", \
-        "estimate": "minutes|hour|halfday|day+"}. Do NOT invent tasks; empty \
+        "estimate": "minutes|hour|halfday|day+", "agent": "<best-fit agent NAME \
+        from the roster below, or null>"}. Do NOT invent tasks; empty \
         array if none are mine.
+
+        Agent roster:
+        \(Self.agentRoster())
 
         Notes:
         \(String(meetingText.prefix(30_000)))

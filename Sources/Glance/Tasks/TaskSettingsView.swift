@@ -9,6 +9,7 @@ struct TaskSettingsView: View {
         case general = "General"
         case appearance = "Appearance"
         case ai = "AI & Runs"
+        case agents = "Agents"
         case repos = "Repos"
         case connections = "Connections"
         case schedule = "Schedule"
@@ -19,6 +20,7 @@ struct TaskSettingsView: View {
             case .general: return "slider.horizontal.3"
             case .appearance: return "sun.max"
             case .ai: return "cpu"
+            case .agents: return "person.2"
             case .repos: return "folder"
             case .connections: return "link"
             case .schedule: return "clock.arrow.2.circlepath"
@@ -110,6 +112,7 @@ struct TaskSettingsView: View {
         case .general: generalSection
         case .appearance: appearanceSection
         case .ai: aiSection
+        case .agents: agentsSection
         case .repos: reposSection
         case .connections: connectionsSection
         case .schedule: scheduleSection
@@ -272,6 +275,148 @@ struct TaskSettingsView: View {
                 Toggle("", isOn: $prefs.autoPlanApprove)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
+        }
+    }
+
+    // MARK: - Agents
+
+    @State private var editingAgentId: UUID?
+
+    private var agentsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Skill profiles. New tasks are routed to the best fit by AI; you can override per task. A profile sets the persona, preferred model, and which tools its runs may use.")
+                .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ForEach(prefs.agents) { agent in
+                agentRow(agent)
+            }
+
+            Button("Add agent…") {
+                let fresh = AgentProfile(name: "New agent", icon: "person",
+                                         skills: "Describe what this agent is best at",
+                                         systemPrompt: "", preferredModel: nil,
+                                         allowedTools: ["Read", "Glob", "Grep"])
+                prefs.agents.append(fresh)
+                editingAgentId = fresh.id
+            }
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder private func agentRow(_ agent: AgentProfile) -> some View {
+        let editing = editingAgentId == agent.id
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: agent.icon).font(.system(size: 12))
+                    .foregroundStyle(Theme.accent).frame(width: 16)
+                Text(agent.name).font(.system(size: 12, weight: .medium))
+                if agent.isBuiltIn {
+                    Text("built-in").font(.system(size: 8.5, weight: .bold))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Capsule().fill(Theme.field))
+                        .foregroundStyle(Theme.faint)
+                }
+                Spacer()
+                Text(agent.preferredModel ?? "auto")
+                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.faint)
+                Button(editing ? "Done" : "Edit") {
+                    editingAgentId = editing ? nil : agent.id
+                }
+                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.accent)
+            }
+            if !editing {
+                Text(agent.skills).font(.system(size: 10.5)).foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+            } else {
+                agentEditor(agent)
+            }
+        }
+        .padding(.vertical, 6).padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
+    }
+
+    private func agentEditor(_ agent: AgentProfile) -> some View {
+        func bind<T>(_ keyPath: WritableKeyPath<AgentProfile, T>) -> Binding<T> {
+            Binding(
+                get: {
+                    prefs.agents.first { $0.id == agent.id }?[keyPath: keyPath]
+                        ?? agent[keyPath: keyPath]
+                },
+                set: { newValue in
+                    guard let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) else { return }
+                    prefs.agents[idx][keyPath: keyPath] = newValue
+                }
+            )
+        }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                TextField("Name", text: bind(\.name))
+                    .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(width: 130)
+                TextField("SF Symbol", text: bind(\.icon))
+                    .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(width: 130)
+                Picker("", selection: bind(\.preferredModel)) {
+                    Text("auto").tag(String?.none)
+                    ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in
+                        Text(m).tag(String?.some(m))
+                    }
+                }
+                .labelsHidden().controlSize(.small).frame(width: 90)
+            }
+            TextField("Skills (used for AI routing)", text: bind(\.skills))
+                .textFieldStyle(.roundedBorder).font(.system(size: 11))
+            Text("SYSTEM PROMPT").font(.system(size: 8.5, weight: .bold)).tracking(0.5)
+                .foregroundStyle(Theme.faint)
+            TextEditor(text: bind(\.systemPrompt))
+                .font(.system(size: 11))
+                .scrollContentBackground(.hidden)
+                .frame(height: 90)
+                .padding(6)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Theme.codeBg))
+            Text("TOOLS").font(.system(size: 8.5, weight: .bold)).tracking(0.5)
+                .foregroundStyle(Theme.faint)
+            HStack(spacing: 10) {
+                ForEach(AgentProfile.toolVocabulary, id: \.self) { tool in
+                    Toggle(tool, isOn: Binding(
+                        get: { (prefs.agents.first { $0.id == agent.id }?.allowedTools ?? []).contains(tool) },
+                        set: { on in
+                            guard let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) else { return }
+                            if on {
+                                if !prefs.agents[idx].allowedTools.contains(tool) {
+                                    prefs.agents[idx].allowedTools.append(tool)
+                                }
+                            } else {
+                                prefs.agents[idx].allowedTools.removeAll { $0 == tool }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 10))
+                }
+            }
+            HStack {
+                if agent.isBuiltIn {
+                    Button("Reset to shipped definition") {
+                        if let shipped = AgentProfile.builtIns.first(where: { $0.name == agent.name }),
+                           let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) {
+                            var restored = shipped
+                            restored.id = agent.id // keep task references intact
+                            restored.isBuiltIn = true
+                            prefs.agents[idx] = restored
+                        }
+                    }
+                    .controlSize(.small)
+                } else {
+                    Button("Delete agent", role: .destructive) {
+                        prefs.agents.removeAll { $0.id == agent.id }
+                        editingAgentId = nil
+                    }
+                    .controlSize(.small)
+                }
+                Spacer()
+            }
+            Text("Boundary actions (git push, PR/API writes) stay blocked for every agent.")
+                .font(.system(size: 9.5)).foregroundStyle(Theme.faint)
         }
     }
 

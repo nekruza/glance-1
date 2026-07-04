@@ -223,7 +223,8 @@ final class TaskBoardSession: ObservableObject {
             t.labels = d.labels ?? []
             t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
             t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
-            t.aiFilledFields = ["description", "labels", "taskKind", "estimate"]
+            t.agentId = AgentProfile.idFor(name: d.agent)
+            t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
             store.add(t)
         }
         decomposeMode = false
@@ -254,6 +255,9 @@ final class TaskBoardSession: ObservableObject {
             if t.workspacePath == nil, let repo = e.repoName,
                let entry = Preferences.shared.repos.first(where: { $0.name == repo }) {
                 t.workspacePath = entry.path; filled.append("workspace")
+            }
+            if t.agentId == nil, let agentId = AgentProfile.idFor(name: e.agent) {
+                t.agentId = agentId; filled.append("agent")
             }
             t.aiFilledFields = Array(Set(t.aiFilledFields + filled))
             self.store.update(t)

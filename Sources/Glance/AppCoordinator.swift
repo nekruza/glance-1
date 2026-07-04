@@ -207,7 +207,8 @@ final class AppCoordinator {
                 t.labels = d.labels ?? []
                 t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
                 t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
-                t.aiFilledFields = ["description", "labels", "taskKind", "estimate"]
+                t.agentId = AgentProfile.idFor(name: d.agent)
+                t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
                 _ = self.taskStore.add(t)
             }
             self.taskNotifications.post(
@@ -233,7 +234,8 @@ final class AppCoordinator {
                 t.labels = d.labels ?? []
                 t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
                 t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
-                t.aiFilledFields = ["description", "labels", "taskKind", "estimate"]
+                t.agentId = AgentProfile.idFor(name: d.agent)
+                t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
                 let added = self.taskStore.add(t)
                 self.taskNotifications.post(message: "Task added: \(added.title)", taskId: added.id)
             }
