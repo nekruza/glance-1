@@ -391,12 +391,23 @@ struct TaskBoardView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button(action: { session.showSettings.toggle() }) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 14))
-                    .foregroundStyle(session.showSettings ? Theme.accent : Theme.muted)
+            if session.showSettings {
+                // On the settings page the gear is pointless — offer jumps to
+                // the two overlays instead.
+                Button(action: { session.openAskHandler?() }) {
+                    Image(systemName: "sparkle").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+                Button(action: { session.showSettings = false }) {
+                    Image(systemName: "checklist").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button(action: { session.showSettings = true }) {
+                    Image(systemName: "gearshape").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 18).padding(.vertical, 9)
         .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)

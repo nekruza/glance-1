@@ -108,6 +108,10 @@ final class AppCoordinator {
             }
             .store(in: &cancellables)
 
+        overlayCtl.session.openAskHandler = { [weak self] in
+            self?.summon()
+        }
+
         // Scheduled pulls: notify even when the overlay is closed.
         overlayCtl.session.pullNotifyHandler = { [weak self] message in
             self?.taskNotifications.post(message: message,

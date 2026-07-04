@@ -55,20 +55,18 @@ struct TaskSettingsView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
+            Button(action: onClose) {
+                Label("Back", systemImage: "chevron.left")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.muted)
+            }
+            .buttonStyle(.plain)
             Text("SETTINGS")
                 .font(.system(size: 9, weight: .bold)).tracking(1)
                 .foregroundStyle(Theme.faint)
             Text(section.rawValue)
                 .font(.system(size: 14, weight: .semibold))
             Spacer()
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Theme.muted)
-                    .padding(5)
-                    .background(Circle().fill(Theme.field))
-            }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }

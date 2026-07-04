@@ -48,6 +48,8 @@ final class TaskBoardSession: ObservableObject {
 
     var dismissHandler: (() -> Void)?
     var settingsHandler: (() -> Void)?
+    /// Opens the ask overlay (settings-page footer shortcut).
+    var openAskHandler: (() -> Void)?
     /// Wired to notifications — fired when a pull lands new Inbox items
     /// (matters for scheduled pulls with the overlay closed).
     var pullNotifyHandler: ((String) -> Void)?
