@@ -6,7 +6,7 @@ import Foundation
 struct AgentProfile: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var name: String
-    var icon: String              // SF Symbol
+    var icon: String              // emoji (e.g. "💻")
     var skills: String            // one-liner used for AI routing
     var systemPrompt: String      // appended to plan + execution system prompt
     var preferredModel: String?   // nil = task default (opus) / CLI default
@@ -15,6 +15,26 @@ struct AgentProfile: Identifiable, Codable, Equatable {
 }
 
 extension AgentProfile {
+
+    /// True when `icon` is a legacy SF-Symbol name (pre-emoji builds).
+    var hasLegacyIcon: Bool {
+        icon.unicodeScalars.allSatisfy { $0.isASCII }
+    }
+
+    /// One-time migration for profiles persisted with SF-Symbol icons.
+    static func emojiFor(legacyIcon: String, name: String) -> String {
+        switch legacyIcon {
+        case "chevron.left.forwardslash.chevron.right", "terminal", "hammer": return "💻"
+        case "pencil.and.outline", "doc.text", "pencil": return "✍️"
+        case "magnifyingglass", "globe": return "🔍"
+        case "checkmark.seal": return "✅"
+        case "table", "chart.bar": return "📊"
+        case "envelope": return "✉️"
+        case "brain": return "🧠"
+        case "paintbrush": return "🎨"
+        default: return "🤖"
+        }
+    }
 
     /// Resolve an AI-suggested agent name to a profile id (case-insensitive).
     static func idFor(name: String?) -> UUID? {
@@ -35,7 +55,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0001-4000-8000-000000000001")!,
             name: "Coder",
-            icon: "chevron.left.forwardslash.chevron.right",
+            icon: "💻",
             skills: "Code changes in repos: bug fixes, features, refactors, tests, scripts.",
             systemPrompt: """
             You are a disciplined senior engineer. Method: read the relevant \
@@ -51,7 +71,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0002-4000-8000-000000000002")!,
             name: "Writer",
-            icon: "pencil.and.outline",
+            icon: "✍️",
             skills: "Drafting: documents, replies, summaries, announcements, specs.",
             systemPrompt: """
             You are a sharp professional writer. Method: identify audience and \
@@ -66,7 +86,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0003-4000-8000-000000000003")!,
             name: "Researcher",
-            icon: "magnifyingglass",
+            icon: "🔍",
             skills: "Investigation: web research, comparisons, analysis, fact-finding.",
             systemPrompt: """
             You are a rigorous researcher. Method: search broadly before \
@@ -81,7 +101,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0004-4000-8000-000000000004")!,
             name: "Reviewer",
-            icon: "checkmark.seal",
+            icon: "✅",
             skills: "Critique: review diffs, PRs, documents; find risks and gaps.",
             systemPrompt: """
             You are an exacting reviewer. Method: understand intent before \

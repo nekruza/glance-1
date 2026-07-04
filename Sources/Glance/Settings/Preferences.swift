@@ -161,9 +161,19 @@ final class Preferences: ObservableObject {
         autoPlanApprove = defaults.object(forKey: Keys.autoPlanApprove) == nil
             ? true : defaults.bool(forKey: Keys.autoPlanApprove)
         if let data = defaults.data(forKey: Keys.agents),
-           let decoded = try? JSONDecoder().decode([AgentProfile].self, from: data),
+           var decoded = try? JSONDecoder().decode([AgentProfile].self, from: data),
            !decoded.isEmpty {
+            // Migrate pre-emoji profiles (icons were SF-Symbol names).
+            var migrated = false
+            for i in decoded.indices where decoded[i].hasLegacyIcon {
+                decoded[i].icon = AgentProfile.emojiFor(legacyIcon: decoded[i].icon,
+                                                        name: decoded[i].name)
+                migrated = true
+            }
             agents = decoded
+            if migrated, let data = try? JSONEncoder().encode(decoded) {
+                defaults.set(data, forKey: Keys.agents)
+            }
         } else {
             agents = AgentProfile.builtIns
             // didSet doesn't fire during init — persist the seed explicitly.

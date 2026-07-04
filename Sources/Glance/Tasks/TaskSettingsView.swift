@@ -323,7 +323,7 @@ struct TaskSettingsView: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Theme.field))
 
             Button("Add agent manually…") {
-                let fresh = AgentProfile(name: "New agent", icon: "person",
+                let fresh = AgentProfile(name: "New agent", icon: "🤖",
                                          skills: "Describe what this agent is best at",
                                          systemPrompt: "", preferredModel: nil,
                                          allowedTools: ["Read", "Glob", "Grep"])
@@ -355,8 +355,7 @@ struct TaskSettingsView: View {
         let editing = editingAgentId == agent.id
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: agent.icon).font(.system(size: 12))
-                    .foregroundStyle(Theme.accent).frame(width: 16)
+                Text(agent.icon).font(.system(size: 13)).frame(width: 18)
                 Text(agent.name).font(.system(size: 12, weight: .medium))
                 if agent.isBuiltIn {
                     Text("built-in").font(.system(size: 8.5, weight: .bold))
@@ -400,8 +399,8 @@ struct TaskSettingsView: View {
             HStack(spacing: 8) {
                 TextField("Name", text: bind(\.name))
                     .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(width: 130)
-                TextField("SF Symbol", text: bind(\.icon))
-                    .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(width: 130)
+                TextField("Emoji", text: bind(\.icon))
+                    .textFieldStyle(.roundedBorder).font(.system(size: 11)).frame(width: 60)
                 Picker("", selection: bind(\.preferredModel)) {
                     Text("auto").tag(String?.none)
                     ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in

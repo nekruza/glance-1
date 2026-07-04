@@ -450,10 +450,9 @@ private struct TaskCardRow: View {
             priorityChip
 
             if let agent = Preferences.shared.agent(task.agentId) {
-                Image(systemName: agent.icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.accent.opacity(0.8))
-                    .frame(width: 13)
+                Text(agent.icon)
+                    .font(.system(size: 11))
+                    .frame(width: 15)
                     .onHover { inside in
                         hoverTip = inside ? agent.name : (hoverTip == agent.name ? nil : hoverTip)
                     }

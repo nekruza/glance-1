@@ -137,9 +137,8 @@ final class TaskAI {
         Design an AI agent profile for a personal task-execution system. The \
         user describes what they need; you produce the profile. Output JSON \
         only (no prose, no fences): {"name": "<1-2 words, distinct from: \
-        \(existingNames.joined(separator: ", "))>", "icon": "<one SF Symbol \
-        name, e.g. chart.bar, doc.text, hammer, globe, tray.full, \
-        table, terminal, paintbrush, envelope, brain>", "skills": "<one line \
+        \(existingNames.joined(separator: ", "))>", "icon": "<exactly ONE \
+        emoji that fits the role, e.g. 📊 ✍️ 🔍 💻 🧠 🎨 ✉️>", "skills": "<one line \
         describing what tasks it's best at — used to route tasks to it>", \
         "systemPrompt": "<150-350 words: persona, method/discipline, quality \
         bar, output expectations. Write it as instructions to the agent.>", \

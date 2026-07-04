@@ -118,11 +118,11 @@ struct TaskDetailView: View {
                     t.agentId = agent.id
                     session.store.update(t)
                 } label: {
-                    Label("\(agent.name) — \(agent.skills)", systemImage: agent.icon)
+                    Text("\(agent.icon) \(agent.name) — \(agent.skills)")
                 }
             }
         } label: {
-            Label(current?.name ?? "agent", systemImage: current?.icon ?? "person")
+            Text(current == nil ? "🤖 agent" : "\(current!.icon) \(current!.name)")
                 .font(.system(size: 11))
                 .foregroundStyle(current == nil ? Theme.faint : Theme.muted)
         }
