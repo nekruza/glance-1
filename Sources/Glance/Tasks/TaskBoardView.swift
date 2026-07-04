@@ -427,6 +427,10 @@ private struct TaskCardRow: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.faint)
                 .frame(width: 14)
+                .onHover { inside in
+                    hoverTip = inside ? task.source.displayName
+                                      : (hoverTip == task.source.displayName ? nil : hoverTip)
+                }
 
             priorityChip
 
@@ -481,7 +485,7 @@ private struct TaskCardRow: View {
             hovering = $0
             if !$0 { hoverTip = nil }
         }
-        .overlay(alignment: .topTrailing) {
+        .overlay(alignment: .top) {
             if let tip = hoverTip {
                 Text(tip)
                     .font(.system(size: 10))
@@ -489,8 +493,7 @@ private struct TaskCardRow: View {
                     .background(Capsule().fill(Color(red: 0.16, green: 0.17, blue: 0.2)))
                     .overlay(Capsule().strokeBorder(Theme.glassBorderHi, lineWidth: 1))
                     .foregroundStyle(Theme.fg.opacity(0.9))
-                    .offset(y: -14)
-                    .padding(.trailing, 18)
+                    .offset(y: -13)
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }

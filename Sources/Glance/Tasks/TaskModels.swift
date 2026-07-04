@@ -77,6 +77,18 @@ enum TaskPriority: String, Codable, CaseIterable, Comparable {
 
 enum TaskSource: String, Codable {
     case manual, prompt, jira, granola, slack, calendar
+
+    var displayName: String {
+        switch self {
+        case .manual: return "Added by hand"
+        case .prompt: return "From a prompt"
+        case .jira: return "From Jira"
+        case .granola: return "From a meeting"
+        case .slack: return "From Slack"
+        case .calendar: return "From Calendar"
+        }
+    }
+
     var icon: String {
         switch self {
         case .manual: return "square.and.pencil"
