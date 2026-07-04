@@ -31,6 +31,8 @@ final class TaskRunner: ObservableObject {
     private let hardCap: TimeInterval = 45 * 60
 
     var onEvent: ((String, UUID) -> Void)?              // (message, taskId) → notifications
+    /// Fired when a task reaches `done` — the board should re-rank (FR39).
+    var onTaskCompleted: (() -> Void)?
 
     init(store: TaskStore, binaryPath: String) {
         self.store = store
@@ -71,19 +73,47 @@ final class TaskRunner: ObservableObject {
         \(task.sourceSnapshot.isEmpty ? "" : "Source context:\n\(task.sourceSnapshot)")
         """
 
-        runOneShot(prompt: prompt, cwd: task.workspacePath) { [weak self] output in
+        runOneShot(prompt: prompt, cwd: task.workspacePath, model: task.runModel) { [weak self] output in
             guard let self, var run = self.store.run(run.id) else { return }
             guard var task = self.store.task(taskId) else { return }
             if let plan = output, !plan.isEmpty {
                 run.plan = plan
                 self.store.updateRun(run)
-                task.status = .awaitingPlanApproval
-                self.store.update(task)
-                self.onEvent?("Plan ready for “\(task.title)”", taskId)
+
+                // §6 A7: auto-approve small, non-code, boundary-free plans
+                // when the user has the policy on. Code is always gated.
+                if Self.planAutoApprovable(task: task, plan: plan) {
+                    self.store.record(ApprovalRecord(
+                        taskId: task.id, runId: run.id, gate: .plan,
+                        decision: .approved, detail: "auto-approved by policy (non-code, small, no boundary actions)"))
+                    task.status = .executing
+                    self.store.update(task)
+                    self.execute(runId: run.id, guidance: nil)
+                } else {
+                    task.status = .awaitingPlanApproval
+                    self.store.update(task)
+                    self.onEvent?("Plan ready for “\(task.title)”", taskId)
+                }
             } else {
                 self.finishRun(run.id, state: .failed, reason: "Couldn't generate a plan (Claude CLI error).")
             }
         }
+    }
+
+    /// A7 policy: ALL of — policy enabled; kind research/writing/other;
+    /// estimate ≤ 1 hour; the plan's boundary-actions section says none.
+    static func planAutoApprovable(task: TaskItem, plan: String) -> Bool {
+        guard Preferences.shared.autoPlanApprove else { return false }
+        guard task.taskKind != .code else { return false }
+        switch task.estimate {
+        case .minutes, .hour, .none: break
+        case .halfday, .dayPlus: return false
+        }
+        // Boundary section must exist and declare none — anything else gates.
+        let lower = plan.lowercased()
+        guard let range = lower.range(of: "boundary actions") else { return false }
+        let section = lower[range.upperBound...].prefix(120)
+        return section.contains("none")
     }
 
     // MARK: - Phase 2: Plan gate (FR44.2, §6 A7)
@@ -164,11 +194,13 @@ final class TaskRunner: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: binaryPath)
         // Prompt goes via STDIN: --allowedTools/--disallowedTools are variadic
         // and would swallow a trailing positional prompt argument.
-        proc.arguments = [
+        var args = [
             "-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose",
             "--allowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch",
             "--disallowedTools", "Bash(git push:*)", "Bash(gh pr:*)", "Bash(gh api:*)"
         ]
+        if let model = task.runModel { args += ["--model", model] }
+        proc.arguments = args
         proc.currentDirectoryURL = workspace
 
         let inPipe = Pipe()
@@ -294,6 +326,7 @@ final class TaskRunner: ObservableObject {
         task.status = .done
         task.completedAt = Date()
         store.update(task)
+        onTaskCompleted?()
 
         if releaseBoundary {
             for artifact in run.artifacts where artifact.boundary && !artifact.released {
@@ -455,11 +488,15 @@ final class TaskRunner: ObservableObject {
 
     // MARK: - One-shot helper (plan phase)
 
-    private func runOneShot(prompt: String, cwd: String?, completion: @escaping (String?) -> Void) {
+    private func runOneShot(prompt: String, cwd: String?, model: String? = nil,
+                            completion: @escaping (String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async { [binaryPath] in
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: binaryPath)
-            proc.arguments = ["-p", prompt]
+            var args = ["-p"]
+            if let model { args += ["--model", model] }
+            args.append(prompt)
+            proc.arguments = args
             if let cwd, !cwd.isEmpty {
                 proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
             } else {

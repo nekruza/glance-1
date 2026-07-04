@@ -15,6 +15,7 @@ final class Preferences: ObservableObject {
         static let taskHotkeyKeyCode = "taskHotkey.keyCode"
         static let taskHotkeyModifiers = "taskHotkey.modifiers"
         static let repos = "tasks.repos"
+        static let autoPlanApprove = "tasks.autoPlanApprove"
     }
 
     /// Default dark-tint opacity of the overlay background.
@@ -47,6 +48,12 @@ final class Preferences: ObservableObject {
                 defaults.set(data, forKey: Keys.repos)
             }
         }
+    }
+
+    /// §6 A7: auto-approve plans for small non-code tasks with no boundary
+    /// actions. Code tasks are always gated regardless.
+    @Published var autoPlanApprove: Bool {
+        didSet { defaults.set(autoPlanApprove, forKey: Keys.autoPlanApprove) }
     }
 
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
@@ -93,6 +100,8 @@ final class Preferences: ObservableObject {
         } else {
             repos = []
         }
+        autoPlanApprove = defaults.object(forKey: Keys.autoPlanApprove) == nil
+            ? true : defaults.bool(forKey: Keys.autoPlanApprove)
     }
 }
 

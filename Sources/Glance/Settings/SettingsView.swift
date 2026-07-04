@@ -70,6 +70,14 @@ struct SettingsView: View {
                 } label: {
                     settingLabel("Task board hotkey", "Summons the AI task board")
                 }
+                LabeledContent {
+                    Toggle("", isOn: $prefs.autoPlanApprove)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                } label: {
+                    settingLabel("Auto-approve small plans",
+                                 "Skip the plan gate for non-code tasks ≤1h with no external actions. Code tasks are always gated.")
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     settingLabel("Repos", "Where AI agents run code tasks (isolated worktrees)")
                     ForEach(prefs.repos) { repo in

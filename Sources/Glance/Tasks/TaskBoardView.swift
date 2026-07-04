@@ -126,6 +126,20 @@ struct TaskBoardView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 let tasks = session.visibleTasks()
+                // Bulk ops (V2.2): accept the whole inbox / clear done.
+                if session.tab == .inbox && tasks.count > 1 {
+                    bulkBar("Accept all \(tasks.count)", icon: "checkmark.circle") {
+                        for t in tasks { session.store.acceptFromInbox(t.id) }
+                        session.schedulePrioritize(force: true)
+                    }
+                }
+                if session.tab == .done && tasks.contains(where: { $0.status == .done }) {
+                    bulkBar("Archive all done", icon: "archivebox") {
+                        for t in tasks where t.status == .done {
+                            session.store.setStatus(t.id, .archived)
+                        }
+                    }
+                }
                 if tasks.isEmpty {
                     Text(emptyText)
                         .font(.system(size: 12.5))
@@ -142,6 +156,19 @@ struct TaskBoardView: View {
             }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private func bulkBar(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        HStack {
+            Spacer()
+            Button(action: action) {
+                Label(title, systemImage: icon).font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 6)
+        .background(Color.white.opacity(0.02))
     }
 
     private var emptyText: String {

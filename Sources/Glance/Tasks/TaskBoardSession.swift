@@ -268,6 +268,13 @@ final class TaskBoardSession: ObservableObject {
         store.setStatus(task.id, .archived)
     }
 
+    /// FR39 triggers beyond creation: completion and inbox-accept reshuffle
+    /// what "do first" means — re-rank (batched throttle still applies via
+    /// force only here, where board composition actually changed).
+    func boardCompositionChanged() {
+        schedulePrioritize(force: true)
+    }
+
     func togglePin(_ task: TaskItem) {
         if task.isPinned {
             store.unpin(task.id)

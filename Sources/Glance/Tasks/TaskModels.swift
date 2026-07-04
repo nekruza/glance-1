@@ -30,6 +30,8 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var aiFilledFields: [String] = []
     /// FR33: flagged by the store when a live task looks like the same work.
     var possibleDuplicateOf: UUID?
+    /// OQ-V2-3: per-task model override for agent runs (nil = CLI default).
+    var runModel: String?
 
     var isPinned: Bool { userPinnedRank != nil }
     var isRunnable: Bool { status == .ready || status == .failed }

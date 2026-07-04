@@ -97,7 +97,33 @@ struct TaskDetailView: View {
             if task.taskKind == .code {
                 repoPicker
             }
+            modelPicker
         }
+    }
+
+    /// OQ-V2-3: per-task model for agent runs. Default = CLI's own default.
+    private var modelPicker: some View {
+        Menu {
+            Button("default") {
+                var t = task
+                t.runModel = nil
+                session.store.update(t)
+            }
+            ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in
+                Button(m) {
+                    var t = task
+                    t.runModel = m
+                    session.store.update(t)
+                }
+            }
+        } label: {
+            Label(task.runModel ?? "model", systemImage: "cpu")
+                .font(.system(size: 11))
+                .foregroundStyle(task.runModel == nil ? Theme.faint : Theme.muted)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Model for AI runs on this task (plan + execution)")
     }
 
     /// Kind is editable so a misclassified task can be flipped to `code`

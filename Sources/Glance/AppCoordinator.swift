@@ -86,6 +86,9 @@ final class AppCoordinator {
         runner.onEvent = { [weak self] message, taskId in
             self?.taskNotifications.post(message: message, taskId: taskId)
         }
+        runner.onTaskCompleted = { [weak overlayCtl] in
+            overlayCtl?.session.boardCompositionChanged()
+        }
         taskNotifications.setup()
         taskNotifications.onOpenTask = { [weak overlayCtl] taskId in
             overlayCtl?.reveal(taskId: taskId)
