@@ -27,7 +27,12 @@ final class TaskBoardSession: ObservableObject {
     @Published var sortMode: SortMode = .aiRank
     @Published var quickAdd: String = ""
     @Published var searchText: String = ""
-    @Published var selectedTaskId: UUID?
+    @Published var selectedTaskId: UUID? {
+        didSet { if selectedTaskId == nil { detailFullPage = false } }
+    }
+    /// false = detail slides in as a right-side drawer over the current tab;
+    /// true = detail takes over the whole page (expand button in the drawer).
+    @Published var detailFullPage = false
     @Published var isPrioritizing = false
 
     /// Prompt→tasks flow (FR27): text in, preview list out, user confirms.

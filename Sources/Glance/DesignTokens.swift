@@ -170,6 +170,47 @@ extension View {
     }
 }
 
+// MARK: - Wrap layout
+
+/// Left-to-right flow that wraps to a new row when it runs out of width —
+/// for chip rows (meta row, label lists) that must never compress or clip
+/// in narrow containers like the detail drawer.
+struct WrapLayout: Layout {
+    var spacing: CGFloat = DS.Space.xs
+    var lineSpacing: CGFloat = DS.Space.xs
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width {
+                x = 0
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+        return CGSize(width: width, height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = bounds.minX, y: CGFloat = bounds.minY, lineHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += lineHeight + lineSpacing
+                lineHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+}
+
 // MARK: - Badge
 
 /// Small capsule badge: soft tint background, dark tint text.

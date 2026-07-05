@@ -61,7 +61,24 @@ struct TaskDetailView: View {
 
     private var headerBar: some View {
         HStack {
-            BackButton(label: "Board") { session.selectedTaskId = nil }
+            BackButton(label: session.detailFullPage ? "Board" : "Close") {
+                session.selectedTaskId = nil
+            }
+            if !session.detailFullPage {
+                // Drawer → promote to the full task page.
+                Hover { hovering in
+                    Button(action: { session.detailFullPage = true }) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(DS.Typo.label)
+                            .foregroundStyle(hovering ? DS.textPrimary : DS.textSecondary)
+                            .padding(DS.Space.xxs)
+                            .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                                .fill(hovering ? DS.surfaceHover : .clear))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .help("Open as full page")
+            }
             Spacer()
             // Manual completion — same celebration path as the canvas checkbox
             // (sound + status), minus the spatial confetti.
@@ -121,14 +138,13 @@ struct TaskDetailView: View {
     }
 
     private var metaRow: some View {
-        HStack(spacing: DS.Space.xs) {
+        WrapLayout(spacing: DS.Space.xs) {
             chip(task.aiPriority.rawValue)
             chip(task.status.display)
             kindPicker
             duePicker
             if let e = task.estimate { chip("~\(e.rawValue)") }
             ForEach(task.labels, id: \.self) { chip($0) }
-            Spacer()
             // Repo only matters for code tasks — everything else runs in a
             // scratch workspace and needs no repo.
             if task.taskKind == .code {
@@ -707,6 +723,7 @@ struct TaskDetailView: View {
     private func chip(_ text: String) -> some View {
         Text(text)
             .font(DS.Typo.caption)
+            .fixedSize()
             .padding(.horizontal, DS.Space.xxs + 2).padding(.vertical, 2)
             .background(Capsule().fill(DS.surface))
             .foregroundStyle(DS.textSecondary)
@@ -724,6 +741,7 @@ struct TaskDetailView: View {
         return Hover { hovering in
             content
                 .font(DS.Typo.caption)
+                .fixedSize()
                 .foregroundStyle(isSet ? DS.textSecondary : DS.textTertiary)
                 .padding(.horizontal, DS.Space.xxs + 2).padding(.vertical, 2)
                 .background(Capsule().fill(hovering ? DS.surfaceHover : DS.surface))

@@ -17,30 +17,34 @@ struct TaskBoardView: View {
                 TaskSettingsView(session: session, onClose: { session.showSettings = false })
             } else if session.decomposeMode {
                 decomposeView
-            } else if let task = session.selectedTask {
-                HStack(spacing: 0) {
-                    TaskSidebar(session: session)
-                    Divider().overlay(DS.divider)
-                    // .id → fresh @State per task, else draft edits bleed
-                    // across sidebar switches.
-                    TaskDetailView(session: session, task: task)
-                        .id(task.id)
-                }
+            } else if let task = session.selectedTask, session.detailFullPage {
+                // Expanded from the drawer: detail owns the whole page.
+                // .id → fresh @State per task, else draft edits bleed across.
+                TaskDetailView(session: session, task: task)
+                    .id(task.id)
             } else {
-                ZStack(alignment: .top) {
-                    switch session.tab {
-                    case .board:
-                        CanvasView(session: session, store: store)
-                    case .inbox:
-                        list.padding(.top, Self.pillInset)
-                    case .done:
-                        DoneHistoryView(session: session, store: store)
-                            .padding(.top, Self.pillInset)
-                    case .activity:
-                        activityView.padding(.top, Self.pillInset)
+                GeometryReader { geo in
+                    ZStack(alignment: .top) {
+                        switch session.tab {
+                        case .board:
+                            CanvasView(session: session, store: store)
+                        case .inbox:
+                            list.padding(.top, Self.pillInset)
+                        case .done:
+                            DoneHistoryView(session: session, store: store)
+                                .padding(.top, Self.pillInset)
+                        case .activity:
+                            activityView.padding(.top, Self.pillInset)
+                        }
+                        TabPill(session: session, store: store)
+                            .padding(.top, DS.Space.sm)
+
+                        // Detail drawer: slides in from the right over the tab.
+                        if let task = session.selectedTask {
+                            detailDrawer(task, width: geo.size.width * 0.5)
+                        }
                     }
-                    TabPill(session: session, store: store)
-                        .padding(.top, DS.Space.sm)
+                    .animation(DS.spring, value: session.selectedTaskId)
                 }
             }
             footer
@@ -48,6 +52,31 @@ struct TaskBoardView: View {
         .frame(minWidth: 900, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
         .background(DS.bg)
         .foregroundStyle(DS.textPrimary)
+    }
+
+    // MARK: - Detail drawer
+
+    /// Right-side slide-over: scrim closes on click, panel hosts the same
+    /// TaskDetailView (its header offers expand-to-full-page).
+    private func detailDrawer(_ task: TaskItem, width: CGFloat) -> some View {
+        ZStack(alignment: .trailing) {
+            Color.black.opacity(0.12)
+                .contentShape(Rectangle())
+                .onTapGesture { session.selectedTaskId = nil }
+                .transition(.opacity)
+            TaskDetailView(session: session, task: task)
+                .id(task.id) // fresh @State per task — drafts must not bleed
+                .frame(width: max(480, width))
+                .frame(maxHeight: .infinity)
+                .background(DS.bg)
+                .overlay(alignment: .leading) {
+                    Divider().overlay(DS.divider)
+                }
+                .shadow(color: .black.opacity(0.18), radius: 24, x: -6)
+                .transition(.move(edge: .trailing))
+                .onExitCommand { session.selectedTaskId = nil }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Inbox list (FR21–23; triage stays a list — canvas is for board)
@@ -341,76 +370,6 @@ struct BackButton: View {
                     .foregroundStyle(hovering ? DS.textPrimary : DS.textSecondary)
                     .padding(.horizontal, DS.Space.xs).padding(.vertical, DS.Space.xxs)
                     .background(Capsule().fill(hovering ? DS.surfaceHover : .clear))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-}
-
-// MARK: - Detail sidebar
-
-/// Slim task list shown beside an open task: the same tab list (sort +
-/// search included) the user was browsing, so switching tasks is one click
-/// instead of a nav round-trip.
-private struct TaskSidebar: View {
-    @ObservedObject var session: TaskBoardSession
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            let tasks = session.visibleTasks()
-            HStack(spacing: DS.Space.xxs) {
-                Text(TabPill.title(session.tab).uppercased())
-                    .font(DS.Typo.overline).tracking(0.8)
-                    .foregroundStyle(DS.textTertiary)
-                Text("\(tasks.count)")
-                    .font(DS.Typo.overline)
-                    .foregroundStyle(DS.textTertiary)
-            }
-            .padding(.horizontal, DS.Space.sm).padding(.top, DS.Space.md).padding(.bottom, DS.Space.xs)
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(tasks) { task in
-                        row(task)
-                    }
-                }
-                .padding(.horizontal, DS.Space.xs).padding(.bottom, DS.Space.sm)
-            }
-        }
-        .frame(width: 230)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(DS.surface)
-    }
-
-    private func row(_ task: TaskItem) -> some View {
-        let selected = session.selectedTaskId == task.id
-        return Hover { hovering in
-            Button(action: { session.selectedTaskId = task.id }) {
-                VStack(alignment: .leading, spacing: DS.Space.xxs - 1) {
-                    Text(task.title)
-                        .font(DS.Typo.body)
-                        .fontWeight(selected ? .semibold : .regular)
-                        .foregroundStyle(selected ? DS.textPrimary : DS.textSecondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    HStack(spacing: DS.Space.xxs + 2) {
-                        Text(task.aiPriority.rawValue)
-                            .font(DS.Typo.overline)
-                            .foregroundStyle(task.aiPriority == .p0 ? DS.danger : DS.textTertiary)
-                        Text(task.status.display)
-                            .font(DS.Typo.overline)
-                            .foregroundStyle(DS.textTertiary)
-                        if task.taskKind == .code {
-                            Image(systemName: "chevron.left.forwardslash.chevron.right")
-                                .font(DS.Typo.overline)
-                                .foregroundStyle(DS.textTertiary)
-                        }
-                    }
-                }
-                .padding(.horizontal, DS.Space.xs).padding(.vertical, DS.Space.xxs + 2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: DS.Radius.small)
-                    .fill(selected ? DS.accentSoft : (hovering ? DS.surfaceHover : .clear)))
-                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
