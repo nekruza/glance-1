@@ -13,6 +13,9 @@ struct TaskDetailView: View {
     @State private var rejectReason = ""
     @State private var editingDescription = false
     @State private var draftDescription = ""
+    @State private var editingPrompt = false
+    @State private var draftPrompt = ""
+    @State private var promptCopied = false
     @FocusState private var guidanceFocused: Bool
     @FocusState private var rejectFocused: Bool
 
@@ -29,6 +32,7 @@ struct TaskDetailView: View {
                         duplicateBanner(dupId)
                     }
                     descriptionBlock
+                    if task.taskKind == .code { promptBlock }
 
                     switch task.status {
                     case .awaitingPlanApproval: planGate
@@ -54,6 +58,22 @@ struct TaskDetailView: View {
         HStack {
             BackButton(label: "Board") { session.selectedTaskId = nil }
             Spacer()
+            if task.taskKind == .code {
+                Button(action: { session.generateHandoffPrompt(task) }) {
+                    HStack(spacing: DS.Space.xxs) {
+                        if session.promptBusyTaskIds.contains(task.id) {
+                            ProgressView().controlSize(.small)
+                            Text("Writing prompt…")
+                        } else {
+                            Label(task.handoffPrompt == nil ? "Create prompt" : "Regenerate prompt",
+                                  systemImage: "wand.and.sparkles")
+                        }
+                    }
+                }
+                .buttonStyle(DSSecondaryButtonStyle())
+                .disabled(session.promptBusyTaskIds.contains(task.id))
+                .help("AI writes a prompt you can paste into another assistant")
+            }
             if task.isRunnable {
                 Button(action: { session.run(task) }) {
                     Label("Run with AI", systemImage: "play.fill")
@@ -266,6 +286,56 @@ struct TaskDetailView: View {
                     .font(DS.Typo.body).foregroundStyle(DS.textTertiary)
             } else {
                 MarkdownText(text: task.descriptionMD, palette: .light).font(DS.Typo.body)
+            }
+        }
+    }
+
+    // MARK: - Handoff prompt (code tasks)
+
+    /// AI-written prompt for pasting into an external assistant. Hidden until
+    /// generated (header button); then editable, copyable, regenerable.
+    @ViewBuilder private var promptBlock: some View {
+        if let prompt = task.handoffPrompt {
+            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
+                HStack {
+                    overline("Prompt for your AI")
+                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
+                        .help("AI-written — edit freely, your version wins")
+                    Spacer()
+                    Button(promptCopied ? "Copied" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(task.handoffPrompt ?? "", forType: .string)
+                        promptCopied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { promptCopied = false }
+                    }
+                    .buttonStyle(.plain).font(DS.Typo.label)
+                    .foregroundStyle(promptCopied ? DS.success : DS.accentText)
+                    Button(editingPrompt ? "Save" : "Edit") {
+                        if editingPrompt {
+                            var t = task
+                            t.handoffPrompt = draftPrompt
+                            session.store.update(t)
+                        } else {
+                            draftPrompt = prompt
+                        }
+                        editingPrompt.toggle()
+                    }
+                    .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
+                }
+                if editingPrompt {
+                    TextEditor(text: $draftPrompt)
+                        .font(DS.Typo.mono)
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 180)
+                        .dsField()
+                } else {
+                    MarkdownText(text: prompt, palette: .light)
+                        .font(DS.Typo.body)
+                        .textSelection(.enabled)
+                        .padding(DS.Space.xs)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
+                }
             }
         }
     }

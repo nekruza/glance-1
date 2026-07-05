@@ -41,6 +41,9 @@ final class TaskBoardSession: ObservableObject {
     @Published var pullingSource: ComposioIngest.Source?
     @Published var pullStatus: String?
 
+    /// Tasks with a handoff-prompt generation in flight (detail spinner).
+    @Published var promptBusyTaskIds: Set<UUID> = []
+
     let store: TaskStore
     let runner: TaskRunner
     private let ai: TaskAI
@@ -307,6 +310,22 @@ final class TaskBoardSession: ObservableObject {
                 return (id, e.rationale, p)
             }
             self.store.applyPrioritization(mapped.map { (id: $0.0, rationale: $0.1, priority: $0.2) })
+        }
+    }
+
+    /// Create prompt (code tasks): AI writes a paste-into-another-assistant
+    /// prompt; saved on the task so it survives restarts. Failure = no change.
+    func generateHandoffPrompt(_ task: TaskItem) {
+        guard !promptBusyTaskIds.contains(task.id) else { return }
+        promptBusyTaskIds.insert(task.id)
+        let repoName = Preferences.shared.repos.first { $0.path == task.workspacePath }?.name
+        let agent = Preferences.shared.agent(task.agentId)
+        ai.handoffPrompt(for: task, repoName: repoName, agent: agent) { [weak self] text in
+            guard let self else { return }
+            self.promptBusyTaskIds.remove(task.id)
+            guard let text, var t = self.store.task(task.id) else { return }
+            t.handoffPrompt = text
+            self.store.update(t)
         }
     }
 

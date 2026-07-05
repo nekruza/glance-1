@@ -152,6 +152,36 @@ final class TaskAI {
         runJSON(prompt: prompt, model: "opus", completion: completion)
     }
 
+    // MARK: - Handoff prompt (code tasks → external AI)
+
+    /// Writes a self-contained coding prompt the user can paste into another
+    /// AI assistant. Raw markdown out (no JSON envelope).
+    func handoffPrompt(for task: TaskItem, repoName: String?, agent: AgentProfile?,
+                       completion: @escaping (String?) -> Void) {
+        var context = [
+            "Title: \(task.title)",
+            "Description: \(task.descriptionMD.isEmpty ? "(none)" : task.descriptionMD)"
+        ]
+        if !task.labels.isEmpty { context.append("Labels: \(task.labels.joined(separator: ", "))") }
+        if let repoName { context.append("Repository: \(repoName)") }
+        if let path = task.workspacePath { context.append("Repo path: \(path)") }
+        if let agent { context.append("Intended skill profile: \(agent.name) — \(agent.skills)") }
+
+        let prompt = """
+        Write a prompt I can paste into an AI coding assistant (Claude Code, \
+        Cursor, etc.) to get the task below done. Output ONLY the prompt text \
+        as markdown — no preamble, no commentary, no code fences wrapping the \
+        whole output. Structure it with: goal, context, requirements (as \
+        acceptance-criteria bullets), constraints, and a suggested approach \
+        only if clearly inferable. Be specific and concrete; do NOT invent \
+        requirements the task doesn't imply.
+
+        Task:
+        \(context.joined(separator: "\n"))
+        """
+        runText(prompt: prompt, model: nil, completion: completion)
+    }
+
     // MARK: - Meeting action items (transcript pane reader)
 
     /// Extract ONLY the user's own action items from meeting notes.
@@ -181,6 +211,22 @@ final class TaskAI {
     /// Run one `claude -p` call and decode its stdout as T. Completion on main.
     private func runJSON<T: Decodable>(prompt: String, model: String?,
                                        completion: @escaping (T?) -> Void) {
+        runRaw(prompt: prompt, model: model) { text in
+            completion(text.flatMap { Self.decodeLenient(T.self, from: $0) })
+        }
+    }
+
+    /// Run one `claude -p` call and return trimmed stdout as-is (markdown/prose).
+    private func runText(prompt: String, model: String?,
+                         completion: @escaping (String?) -> Void) {
+        runRaw(prompt: prompt, model: model) { text in
+            let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            completion(trimmed?.isEmpty == false ? trimmed : nil)
+        }
+    }
+
+    private func runRaw(prompt: String, model: String?,
+                        completion: @escaping (String?) -> Void) {
         queue.async { [binaryPath] in
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: binaryPath)
@@ -194,14 +240,13 @@ final class TaskAI {
             proc.standardOutput = out
             proc.standardError = Pipe()
 
-            var result: T?
+            var result: String?
             do {
                 try proc.run()
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 proc.waitUntilExit()
-                if proc.terminationStatus == 0,
-                   let text = String(data: data, encoding: .utf8) {
-                    result = Self.decodeLenient(T.self, from: text)
+                if proc.terminationStatus == 0 {
+                    result = String(data: data, encoding: .utf8)
                 }
             } catch {
                 // fall through with nil

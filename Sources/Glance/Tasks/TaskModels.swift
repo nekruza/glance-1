@@ -35,6 +35,9 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var runModel: String?
     /// Assigned skill profile (AI-routed, user-overridable). nil = generic.
     var agentId: UUID?
+    /// AI-written handoff prompt for pasting into an external assistant
+    /// (code tasks). User edits win; optional so old JSON decodes.
+    var handoffPrompt: String?
 
     var isPinned: Bool { userPinnedRank != nil }
     var isRunnable: Bool { status == .ready || status == .failed }
