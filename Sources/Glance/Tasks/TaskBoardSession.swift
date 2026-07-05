@@ -44,6 +44,21 @@ final class TaskBoardSession: ObservableObject {
     /// Tasks with a handoff-prompt generation in flight (detail spinner).
     @Published var promptBusyTaskIds: Set<UUID> = []
 
+    /// Canvas completion choreography: tasks mid check-animation (still
+    /// rendered), live confetti bursts, and the undo toast.
+    @Published var completingTaskIds: Set<UUID> = []
+    @Published var confettiBursts: [ConfettiBurst] = []
+    @Published var undoToast: UndoToast?
+    /// Floating quick-capture card (N key / pill +).
+    @Published var showCapture = false
+    /// Most recently created task — drives the pop-in animation on canvas.
+    @Published var lastCreatedTaskId: UUID?
+
+    struct UndoToast: Equatable {
+        let taskId: UUID
+        let title: String
+    }
+
     let store: TaskStore
     let runner: TaskRunner
     private let ai: TaskAI
@@ -194,13 +209,34 @@ final class TaskBoardSession: ObservableObject {
                 base.sort { $0.createdAt > $1.createdAt }
             }
         }
-        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return base }
-        return base.filter {
-            $0.title.lowercased().contains(q)
-                || $0.labels.contains { $0.lowercased().contains(q) }
-                || $0.descriptionMD.lowercased().contains(q)
+        guard !searchQuery.isEmpty else { return base }
+        return base.filter(matchesSearch)
+    }
+
+    /// Board tasks in sorted order WITHOUT the search filter — the canvas
+    /// dims non-matches instead of removing them (spatial memory survives).
+    func canvasTasks() -> [TaskItem] {
+        var base = store.boardTasks()
+        switch sortMode {
+        case .aiRank: break
+        case .priority:
+            base.sort { ($0.aiPriority, $0.aiRank) < ($1.aiPriority, $1.aiRank) }
+        case .dateAdded:
+            base.sort { $0.createdAt > $1.createdAt }
         }
+        return base
+    }
+
+    private var searchQuery: String {
+        searchText.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    func matchesSearch(_ task: TaskItem) -> Bool {
+        let q = searchQuery
+        guard !q.isEmpty else { return true }
+        return task.title.lowercased().contains(q)
+            || task.labels.contains { $0.lowercased().contains(q) }
+            || task.descriptionMD.lowercased().contains(q)
     }
 
     var selectedTask: TaskItem? {
@@ -220,6 +256,7 @@ final class TaskBoardSession: ObservableObject {
         guard !text.isEmpty else { return }
         quickAdd = ""
         let task = store.add(TaskItem(title: text, source: .manual))
+        lastCreatedTaskId = task.id
         enrich(task)
     }
 
@@ -405,6 +442,49 @@ final class TaskBoardSession: ObservableObject {
         } catch {
             return nil
         }
+    }
+
+    // MARK: - Completion (manual check — the fun part)
+
+    /// Manual completion with celebration: check draws, sound plays, confetti
+    /// bursts at `point` (canvas coords), then the card fades and the status
+    /// flips to done. `point == nil` (detail view, Reduce Motion) skips the
+    /// spatial confetti but keeps sound + status.
+    func complete(_ task: TaskItem, at point: CGPoint? = nil) {
+        guard !completingTaskIds.contains(task.id), task.status != .done else { return }
+        completingTaskIds.insert(task.id)
+        CompletionSound.play()
+        if let point, Preferences.shared.confettiEnabled,
+           !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            confettiBursts.append(ConfettiBurst(origin: point))
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let self else { return }
+            // Re-fetch: the task may have been archived/run meanwhile.
+            if let live = self.store.task(task.id), live.status != .done {
+                self.store.setStatus(task.id, .done)
+            }
+            self.completingTaskIds.remove(task.id)
+            self.undoToast = UndoToast(taskId: task.id, title: task.title)
+            try? await Task.sleep(for: .seconds(5))
+            if self.undoToast?.taskId == task.id { self.undoToast = nil }
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            self?.confettiBursts.removeAll { $0.age > 1.2 }
+        }
+    }
+
+    func undoComplete() {
+        guard let toast = undoToast else { return }
+        undoToast = nil
+        store.setStatus(toast.taskId, .ready)
+    }
+
+    /// "Tidy": drop all dragged positions → animated reflow by current sort.
+    func tidyCanvas() {
+        store.clearAllCanvasPositions()
     }
 
     // MARK: - Card actions (FR23)

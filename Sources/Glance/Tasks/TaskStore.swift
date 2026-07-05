@@ -148,6 +148,74 @@ final class TaskStore: ObservableObject {
         record(ApprovalRecord(taskId: id, gate: .inboxAccept, decision: .approved))
     }
 
+    // MARK: - Canvas positions
+
+    /// Persist a card's dragged canvas position. Deliberately does NOT go
+    /// through `update()` — drag noise must not bump `updatedAt` (it is the
+    /// doneTasks sort fallback) and must not touch enrich fields.
+    func setCanvasPosition(_ id: UUID, x: Double?, y: Double?) {
+        guard let idx = tasks.firstIndex(where: { $0.id == id }) else { return }
+        tasks[idx].canvasX = x
+        tasks[idx].canvasY = y
+        persist()
+    }
+
+    /// "Tidy" — drop every persisted position so the flow layout re-arranges
+    /// all cards by the current sort. One persist for the whole sweep.
+    func clearAllCanvasPositions() {
+        var changed = false
+        for i in tasks.indices where tasks[i].canvasX != nil || tasks[i].canvasY != nil {
+            tasks[i].canvasX = nil
+            tasks[i].canvasY = nil
+            changed = true
+        }
+        if changed { persist() }
+    }
+
+    // MARK: - Momentum (streaks computed from completedAt — no extra state)
+
+    struct MomentumStats: Equatable {
+        var doneToday = 0
+        var currentStreak = 0    // consecutive days ending today/yesterday with ≥1 completion
+        var bestStreak = 0
+        var totalDone = 0
+    }
+
+    func momentumStats(now: Date = Date(), calendar: Calendar = .current) -> MomentumStats {
+        let stamps = tasks.compactMap { $0.status == .cancelled ? nil : $0.completedAt }
+        guard !stamps.isEmpty else { return MomentumStats() }
+        let days = Set(stamps.map { calendar.startOfDay(for: $0) }).sorted()
+        let today = calendar.startOfDay(for: now)
+
+        var stats = MomentumStats()
+        stats.totalDone = stamps.count
+        stats.doneToday = stamps.filter { calendar.isDate($0, inSameDayAs: now) }.count
+
+        // Best streak: longest run of consecutive days.
+        var run = 1
+        for i in 1..<days.count {
+            let next = calendar.date(byAdding: .day, value: 1, to: days[i - 1])
+            run = (days[i] == next) ? run + 1 : 1
+            stats.bestStreak = max(stats.bestStreak, run)
+        }
+        stats.bestStreak = max(stats.bestStreak, 1)
+
+        // Current streak: walk back from today (a yesterday-anchored streak
+        // still counts — today just hasn't had a completion yet).
+        var cursor = today
+        if !days.contains(cursor) {
+            guard let y = calendar.date(byAdding: .day, value: -1, to: cursor),
+                  days.contains(y) else { return stats }
+            cursor = y
+        }
+        while days.contains(cursor) {
+            stats.currentStreak += 1
+            guard let prev = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = prev
+        }
+        return stats
+    }
+
     /// Pin a task at a board position (FR41). AI reflows around pins.
     func pin(_ id: UUID, at position: Int) {
         guard var t = task(id) else { return }

@@ -38,9 +38,34 @@ struct TaskItem: Identifiable, Codable, Equatable {
     /// AI-written handoff prompt for pasting into an external assistant
     /// (code tasks). User edits win; optional so old JSON decodes.
     var handoffPrompt: String?
+    /// Spatial canvas position (top-left, canvas coords). nil = auto-placed
+    /// by the flow layout; set only by a user drag. Optional so old JSON decodes.
+    var canvasX: Double?
+    var canvasY: Double?
+    /// Checklist steps. nil = feature unused on this task (old JSON decodes).
+    var steps: [TaskStep]?
 
     var isPinned: Bool { userPinnedRank != nil }
     var isRunnable: Bool { status == .ready || status == .failed }
+    var stepList: [TaskStep] { steps ?? [] }
+    var stepsDone: Int { stepList.filter(\.done).count }
+    var canvasPosition: CGPoint? {
+        get {
+            guard let x = canvasX, let y = canvasY else { return nil }
+            return CGPoint(x: x, y: y)
+        }
+        set {
+            canvasX = newValue.map { Double($0.x) }
+            canvasY = newValue.map { Double($0.y) }
+        }
+    }
+}
+
+/// One checklist step on a task (canvas card progress bar + detail editor).
+struct TaskStep: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var text: String
+    var done: Bool = false
 }
 
 enum TaskStatus: String, Codable, CaseIterable {

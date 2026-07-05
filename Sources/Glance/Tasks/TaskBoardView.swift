@@ -1,14 +1,15 @@
 import SwiftUI
 
 /// Task board app window (PRD V2 F1), light design (DS tokens).
-/// Layout: header (tabs + search) → quick-add → task list → footer.
-/// Selecting a task slides in the detail pane (edit, plan gate, run stream,
-/// review gate).
+/// Layout: floating tab pill over the active surface (spatial canvas / inbox
+/// list / done history / activity feed) → footer. Selecting a task swaps in
+/// the sidebar + detail pane (edit, plan gate, run stream, review gate).
 struct TaskBoardView: View {
     @ObservedObject var session: TaskBoardSession
     @ObservedObject var store: TaskStore
-    @FocusState private var quickAddFocused: Bool
-    @FocusState private var searchFocused: Bool
+
+    /// Clearance below the floating pill for the list-style tabs.
+    static let pillInset: CGFloat = 60
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,13 +26,22 @@ struct TaskBoardView: View {
                     TaskDetailView(session: session, task: task)
                         .id(task.id)
                 }
-            } else if session.tab == .activity {
-                header
-                activityView
             } else {
-                header
-                quickAddRow
-                list
+                ZStack(alignment: .top) {
+                    switch session.tab {
+                    case .board:
+                        CanvasView(session: session, store: store)
+                    case .inbox:
+                        list.padding(.top, Self.pillInset)
+                    case .done:
+                        DoneHistoryView(session: session, store: store)
+                            .padding(.top, Self.pillInset)
+                    case .activity:
+                        activityView.padding(.top, Self.pillInset)
+                    }
+                    TabPill(session: session, store: store)
+                        .padding(.top, DS.Space.sm)
+                }
             }
             footer
         }
@@ -40,205 +50,16 @@ struct TaskBoardView: View {
         .foregroundStyle(DS.textPrimary)
     }
 
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: DS.Space.sm) {
-            Image(systemName: "checklist")
-                .font(DS.Typo.headline)
-                .foregroundStyle(DS.accentText)
-            tabBar
-
-            Spacer()
-
-            // Manual Composio pulls (read-only → Inbox).
-            if let src = session.pullingSource {
-                HStack(spacing: DS.Space.xxs) {
-                    ProgressView().controlSize(.mini)
-                    Text("Pulling \(src.rawValue)…").font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
-                }
-            } else {
-                Hover { hovering in
-                    Menu {
-                        Button("Pull from all") { session.pullAll() }
-                        Divider()
-                        ForEach(ComposioIngest.Source.allCases, id: \.self) { src in
-                            Button("Pull from \(src.rawValue)") { session.pull(src) }
-                        }
-                    } label: {
-                        Image(systemName: "tray.and.arrow.down")
-                            .font(DS.Typo.label)
-                            .foregroundStyle(DS.textSecondary)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .padding(DS.Space.xxs)
-                    .background(RoundedRectangle(cornerRadius: DS.Radius.small)
-                        .fill(hovering ? DS.surfaceHover : .clear))
-                }
-                .help("Fetch new work into the Inbox (read-only)")
-            }
-
-            if session.tab == .board {
-                Hover { hovering in
-                    Menu {
-                        ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
-                            Button(action: { session.sortMode = mode }) {
-                                HStack {
-                                    Text(mode.rawValue)
-                                    if session.sortMode == mode { Image(systemName: "checkmark") }
-                                }
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                            .font(DS.Typo.label)
-                            .foregroundStyle(session.sortMode == .aiRank ? DS.textSecondary : DS.accentText)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .padding(DS.Space.xxs)
-                    .background(RoundedRectangle(cornerRadius: DS.Radius.small)
-                        .fill(hovering ? DS.surfaceHover : .clear))
-                }
-                .help("Sort: \(session.sortMode.rawValue)")
-            }
-
-            if session.isPrioritizing {
-                HStack(spacing: DS.Space.xxs) {
-                    ProgressView().controlSize(.mini)
-                    Text("Prioritizing…").font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
-                }
-            } else {
-                Hover { hovering in
-                    Button(action: { session.schedulePrioritize(force: true) }) {
-                        Image(systemName: "wand.and.stars").font(DS.Typo.headline)
-                            .foregroundStyle(DS.textSecondary)
-                            .padding(DS.Space.xxs)
-                            .background(RoundedRectangle(cornerRadius: DS.Radius.small)
-                                .fill(hovering ? DS.surfaceHover : .clear))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .help("Re-prioritize with AI")
-            }
-
-            HStack(spacing: DS.Space.xxs) {
-                Image(systemName: "magnifyingglass")
-                    .font(DS.Typo.caption)
-                    .foregroundStyle(DS.textTertiary)
-                TextField("", text: $session.searchText,
-                          prompt: Text("Search").foregroundColor(DS.textTertiary))
-                    .textFieldStyle(.plain)
-                    .font(DS.Typo.body)
-                    .focused($searchFocused)
-            }
-            .frame(width: 160)
-            .dsField(focused: searchFocused)
-        }
-        .padding(.horizontal, DS.Space.md).padding(.top, DS.Space.md).padding(.bottom, DS.Space.xs)
-        .background(DS.bg)
-        .overlay(Divider().overlay(DS.divider), alignment: .bottom)
-    }
-
-    /// Custom segmented control: the system Picker can't render count badges.
-    private var tabBar: some View {
-        HStack(spacing: 2) {
-            ForEach(TaskBoardSession.Tab.allCases, id: \.self) { tab in
-                let selected = session.tab == tab
-                Hover { hovering in
-                    Button(action: { session.tab = tab }) {
-                        HStack(spacing: DS.Space.xxs) {
-                            Text(tab.rawValue)
-                                .font(selected ? DS.Typo.headline : DS.Typo.body)
-                                .foregroundStyle(selected ? DS.textPrimary : DS.textSecondary)
-                            if let n = tabCount(tab), n > 0 {
-                                Text(n > 99 ? "99+" : "\(n)")
-                                    .font(DS.Typo.overline)
-                                    .foregroundStyle(tab == .inbox ? DS.accentText : DS.textSecondary)
-                                    .padding(.horizontal, DS.Space.xxs)
-                                    .frame(minWidth: 15, minHeight: 15)
-                                    .background(Capsule().fill(tab == .inbox ? DS.accentSoft : DS.surfaceHover))
-                            }
-                        }
-                        .padding(.horizontal, DS.Space.xs + 2).padding(.vertical, DS.Space.xxs)
-                        .background(
-                            RoundedRectangle(cornerRadius: DS.Radius.small)
-                                .fill(selected ? DS.bg : (hovering ? DS.surfaceHover : .clear))
-                                .shadow(color: selected ? .black.opacity(0.06) : .clear, radius: 2, y: 1)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: DS.Radius.small)
-                                .strokeBorder(selected ? DS.border : .clear, lineWidth: 1)
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .padding(2)
-        .background(RoundedRectangle(cornerRadius: DS.Radius.small + 2).fill(DS.surface))
-    }
-
-    private func tabCount(_ tab: TaskBoardSession.Tab) -> Int? {
-        switch tab {
-        case .inbox: return store.inboxTasks().count
-        case .board: return store.boardTasks().count
-        case .done: return store.doneTasks().count
-        case .activity: return nil
-        }
-    }
-
-    // MARK: - Quick add (FR26)
-
-    private var quickAddRow: some View {
-        HStack(spacing: DS.Space.xs) {
-            Image(systemName: "plus")
-                .font(DS.Typo.label)
-                .foregroundStyle(DS.textTertiary)
-            TextField("", text: $session.quickAdd,
-                      prompt: Text("Add a task…").foregroundColor(DS.textTertiary))
-                .textFieldStyle(.plain)
-                .font(DS.Typo.body)
-                .tint(DS.accentText)
-                .focused($quickAddFocused)
-                .onSubmit { session.submitQuickAdd() }
-            Button(action: { session.startDecompose() }) {
-                Label("From prompt", systemImage: "text.badge.plus")
-                    .font(DS.Typo.caption)
-                    .foregroundStyle(DS.textSecondary)
-            }
-            .buttonStyle(.plain)
-            .help("Paste a braindump — AI splits it into tasks you confirm")
-        }
-        .padding(DS.Space.sm)
-        .background(RoundedRectangle(cornerRadius: DS.Radius.medium).fill(DS.bg))
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.medium)
-                .strokeBorder(quickAddFocused ? DS.accent : DS.border, lineWidth: 1)
-        )
-        .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.sm)
-        .onAppear { quickAddFocused = true }
-    }
-
-    // MARK: - List (FR21–23)
+    // MARK: - Inbox list (FR21–23; triage stays a list — canvas is for board)
 
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 let tasks = session.visibleTasks()
-                // Bulk ops (V2.2): accept the whole inbox / clear done.
-                if session.tab == .inbox && tasks.count > 1 {
+                // Bulk ops (V2.2): accept the whole inbox at once.
+                if tasks.count > 1 {
                     bulkBar("Accept all \(tasks.count)", icon: "checkmark.circle") {
                         for t in tasks { session.store.acceptFromInbox(t.id) }
-                    }
-                }
-                if session.tab == .done && tasks.contains(where: { $0.status == .done }) {
-                    bulkBar("Archive all done", icon: "archivebox") {
-                        for t in tasks where t.status == .done {
-                            session.store.setStatus(t.id, .archived)
-                        }
                     }
                 }
                 if tasks.isEmpty {
@@ -538,7 +359,7 @@ private struct TaskSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             let tasks = session.visibleTasks()
             HStack(spacing: DS.Space.xxs) {
-                Text(session.tab.rawValue.uppercased())
+                Text(TabPill.title(session.tab).uppercased())
                     .font(DS.Typo.overline).tracking(0.8)
                     .foregroundStyle(DS.textTertiary)
                 Text("\(tasks.count)")

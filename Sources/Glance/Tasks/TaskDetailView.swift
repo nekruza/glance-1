@@ -16,8 +16,12 @@ struct TaskDetailView: View {
     @State private var editingPrompt = false
     @State private var draftPrompt = ""
     @State private var promptCopied = false
+    @State private var newStepText = ""
+    @State private var showDuePicker = false
+    @State private var dueDraft = Date()
     @FocusState private var guidanceFocused: Bool
     @FocusState private var rejectFocused: Bool
+    @FocusState private var stepFieldFocused: Bool
 
     private var run: TaskRun? { session.selectedRun }
 
@@ -32,6 +36,7 @@ struct TaskDetailView: View {
                         duplicateBanner(dupId)
                     }
                     descriptionBlock
+                    stepsBlock
                     if task.taskKind == .code { promptBlock }
 
                     switch task.status {
@@ -58,6 +63,19 @@ struct TaskDetailView: View {
         HStack {
             BackButton(label: "Board") { session.selectedTaskId = nil }
             Spacer()
+            // Manual completion — same celebration path as the canvas checkbox
+            // (sound + status), minus the spatial confetti.
+            if ![.done, .archived, .cancelled].contains(task.status) {
+                Button(action: {
+                    session.complete(task)
+                    session.selectedTaskId = nil
+                }) {
+                    Label("Mark done", systemImage: "checkmark.circle")
+                }
+                .buttonStyle(DSSecondaryButtonStyle())
+                .foregroundStyle(DS.accentText)
+                .help("Complete this task")
+            }
             if task.taskKind == .code {
                 Button(action: { session.generateHandoffPrompt(task) }) {
                     HStack(spacing: DS.Space.xxs) {
@@ -107,6 +125,7 @@ struct TaskDetailView: View {
             chip(task.aiPriority.rawValue)
             chip(task.status.display)
             kindPicker
+            duePicker
             if let e = task.estimate { chip("~\(e.rawValue)") }
             ForEach(task.labels, id: \.self) { chip($0) }
             Spacer()
@@ -229,6 +248,139 @@ struct TaskDetailView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+    }
+
+    /// Due date, finally editable (the model field predates the UI).
+    private var duePicker: some View {
+        Button(action: {
+            dueDraft = task.dueAt ?? Calendar.current.startOfDay(for: Date())
+            showDuePicker = true
+        }) {
+            pickerChip(nil, isSet: task.dueAt != nil) {
+                if let due = task.dueAt {
+                    let d = TaskCanvasCard.dueLabel(due)
+                    Label(d.text, systemImage: "clock").foregroundStyle(d.color)
+                } else {
+                    Label("due…", systemImage: "clock")
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showDuePicker, arrowEdge: .bottom) {
+            VStack(spacing: DS.Space.sm) {
+                DatePicker("", selection: $dueDraft, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                HStack {
+                    if task.dueAt != nil {
+                        Button("Clear") {
+                            var t = task
+                            t.dueAt = nil
+                            session.store.update(t)
+                            showDuePicker = false
+                        }
+                        .buttonStyle(DSSecondaryButtonStyle())
+                    }
+                    Spacer()
+                    Button("Set due date") {
+                        var t = task
+                        t.dueAt = dueDraft
+                        session.store.update(t)
+                        showDuePicker = false
+                    }
+                    .buttonStyle(DSPrimaryButtonStyle())
+                }
+            }
+            .padding(DS.Space.sm)
+            .frame(width: 260)
+        }
+        .help("Due date — shows on the canvas card")
+    }
+
+    // MARK: - Steps (checklist → progress bar on the canvas card)
+
+    private var stepsBlock: some View {
+        VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
+            HStack {
+                overline("Steps")
+                if !task.stepList.isEmpty {
+                    Text("\(task.stepsDone)/\(task.stepList.count)")
+                        .font(DS.Typo.overline)
+                        .foregroundStyle(DS.textTertiary)
+                }
+                Spacer()
+            }
+            ForEach(task.stepList) { step in
+                stepRow(step)
+            }
+            HStack(spacing: DS.Space.xs) {
+                Image(systemName: "plus")
+                    .font(DS.Typo.caption)
+                    .foregroundStyle(DS.textTertiary)
+                TextField("", text: $newStepText,
+                          prompt: Text("Add a step…").foregroundColor(DS.textTertiary))
+                    .textFieldStyle(.plain)
+                    .font(DS.Typo.body)
+                    .focused($stepFieldFocused)
+                    .onSubmit(addStep)
+            }
+            .padding(.vertical, DS.Space.xxs)
+        }
+    }
+
+    private func stepRow(_ step: TaskStep) -> some View {
+        Hover { hovering in
+            HStack(spacing: DS.Space.xs) {
+                Button(action: { toggleStep(step) }) {
+                    Image(systemName: step.done ? "checkmark.circle.fill" : "circle")
+                        .font(DS.Typo.headline)
+                        .foregroundStyle(step.done ? DS.accentText : DS.textTertiary)
+                }
+                .buttonStyle(.plain)
+                Text(step.text)
+                    .font(DS.Typo.body)
+                    .foregroundStyle(step.done ? DS.textTertiary : DS.textPrimary)
+                    .strikethrough(step.done, color: DS.textTertiary)
+                Spacer()
+                if hovering {
+                    Button(action: { removeStep(step) }) {
+                        Image(systemName: "xmark")
+                            .font(DS.Typo.caption)
+                            .foregroundStyle(DS.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete step")
+                }
+            }
+            .padding(.horizontal, DS.Space.xxs).padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                .fill(hovering ? DS.surfaceHover : .clear))
+        }
+    }
+
+    private func addStep() {
+        let text = newStepText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        var t = task
+        t.steps = t.stepList + [TaskStep(text: text)]
+        session.store.update(t)
+        newStepText = ""
+        stepFieldFocused = true
+    }
+
+    private func toggleStep(_ step: TaskStep) {
+        var t = task
+        var steps = t.stepList
+        guard let idx = steps.firstIndex(where: { $0.id == step.id }) else { return }
+        steps[idx].done.toggle()
+        t.steps = steps
+        session.store.update(t)
+    }
+
+    private func removeStep(_ step: TaskStep) {
+        var t = task
+        t.steps = t.stepList.filter { $0.id != step.id }
+        session.store.update(t)
     }
 
     /// FR33: never auto-merged — user decides.

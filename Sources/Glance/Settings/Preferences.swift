@@ -24,6 +24,9 @@ final class Preferences: ObservableObject {
         static let schedMode = "sched.mode"
         static let schedDailyMinutes = "sched.dailyMinutes"
         static let schedLastRun = "sched.lastRun"
+        static let completionSound = "tasks.completionSound"
+        static let completionSoundName = "tasks.completionSoundName"
+        static let confetti = "tasks.confetti"
     }
 
     enum ScheduleMode: String, CaseIterable {
@@ -115,6 +118,19 @@ final class Preferences: ObservableObject {
         set { defaults.set(newValue, forKey: Keys.schedLastRun) }
     }
 
+    /// Play a system sound when a task is completed by hand.
+    @Published var completionSoundEnabled: Bool {
+        didSet { defaults.set(completionSoundEnabled, forKey: Keys.completionSound) }
+    }
+    /// NSSound system-sound name for the completion chime.
+    @Published var completionSoundName: String {
+        didSet { defaults.set(completionSoundName, forKey: Keys.completionSoundName) }
+    }
+    /// Confetti burst on completion (auto-suppressed by Reduce Motion).
+    @Published var confettiEnabled: Bool {
+        didSet { defaults.set(confettiEnabled, forKey: Keys.confetti) }
+    }
+
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
     @Published var overlayOpacity: Double {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
@@ -189,6 +205,11 @@ final class Preferences: ObservableObject {
         schedMode = ScheduleMode(rawValue: defaults.string(forKey: Keys.schedMode) ?? "") ?? .daily
         schedDailyMinutes = defaults.object(forKey: Keys.schedDailyMinutes) == nil
             ? 9 * 60 : defaults.integer(forKey: Keys.schedDailyMinutes)
+        completionSoundEnabled = defaults.object(forKey: Keys.completionSound) == nil
+            ? true : defaults.bool(forKey: Keys.completionSound)
+        completionSoundName = defaults.string(forKey: Keys.completionSoundName) ?? "Glass"
+        confettiEnabled = defaults.object(forKey: Keys.confetti) == nil
+            ? true : defaults.bool(forKey: Keys.confetti)
     }
 }
 

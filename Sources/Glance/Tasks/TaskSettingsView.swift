@@ -238,6 +238,27 @@ struct TaskSettingsView: View {
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
                     .onChange(of: launchAtLogin) { _, v in LaunchAtLogin.set(v) }
             }
+            Divider().overlay(DS.divider)
+            row("Completion sound", "A little chime when you check a task off") {
+                HStack(spacing: DS.Space.xs) {
+                    if prefs.completionSoundEnabled {
+                        Picker("", selection: $prefs.completionSoundName) {
+                            ForEach(CompletionSound.choices, id: \.self) { Text($0) }
+                        }
+                        .labelsHidden().controlSize(.small).frame(width: 90)
+                        .onChange(of: prefs.completionSoundName) { _, name in
+                            CompletionSound.play(named: name) // preview
+                        }
+                    }
+                    Toggle("", isOn: $prefs.completionSoundEnabled)
+                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+            }
+            Divider().overlay(DS.divider)
+            row("Confetti", "Celebrate completions on the canvas (off automatically with Reduce Motion)") {
+                Toggle("", isOn: $prefs.confettiEnabled)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
         }
     }
 

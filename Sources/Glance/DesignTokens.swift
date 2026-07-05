@@ -42,6 +42,36 @@ enum DS {
 
     static let codeBg = Color(hexRGB: "F6F8FA")!
 
+    /// Canvas dot-grid dots.
+    static let dot = border
+
+    /// Priority indicator dot on canvas cards (matches the mockup: P0 red,
+    /// P1 amber, P2/P3 quiet gray).
+    static func priorityDot(_ p: TaskPriority) -> Color {
+        switch p {
+        case .p0: return danger
+        case .p1: return Color(hexRGB: "F59E0B")!
+        case .p2, .p3: return textTertiary
+        }
+    }
+
+    // MARK: - Motion (gate every use behind accessibilityReduceMotion)
+
+    /// Default playful spring — card drops, reflows, meter fills.
+    static let spring = Animation.spring(response: 0.35, dampingFraction: 0.75)
+    /// Snappier pop — checkbox, new-card pop-in.
+    static let pop = Animation.spring(response: 0.25, dampingFraction: 0.6)
+
+    // MARK: - Elevation
+
+    enum Shadow {
+        static let card = Color.black.opacity(0.07)
+        static let cardRadius: CGFloat = 8
+        static let cardY: CGFloat = 2
+        static let cardHoverRadius: CGFloat = 14
+        static let cardHoverY: CGFloat = 5
+    }
+
     // MARK: - Spacing (8pt grid)
 
     enum Space {
@@ -147,6 +177,8 @@ extension View {
 func dsBadge(_ text: String, tint: Color, soft: Color) -> some View {
     Text(text)
         .font(DS.Typo.caption)
+        .lineLimit(1)
+        .fixedSize()          // a badge never wraps mid-word
         .foregroundStyle(tint)
         .padding(.horizontal, DS.Space.xs)
         .padding(.vertical, 2)
