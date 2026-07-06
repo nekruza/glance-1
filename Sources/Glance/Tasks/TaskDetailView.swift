@@ -11,6 +11,8 @@ struct TaskDetailView: View {
 
     @State private var guidance = ""
     @State private var rejectReason = ""
+    @State private var editingTitle = false
+    @State private var draftTitle = ""
     @State private var editingDescription = false
     @State private var draftDescription = ""
     @State private var editingPrompt = false
@@ -22,6 +24,7 @@ struct TaskDetailView: View {
     @FocusState private var guidanceFocused: Bool
     @FocusState private var rejectFocused: Bool
     @FocusState private var stepFieldFocused: Bool
+    @FocusState private var titleFocused: Bool
 
     private var run: TaskRun? { session.selectedRun }
 
@@ -76,6 +79,7 @@ struct TaskDetailView: View {
                                 .fill(hovering ? DS.surfaceHover : .clear))
                     }
                     .buttonStyle(.plain)
+                    .pointerCursor()
                 }
                 .help("Open as full page")
             }
@@ -124,6 +128,7 @@ struct TaskDetailView: View {
                         .foregroundStyle(DS.danger)
                 }
                 .buttonStyle(DSSecondaryButtonStyle())
+                .help("Stop the running agent")
             }
         }
         .padding(.horizontal, DS.Space.md).padding(.top, DS.Space.md).padding(.bottom, DS.Space.xs)
@@ -133,8 +138,46 @@ struct TaskDetailView: View {
     private var titleBlock: some View {
         HStack(spacing: DS.Space.xs) {
             Image(systemName: task.source.icon).font(DS.Typo.headline).foregroundStyle(DS.textTertiary)
-            Text(task.title).font(DS.Typo.title)
+            if editingTitle {
+                TextField("", text: $draftTitle)
+                    .textFieldStyle(.plain)
+                    .font(DS.Typo.title)
+                    .focused($titleFocused)
+                    .onSubmit(commitTitle)
+                    .onChange(of: titleFocused) { _, focused in
+                        // Commit on blur too, so clicking away saves the edit.
+                        if !focused { commitTitle() }
+                    }
+            } else {
+                Hover { hovering in
+                    HStack(spacing: DS.Space.xs) {
+                        Text(task.title).font(DS.Typo.title)
+                        Image(systemName: "pencil")
+                            .font(DS.Typo.label)
+                            .foregroundStyle(DS.textTertiary)
+                            .opacity(hovering ? 1 : 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .pointerCursor()
+                .onTapGesture {
+                    draftTitle = task.title
+                    editingTitle = true
+                    titleFocused = true
+                }
+                .help("Click to rename")
+            }
         }
+    }
+
+    private func commitTitle() {
+        guard editingTitle else { return }
+        editingTitle = false
+        let text = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != task.title else { return }
+        var t = task
+        t.title = text
+        session.store.update(t)
     }
 
     private var metaRow: some View {

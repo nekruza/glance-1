@@ -123,11 +123,13 @@ struct DSPrimaryButtonStyle: ButtonStyle {
                           ? (configuration.isPressed ? DS.accent.opacity(0.75) : DS.accent)
                           : DS.surface)
             )
+            .pointerCursor(enabled: isEnabled)
     }
 }
 
 /// Neutral bordered button: white, 1px border, hover fill.
 struct DSSecondaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -144,6 +146,34 @@ struct DSSecondaryButtonStyle: ButtonStyle {
                     .strokeBorder(DS.border, lineWidth: 1)
             )
             .onHover { hovering = $0 }
+            .pointerCursor(enabled: isEnabled)
+    }
+}
+
+extension View {
+    /// Show the pointing-hand cursor on hover — SwiftUI buttons on macOS don't
+    /// by default. Disabled controls keep the arrow. Push/pop is balanced by
+    /// popping on exit *and* on disappear so a view removed mid-hover can't
+    /// leave the hand cursor stuck.
+    func pointerCursor(enabled: Bool = true) -> some View {
+        modifier(PointerCursor(enabled: enabled))
+    }
+}
+
+private struct PointerCursor: ViewModifier {
+    let enabled: Bool
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if hovering && enabled {
+                    if !pushed { NSCursor.pointingHand.push(); pushed = true }
+                } else if pushed {
+                    NSCursor.pop(); pushed = false
+                }
+            }
+            .onDisappear { if pushed { NSCursor.pop(); pushed = false } }
     }
 }
 
