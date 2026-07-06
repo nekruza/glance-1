@@ -77,10 +77,10 @@ struct TabPill: View {
         }
     }
 
-    /// Board reads as "Canvas" in the new design; the enum rawValue stays
+    /// Board reads as "Todo" in the new design; the enum rawValue stays
     /// untouched (persistence + logic depend on it).
     static func title(_ tab: TaskBoardSession.Tab) -> String {
-        tab == .board ? "Canvas" : tab.rawValue
+        tab == .board ? "Todo" : tab.rawValue
     }
 
     private func tabCount(_ tab: TaskBoardSession.Tab) -> Int? {

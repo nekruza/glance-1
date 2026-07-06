@@ -37,24 +37,32 @@ struct TaskDetailView: View {
     /// Calendar-sourced or "meeting"-labelled tasks get the prep-notes tools.
     private var isMeeting: Bool { task.helper == .prepNotes }
 
+    /// Reference-quality reading width — keeps long lines scannable instead
+    /// of stretching edge-to-edge in a wide drawer/full page.
+    private static let contentWidth: CGFloat = 680
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             headerBar
             ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.md) {
-                    titleBlock
-                    metaRow
+                VStack(alignment: .leading, spacing: DS.Space.lg) {
+                    VStack(alignment: .leading, spacing: DS.Space.sm) {
+                        titleBlock
+                        metaRow
+                    }
                     if let dupId = task.possibleDuplicateOf {
                         duplicateBanner(dupId)
                     }
                     descriptionBlock
+                    // One AI-output helper per task, routed by type — the
+                    // card component (below) makes every type look the same
+                    // shape even though the content differs.
                     switch task.helper {
                     case .prepNotes: prepBlock
-                    case .handoffPrompt: EmptyView() // promptBlock below, after steps
+                    case .handoffPrompt: promptBlock
                     default: helperBlock
                     }
                     stepsBlock
-                    if task.helper == .handoffPrompt { promptBlock }
 
                     switch task.status {
                     case .awaitingPlanApproval: planGate
@@ -67,10 +75,12 @@ struct TaskDetailView: View {
 
                     runHistory
                 }
-                .padding(.horizontal, DS.Space.md).padding(.vertical, DS.Space.sm)
+                .padding(.horizontal, DS.Space.lg).padding(.vertical, DS.Space.md)
+                .frame(maxWidth: Self.contentWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: .infinity)
+            .background(DS.surface.opacity(0.4))
         }
     }
 
@@ -230,22 +240,57 @@ struct TaskDetailView: View {
         session.store.update(t)
     }
 
+    /// Two rows: properties (priority/status/kind/due/estimate — what this
+    /// task IS) on top, then tags + assignment (who/what runs it) below,
+    /// visually distinct so the chip wall stops reading as one undifferentiated
+    /// mass.
     private var metaRow: some View {
-        WrapLayout(spacing: DS.Space.xs) {
-            chip(task.aiPriority.rawValue)
-            chip(task.status.display)
-            kindPicker
-            duePicker
-            if let e = task.estimate { chip("~\(e.rawValue)") }
-            ForEach(task.labels, id: \.self) { chip($0) }
-            // Repo only matters for code tasks — everything else runs in a
-            // scratch workspace and needs no repo.
-            if task.taskKind == .code {
-                repoPicker
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            WrapLayout(spacing: DS.Space.xs) {
+                statusBadge
+                kindPicker
+                duePicker
+                if let e = task.estimate { chip("~\(e.rawValue)") }
             }
-            agentPicker
-            modelPicker
+            WrapLayout(spacing: DS.Space.xs) {
+                ForEach(task.labels, id: \.self) { tagChip($0) }
+                // Repo only matters for code tasks — everything else runs in
+                // a scratch workspace and needs no repo.
+                if task.taskKind == .code {
+                    repoPicker
+                }
+                agentPicker
+                modelPicker
+            }
         }
+    }
+
+    /// Priority dot + status text as one pill — the two facts read together
+    /// ("how urgent, what state") instead of as two separate chips.
+    private var statusBadge: some View {
+        HStack(spacing: DS.Space.xxs) {
+            Circle().fill(DS.priorityDot(task.aiPriority)).frame(width: 6, height: 6)
+            Text(task.aiPriority.rawValue)
+            Text("·").foregroundStyle(DS.textTertiary)
+            Text(task.status.display)
+        }
+        .font(DS.Typo.caption)
+        .fixedSize()
+        .foregroundStyle(DS.textSecondary)
+        .padding(.horizontal, DS.Space.xs).padding(.vertical, 3)
+        .background(Capsule().fill(DS.surface))
+        .overlay(Capsule().strokeBorder(DS.border, lineWidth: 1))
+    }
+
+    /// Tag chips (user labels) get a quieter, outline-only treatment —
+    /// visually distinct from the solid property/picker chips above.
+    private func tagChip(_ text: String) -> some View {
+        Text(text)
+            .font(DS.Typo.caption)
+            .fixedSize()
+            .foregroundStyle(DS.textTertiary)
+            .padding(.horizontal, DS.Space.xxs + 2).padding(.vertical, 2)
+            .overlay(Capsule().strokeBorder(DS.divider, lineWidth: 1))
     }
 
     /// Skill profile executing this task (AI-routed; user override wins).
@@ -403,22 +448,14 @@ struct TaskDetailView: View {
             .padding(DS.Space.sm)
             .frame(width: 260)
         }
-        .help("Due date — shows on the canvas card")
+        .help("Due date — shows on the Todo card")
     }
 
     // MARK: - Steps (checklist → progress bar on the canvas card)
 
     private var stepsBlock: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
-            HStack {
-                overline("Steps")
-                if !task.stepList.isEmpty {
-                    Text("\(task.stepsDone)/\(task.stepList.count)")
-                        .font(DS.Typo.overline)
-                        .foregroundStyle(DS.textTertiary)
-                }
-                Spacer()
-            }
+        sectionCard(icon: "checklist", title: "Steps", accent: false, aiFilled: false,
+                    trailingText: task.stepList.isEmpty ? nil : "\(task.stepsDone)/\(task.stepList.count)") {
             ForEach(task.stepList) { step in
                 stepRow(step)
             }
@@ -515,27 +552,15 @@ struct TaskDetailView: View {
         }
     }
 
+    /// Reference material — what the task IS, not what to do about it.
+    /// Neutral card so it recedes behind the AI-output card below it.
     private var descriptionBlock: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
-            HStack {
-                overline("Description")
-                if task.aiFilledFields.contains("description") {
-                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
-                        .help("AI-filled — edit freely, your version wins")
-                }
-                Spacer()
-                Button(editingDescription ? "Save" : "Edit") {
-                    if editingDescription {
-                        var t = task
-                        t.descriptionMD = draftDescription
-                        session.store.update(t)
-                    } else {
-                        draftDescription = task.descriptionMD
-                    }
-                    editingDescription.toggle()
-                }
-                .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
-            }
+        sectionCard(icon: task.source.icon, title: "Description", accent: false,
+                    aiFilled: task.aiFilledFields.contains("description"),
+                    editAction: { commitOrBeginEdit($editingDescription, $draftDescription, task.descriptionMD) {
+                        var t = task; t.descriptionMD = draftDescription; session.store.update(t)
+                    } },
+                    editing: editingDescription) {
             if editingDescription {
                 TextEditor(text: $draftDescription)
                     .font(DS.Typo.body)
@@ -557,32 +582,13 @@ struct TaskDetailView: View {
     /// (header button); then editable, copyable, regenerable.
     @ViewBuilder private var prepBlock: some View {
         if let notes = task.prepNotes {
-            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
-                HStack {
-                    overline("Meeting prep")
-                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
-                        .help("AI-written — edit freely, your version wins")
-                    Spacer()
-                    Button(prepCopied ? "Copied" : "Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(task.prepNotes ?? "", forType: .string)
-                        prepCopied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { prepCopied = false }
-                    }
-                    .buttonStyle(.plain).font(DS.Typo.label)
-                    .foregroundStyle(prepCopied ? DS.success : DS.accentText)
-                    Button(editingPrep ? "Save" : "Edit") {
-                        if editingPrep {
-                            var t = task
-                            t.prepNotes = draftPrep
-                            session.store.update(t)
-                        } else {
-                            draftPrep = notes
-                        }
-                        editingPrep.toggle()
-                    }
-                    .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
-                }
+            sectionCard(icon: TaskHelper.prepNotes.icon, title: TaskHelper.prepNotes.sectionTitle,
+                        accent: true, aiFilled: true,
+                        copyAction: { copy(notes, flag: $prepCopied) }, copied: prepCopied,
+                        editAction: { commitOrBeginEdit($editingPrep, $draftPrep, notes) {
+                            var t = task; t.prepNotes = draftPrep; session.store.update(t)
+                        } },
+                        editing: editingPrep) {
                 if editingPrep {
                     TextEditor(text: $draftPrep)
                         .font(DS.Typo.body)
@@ -593,9 +599,6 @@ struct TaskDetailView: View {
                     MarkdownText(text: notes, palette: .light)
                         .font(DS.Typo.body)
                         .textSelection(.enabled)
-                        .padding(DS.Space.xs)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
                 }
             }
         }
@@ -604,35 +607,17 @@ struct TaskDetailView: View {
     // MARK: - Helper draft (reply / draft / brief / approach)
 
     /// Type-appropriate helper output. Hidden until generated (header
-    /// button); then editable, copyable, regenerable.
+    /// button); then editable, copyable, regenerable. Same card shape as
+    /// prep notes and the handoff prompt — only the icon/title vary by type.
     @ViewBuilder private var helperBlock: some View {
         if let draft = task.helperDraft {
-            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
-                HStack {
-                    overline(task.helper.sectionTitle)
-                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
-                        .help("AI-written — edit freely, your version wins")
-                    Spacer()
-                    Button(helperCopied ? "Copied" : "Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(task.helperDraft ?? "", forType: .string)
-                        helperCopied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { helperCopied = false }
-                    }
-                    .buttonStyle(.plain).font(DS.Typo.label)
-                    .foregroundStyle(helperCopied ? DS.success : DS.accentText)
-                    Button(editingHelper ? "Save" : "Edit") {
-                        if editingHelper {
-                            var t = task
-                            t.helperDraft = draftHelper
-                            session.store.update(t)
-                        } else {
-                            draftHelper = draft
-                        }
-                        editingHelper.toggle()
-                    }
-                    .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
-                }
+            sectionCard(icon: task.helper.icon, title: task.helper.sectionTitle,
+                        accent: true, aiFilled: true,
+                        copyAction: { copy(draft, flag: $helperCopied) }, copied: helperCopied,
+                        editAction: { commitOrBeginEdit($editingHelper, $draftHelper, draft) {
+                            var t = task; t.helperDraft = draftHelper; session.store.update(t)
+                        } },
+                        editing: editingHelper) {
                 if editingHelper {
                     TextEditor(text: $draftHelper)
                         .font(DS.Typo.body)
@@ -643,9 +628,6 @@ struct TaskDetailView: View {
                     MarkdownText(text: draft, palette: .light)
                         .font(DS.Typo.body)
                         .textSelection(.enabled)
-                        .padding(DS.Space.xs)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
                 }
             }
         }
@@ -657,32 +639,13 @@ struct TaskDetailView: View {
     /// generated (header button); then editable, copyable, regenerable.
     @ViewBuilder private var promptBlock: some View {
         if let prompt = task.handoffPrompt {
-            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
-                HStack {
-                    overline("Prompt for your AI")
-                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
-                        .help("AI-written — edit freely, your version wins")
-                    Spacer()
-                    Button(promptCopied ? "Copied" : "Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(task.handoffPrompt ?? "", forType: .string)
-                        promptCopied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { promptCopied = false }
-                    }
-                    .buttonStyle(.plain).font(DS.Typo.label)
-                    .foregroundStyle(promptCopied ? DS.success : DS.accentText)
-                    Button(editingPrompt ? "Save" : "Edit") {
-                        if editingPrompt {
-                            var t = task
-                            t.handoffPrompt = draftPrompt
-                            session.store.update(t)
-                        } else {
-                            draftPrompt = prompt
-                        }
-                        editingPrompt.toggle()
-                    }
-                    .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
-                }
+            sectionCard(icon: TaskHelper.handoffPrompt.icon, title: TaskHelper.handoffPrompt.sectionTitle,
+                        accent: true, aiFilled: true,
+                        copyAction: { copy(prompt, flag: $promptCopied) }, copied: promptCopied,
+                        editAction: { commitOrBeginEdit($editingPrompt, $draftPrompt, prompt) {
+                            var t = task; t.handoffPrompt = draftPrompt; session.store.update(t)
+                        } },
+                        editing: editingPrompt) {
                 if editingPrompt {
                     TextEditor(text: $draftPrompt)
                         .font(DS.Typo.mono)
@@ -693,12 +656,80 @@ struct TaskDetailView: View {
                     MarkdownText(text: prompt, palette: .light)
                         .font(DS.Typo.body)
                         .textSelection(.enabled)
-                        .padding(DS.Space.xs)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
                 }
             }
         }
+    }
+
+    // MARK: - Section card (shared shape for description + every AI output)
+
+    /// One visual pattern for "a block of text about this task": neutral for
+    /// reference material (description), accent-tinted with a left-weighted
+    /// icon for AI-generated actionable output (prep/prompt/reply/draft/
+    /// brief/approach) — so every task type's helper looks like the same
+    /// kind of thing even though the content differs.
+    private func sectionCard<Content: View>(
+        icon: String, title: String, accent: Bool, aiFilled: Bool,
+        trailingText: String? = nil,
+        copyAction: (() -> Void)? = nil, copied: Bool = false,
+        editAction: (() -> Void)? = nil, editing: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            HStack(spacing: DS.Space.xxs) {
+                Image(systemName: icon)
+                    .font(DS.Typo.caption)
+                    .foregroundStyle(accent ? DS.accentText : DS.textTertiary)
+                Text(title.uppercased())
+                    .font(DS.Typo.overline).tracking(0.8)
+                    .foregroundStyle(accent ? DS.accentText : DS.textTertiary)
+                if aiFilled {
+                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
+                        .help("AI-written — edit freely, your version wins")
+                }
+                if let trailingText {
+                    Text(trailingText).font(DS.Typo.overline).foregroundStyle(DS.textTertiary)
+                }
+                Spacer()
+                if let copyAction {
+                    Button(copied ? "Copied" : "Copy", action: copyAction)
+                        .buttonStyle(.plain).font(DS.Typo.label)
+                        .foregroundStyle(copied ? DS.success : DS.accentText)
+                }
+                if let editAction {
+                    Button(editing ? "Save" : "Edit", action: editAction)
+                        .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
+                }
+            }
+            content()
+        }
+        .padding(DS.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.medium)
+            .fill(accent ? DS.accentSoft.opacity(0.5) : DS.bg))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.medium)
+            .strokeBorder(accent ? DS.accent.opacity(0.3) : DS.border, lineWidth: 1))
+        .compositingGroup() // fill+stroke in one pass — avoids a hairline seam
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium))
+    }
+
+    private func copy(_ text: String, flag: Binding<Bool>) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        flag.wrappedValue = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { flag.wrappedValue = false }
+    }
+
+    /// Edit/Save toggle shared by every AI-output card: entering edit mode
+    /// seeds the draft from current text, saving calls `commit`.
+    private func commitOrBeginEdit(_ editing: Binding<Bool>, _ draft: Binding<String>,
+                                   _ current: String, commit: () -> Void) {
+        if editing.wrappedValue {
+            commit()
+        } else {
+            draft.wrappedValue = current
+        }
+        editing.wrappedValue.toggle()
     }
 
     // MARK: - Plan gate (FR44.2)

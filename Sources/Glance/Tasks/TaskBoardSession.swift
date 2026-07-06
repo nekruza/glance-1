@@ -273,9 +273,30 @@ final class TaskBoardSession: ObservableObject {
         let text = quickAdd.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         quickAdd = ""
-        let task = store.add(TaskItem(title: text, source: .manual))
-        lastCreatedTaskId = task.id
-        enrich(task)
+        createTask(title: text)
+    }
+
+    /// Full create path (CaptureCard): title is required, everything else is
+    /// optional. When `enrich` is true (default), whatever the user leaves
+    /// blank gets AI-drafted from the title alone (description/labels/kind/
+    /// estimate/agent — only fields not already set here); false = exactly
+    /// what was typed, no AI call.
+    @discardableResult
+    func createTask(title: String, description: String = "", labels: [String] = [],
+                    agentId: UUID? = nil, runModel: String? = nil,
+                    dueAt: Date? = nil, enrich shouldEnrich: Bool = true) -> TaskItem? {
+        let text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        var t = TaskItem(title: text, source: .manual)
+        t.descriptionMD = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        t.labels = labels
+        t.agentId = agentId
+        t.runModel = runModel
+        t.dueAt = dueAt
+        let added = store.add(t)
+        lastCreatedTaskId = added.id
+        if shouldEnrich { enrich(added) }
+        return added
     }
 
     func startDecompose() {

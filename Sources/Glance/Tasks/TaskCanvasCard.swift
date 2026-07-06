@@ -305,8 +305,12 @@ struct TaskCanvasCard: View {
             Button(action: action) {
                 Image(systemName: symbol).font(DS.Typo.label)
                     .foregroundStyle(hovering ? DS.textPrimary : DS.textSecondary)
+                    .padding(DS.Space.xxs)
+                    .background(Circle().fill(hovering ? DS.surfaceHover : .clear))
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .pointerCursor()
         }
         .help(help)
     }

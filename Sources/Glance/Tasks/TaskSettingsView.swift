@@ -314,7 +314,7 @@ struct TaskSettingsView: View {
                 }
             }
             Divider().overlay(DS.divider)
-            row("Confetti", "Celebrate completions on the canvas (off automatically with Reduce Motion)") {
+            row("Confetti", "Celebrate completions on Todo (off automatically with Reduce Motion)") {
                 Toggle("", isOn: $prefs.confettiEnabled)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
             }

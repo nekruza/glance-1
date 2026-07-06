@@ -153,7 +153,7 @@ struct CanvasView: View {
                         .foregroundStyle(DS.textSecondary)
                     Text(mode == .board
                          ? "Drag to arrange · click a title to open details"
-                         : "New work lands here · accept to move it onto the canvas")
+                         : "New work lands here · accept to move it onto Todo")
                         .font(DS.Typo.caption)
                         .foregroundStyle(DS.textSecondary)
                 }
@@ -223,7 +223,7 @@ struct CanvasView: View {
     @ViewBuilder private var emptyState: some View {
         VStack(spacing: DS.Space.sm) {
             if mode == .board {
-                Text("Clear canvas.")
+                Text("All done.")
                     .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(DS.textPrimary)
                 (Text("Everything's done, or nothing's captured yet.\nPress ")

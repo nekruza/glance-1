@@ -34,6 +34,9 @@ final class ComposioIngest {
         var sourceKey: String?
         var sourceURL: String?
         var agent: String?
+        /// ISO8601 datetime — calendar events set this to the meeting start
+        /// time so the card can show its date, not just the "<HH:mm>" title prefix.
+        var dueAt: String?
     }
 
     struct Result {
@@ -75,6 +78,9 @@ final class ComposioIngest {
                 t.estimate = TaskEstimate(rawValue: f.estimate ?? "")
                 if let key = f.sourceKey {
                     t.sourceRef = SourceRef(key: key, url: f.sourceURL)
+                }
+                if let dueAt = f.dueAt {
+                    t.dueAt = ISO8601DateFormatter().date(from: dueAt)
                 }
                 t.agentId = AgentProfile.idFor(name: f.agent)
                 t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
@@ -285,7 +291,8 @@ final class ComposioIngest {
         "taskKind": "code|writing|research|other", "estimate": \
         "minutes|hour|halfday|day+", "sourceKey": "<stable unique id, see below>", \
         "sourceURL": "<deep link if available, else null>", "agent": "<best-fit \
-        agent NAME from this roster, or null: \(TaskAI.agentRoster().replacingOccurrences(of: "\n", with: "; "))>"}. \
+        agent NAME from this roster, or null: \(TaskAI.agentRoster().replacingOccurrences(of: "\n", with: "; "))>", \
+        "dueAt": "<ISO8601 datetime, or null>"}. \
         Empty array [] if nothing found. If the app is NOT connected in Composio, \
         output the single line: NOT_CONNECTED.
         """
@@ -331,7 +338,8 @@ final class ComposioIngest {
             events already ended. Title format: "<HH:mm> <event title>". \
             Description: attendees, meet/zoom link if present, and the \
             agenda/description excerpt. taskKind = "other"; estimate = the \
-            event duration bucket. sourceKey = the calendar event id; \
+            event duration bucket. dueAt = the event's start datetime, ISO8601 \
+            with timezone. sourceKey = the calendar event id; \
             sourceURL = the event's htmlLink. \(outputRules)
             """
         }

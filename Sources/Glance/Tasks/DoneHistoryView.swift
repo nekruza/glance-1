@@ -35,7 +35,7 @@ struct DoneHistoryView: View {
                         Text("Nothing finished yet")
                             .font(DS.Typo.headline)
                             .foregroundStyle(DS.textSecondary)
-                        Text("Check off a task on the canvas and it lands here.")
+                        Text("Check off a task on Todo and it lands here.")
                             .font(DS.Typo.caption)
                             .foregroundStyle(DS.textTertiary)
                     }
@@ -153,7 +153,7 @@ struct DoneHistoryView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(DS.accentText)
-                        .help("Back onto the canvas as Ready")
+                        .help("Back onto Todo as Ready")
                     }
                 }
                 .padding(.horizontal, DS.Space.md)
