@@ -116,9 +116,22 @@ final class ComposioIngest {
         }
     }
 
+    /// Transport for other read-only Composio consumers (WorkContext digests).
+    /// Runs on the caller's queue so parallel fetches don't serialize behind
+    /// this instance's pull queue.
+    func runReadOnly(prompt: String, on queue: DispatchQueue,
+                     completion: @escaping (String?, String?) -> Void) {
+        Self.run(binaryPath: binaryPath, prompt: prompt, on: queue, completion: completion)
+    }
+
     /// Run one read-only Composio prompt; main-thread completion with stdout.
     private func runPrompt(_ prompt: String, completion: @escaping (String?, String?) -> Void) {
-        queue.async { [binaryPath] in
+        Self.run(binaryPath: binaryPath, prompt: prompt, on: queue, completion: completion)
+    }
+
+    private static func run(binaryPath: String, prompt: String, on queue: DispatchQueue,
+                            completion: @escaping (String?, String?) -> Void) {
+        queue.async {
             guard let configURL = Self.writeMCPConfig() else {
                 DispatchQueue.main.async { completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.") }
                 return
@@ -257,7 +270,7 @@ final class ComposioIngest {
         }
     }
 
-    private static let readOnlyRules = """
+    static let readOnlyRules = """
     STRICT READ-ONLY RULES: You may ONLY call read/list/search/get actions. \
     NEVER call any action that creates, updates, deletes, sends, posts, \
     transitions, comments, or modifies ANYTHING in any external system. If a \

@@ -18,6 +18,12 @@ struct TaskDetailView: View {
     @State private var editingPrompt = false
     @State private var draftPrompt = ""
     @State private var promptCopied = false
+    @State private var editingPrep = false
+    @State private var draftPrep = ""
+    @State private var prepCopied = false
+    @State private var editingHelper = false
+    @State private var draftHelper = ""
+    @State private var helperCopied = false
     @State private var newStepText = ""
     @State private var showDuePicker = false
     @State private var dueDraft = Date()
@@ -27,6 +33,9 @@ struct TaskDetailView: View {
     @FocusState private var titleFocused: Bool
 
     private var run: TaskRun? { session.selectedRun }
+
+    /// Calendar-sourced or "meeting"-labelled tasks get the prep-notes tools.
+    private var isMeeting: Bool { task.helper == .prepNotes }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -39,8 +48,13 @@ struct TaskDetailView: View {
                         duplicateBanner(dupId)
                     }
                     descriptionBlock
+                    switch task.helper {
+                    case .prepNotes: prepBlock
+                    case .handoffPrompt: EmptyView() // promptBlock below, after steps
+                    default: helperBlock
+                    }
                     stepsBlock
-                    if task.taskKind == .code { promptBlock }
+                    if task.helper == .handoffPrompt { promptBlock }
 
                     switch task.status {
                     case .awaitingPlanApproval: planGate
@@ -97,7 +111,25 @@ struct TaskDetailView: View {
                 .foregroundStyle(DS.accentText)
                 .help("Complete this task")
             }
-            if task.taskKind == .code {
+            if isMeeting {
+                Button(action: { session.generatePrepNotes(task) }) {
+                    HStack(spacing: DS.Space.xxs) {
+                        if session.prepBusyTaskIds.contains(task.id) {
+                            ProgressView().controlSize(.small)
+                            Text(session.prepPhase)
+                        } else {
+                            Label(task.prepNotes == nil ? "Prep notes" : "Regenerate notes",
+                                  systemImage: "note.text.badge.plus")
+                        }
+                    }
+                }
+                .buttonStyle(DSSecondaryButtonStyle())
+                .disabled(session.prepBusyTaskIds.contains(task.id))
+                .help("Fetches your last working day from Granola/Slack/Jira/GitHub "
+                      + "and writes grounded prep notes into this task"
+                      + (session.workContext.freshness().map { ". Context cached: \($0) ago" } ?? ""))
+            }
+            if task.helper == .handoffPrompt {
                 Button(action: { session.generateHandoffPrompt(task) }) {
                     HStack(spacing: DS.Space.xxs) {
                         if session.promptBusyTaskIds.contains(task.id) {
@@ -111,7 +143,25 @@ struct TaskDetailView: View {
                 }
                 .buttonStyle(DSSecondaryButtonStyle())
                 .disabled(session.promptBusyTaskIds.contains(task.id))
-                .help("AI writes a prompt you can paste into another assistant")
+                .help(TaskHelper.handoffPrompt.help)
+            }
+            if ![.prepNotes, .handoffPrompt].contains(task.helper) {
+                // Reply / draft / brief / approach — the type's helper action.
+                Button(action: { session.generateHelperDraft(task) }) {
+                    HStack(spacing: DS.Space.xxs) {
+                        if session.draftBusyTaskIds.contains(task.id) {
+                            ProgressView().controlSize(.small)
+                            Text("Writing…")
+                        } else {
+                            Label(task.helperDraft == nil
+                                  ? task.helper.buttonTitle : task.helper.regenerateTitle,
+                                  systemImage: task.helper.icon)
+                        }
+                    }
+                }
+                .buttonStyle(DSSecondaryButtonStyle())
+                .disabled(session.draftBusyTaskIds.contains(task.id))
+                .help(task.helper.help)
             }
             if task.isRunnable {
                 Button(action: { session.run(task) }) {
@@ -497,6 +547,106 @@ struct TaskDetailView: View {
                     .font(DS.Typo.body).foregroundStyle(DS.textTertiary)
             } else {
                 MarkdownText(text: task.descriptionMD, palette: .light).font(DS.Typo.body)
+            }
+        }
+    }
+
+    // MARK: - Meeting prep notes
+
+    /// AI-written prep notes for a meeting task. Hidden until generated
+    /// (header button); then editable, copyable, regenerable.
+    @ViewBuilder private var prepBlock: some View {
+        if let notes = task.prepNotes {
+            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
+                HStack {
+                    overline("Meeting prep")
+                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
+                        .help("AI-written — edit freely, your version wins")
+                    Spacer()
+                    Button(prepCopied ? "Copied" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(task.prepNotes ?? "", forType: .string)
+                        prepCopied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { prepCopied = false }
+                    }
+                    .buttonStyle(.plain).font(DS.Typo.label)
+                    .foregroundStyle(prepCopied ? DS.success : DS.accentText)
+                    Button(editingPrep ? "Save" : "Edit") {
+                        if editingPrep {
+                            var t = task
+                            t.prepNotes = draftPrep
+                            session.store.update(t)
+                        } else {
+                            draftPrep = notes
+                        }
+                        editingPrep.toggle()
+                    }
+                    .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
+                }
+                if editingPrep {
+                    TextEditor(text: $draftPrep)
+                        .font(DS.Typo.body)
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 180)
+                        .dsField()
+                } else {
+                    MarkdownText(text: notes, palette: .light)
+                        .font(DS.Typo.body)
+                        .textSelection(.enabled)
+                        .padding(DS.Space.xs)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
+                }
+            }
+        }
+    }
+
+    // MARK: - Helper draft (reply / draft / brief / approach)
+
+    /// Type-appropriate helper output. Hidden until generated (header
+    /// button); then editable, copyable, regenerable.
+    @ViewBuilder private var helperBlock: some View {
+        if let draft = task.helperDraft {
+            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
+                HStack {
+                    overline(task.helper.sectionTitle)
+                    Image(systemName: "sparkle").font(DS.Typo.overline).foregroundStyle(DS.accentText)
+                        .help("AI-written — edit freely, your version wins")
+                    Spacer()
+                    Button(helperCopied ? "Copied" : "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(task.helperDraft ?? "", forType: .string)
+                        helperCopied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { helperCopied = false }
+                    }
+                    .buttonStyle(.plain).font(DS.Typo.label)
+                    .foregroundStyle(helperCopied ? DS.success : DS.accentText)
+                    Button(editingHelper ? "Save" : "Edit") {
+                        if editingHelper {
+                            var t = task
+                            t.helperDraft = draftHelper
+                            session.store.update(t)
+                        } else {
+                            draftHelper = draft
+                        }
+                        editingHelper.toggle()
+                    }
+                    .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
+                }
+                if editingHelper {
+                    TextEditor(text: $draftHelper)
+                        .font(DS.Typo.body)
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 180)
+                        .dsField()
+                } else {
+                    MarkdownText(text: draft, palette: .light)
+                        .font(DS.Typo.body)
+                        .textSelection(.enabled)
+                        .padding(DS.Space.xs)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
+                }
             }
         }
     }

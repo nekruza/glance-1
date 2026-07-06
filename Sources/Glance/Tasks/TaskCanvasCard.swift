@@ -23,6 +23,8 @@ struct TaskCanvasCard: View {
 
     private var completing: Bool { session.completingTaskIds.contains(task.id) }
     private var matches: Bool { session.matchesSearch(task) }
+    /// Inbox cards triage instead of complete: the circle accepts onto the board.
+    private var isInbox: Bool { task.status == .inbox }
     /// All steps done but the task itself isn't — nudge, never auto-complete.
     private var stepsSuggestDone: Bool {
         !task.stepList.isEmpty && task.stepsDone == task.stepList.count
@@ -102,6 +104,10 @@ struct TaskCanvasCard: View {
 
     private var checkbox: some View {
         Button(action: {
+            if isInbox {
+                session.store.acceptFromInbox(task.id)
+                return
+            }
             // Burst at the checkbox centre, canvas coords.
             let point = CGPoint(x: origin.x + DS.Space.md + 14,
                                 y: origin.y + DS.Space.md + 14)
@@ -128,8 +134,8 @@ struct TaskCanvasCard: View {
         }
         .buttonStyle(.plain)
         .onHover { checkboxHover = $0 }
-        .help("Mark done")
-        .accessibilityLabel("Complete: \(task.title)")
+        .help(isInbox ? "Accept onto canvas" : "Mark done")
+        .accessibilityLabel(isInbox ? "Accept: \(task.title)" : "Complete: \(task.title)")
         .overlay(alignment: .bottom) {
             if stepsSuggestDone && !completing {
                 Text("Done?")
@@ -222,6 +228,7 @@ struct TaskCanvasCard: View {
             case .failed: return ("Failed", DS.danger, DS.dangerSoft)
             case .queued: return ("Queued", DS.textSecondary, DS.surface)
             case .blocked: return ("Blocked", DS.warning, DS.warningSoft)
+            case .inbox: return ("New", DS.accentText, DS.accentSoft)
             default: return ("", .clear, .clear)
             }
         }()
@@ -256,8 +263,10 @@ struct TaskCanvasCard: View {
             if task.isRunnable {
                 iconButton("play.circle", "Run with AI") { session.run(task) }
             }
-            iconButton(task.isPinned ? "pin.slash" : "pin",
-                       task.isPinned ? "Unpin" : "Pin to top") { session.togglePin(task) }
+            if !isInbox {
+                iconButton(task.isPinned ? "pin.slash" : "pin",
+                           task.isPinned ? "Unpin" : "Pin to top") { session.togglePin(task) }
+            }
             iconButton("moon.zzz", "Snooze 24h") { session.snooze(task) }
             iconButton("archivebox", "Archive") { session.archive(task) }
         }
@@ -270,16 +279,23 @@ struct TaskCanvasCard: View {
     }
 
     @ViewBuilder private var menuActions: some View {
+        if isInbox {
+            Button("Accept onto canvas") { session.store.acceptFromInbox(task.id) }
+        }
         if task.isRunnable {
             Button("Run with AI") { session.run(task) }
         }
-        Button(task.isPinned ? "Unpin" : "Pin to top") { session.togglePin(task) }
+        if !isInbox {
+            Button(task.isPinned ? "Unpin" : "Pin to top") { session.togglePin(task) }
+        }
         Button("Snooze 24h") { session.snooze(task) }
         Button("Archive") { session.archive(task) }
         Divider()
-        Button("Mark done") {
-            session.complete(task, at: CGPoint(x: origin.x + DS.Space.md + 14,
-                                               y: origin.y + DS.Space.md + 14))
+        if !isInbox {
+            Button("Mark done") {
+                session.complete(task, at: CGPoint(x: origin.x + DS.Space.md + 14,
+                                                   y: origin.y + DS.Space.md + 14))
+            }
         }
         Button("Open details") { session.selectedTaskId = task.id }
     }

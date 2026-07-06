@@ -13,6 +13,7 @@ struct TaskSettingsView: View {
         case repos = "Repos"
         case connections = "Connections"
         case schedule = "Schedule"
+        case activity = "Activity"
         case about = "About"
 
         var icon: String {
@@ -24,6 +25,7 @@ struct TaskSettingsView: View {
             case .repos: return "folder"
             case .connections: return "link"
             case .schedule: return "clock.arrow.2.circlepath"
+            case .activity: return "clock"
             case .about: return "info.circle"
             }
         }
@@ -118,7 +120,64 @@ struct TaskSettingsView: View {
         case .repos: reposSection
         case .connections: connectionsSection
         case .schedule: scheduleSection
+        case .activity: activitySection
         case .about: aboutSection
+        }
+    }
+
+    // MARK: - Activity (FR58–59)
+
+    private var activitySection: some View {
+        let events = session.activityFeed()
+        return VStack(alignment: .leading, spacing: DS.Space.sm) {
+            HStack {
+                Text("Every gate decision and run event, most recent first.")
+                    .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+                Spacer()
+                Button(action: {
+                    if let url = session.exportBoard() { NSWorkspace.shared.open(url) }
+                }) {
+                    Label("Export board + log", systemImage: "square.and.arrow.up")
+                        .font(DS.Typo.label)
+                }
+                .controlSize(.small)
+            }
+            Divider().overlay(DS.divider)
+
+            if events.isEmpty {
+                VStack(spacing: DS.Space.xs) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 28))
+                        .foregroundStyle(DS.textTertiary)
+                    Text("No activity yet")
+                        .font(DS.Typo.headline)
+                        .foregroundStyle(DS.textSecondary)
+                    Text("Run a task and every gate decision lands here.")
+                        .font(DS.Typo.caption)
+                        .foregroundStyle(DS.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(DS.Space.xl)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(events) { e in
+                        HStack(alignment: .top, spacing: DS.Space.xs) {
+                            Image(systemName: e.icon)
+                                .font(DS.Typo.caption)
+                                .foregroundStyle(DS.textSecondary)
+                                .frame(width: 16)
+                            Text(e.text)
+                                .font(DS.Typo.body)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(e.at.formatted(date: .abbreviated, time: .shortened))
+                                .font(DS.Typo.mono)
+                                .foregroundStyle(DS.textTertiary)
+                        }
+                        .padding(.vertical, DS.Space.xxs + 2)
+                        Divider().overlay(DS.divider)
+                    }
+                }
+            }
         }
     }
 

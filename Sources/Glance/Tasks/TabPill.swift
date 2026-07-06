@@ -21,7 +21,7 @@ struct TabPill: View {
 
             searchControl
 
-            if session.tab == .board { tidyControl }
+            if session.tab == .board || session.tab == .inbox { tidyControl }
 
             prioritizeControl
             pullControl
@@ -88,7 +88,6 @@ struct TabPill: View {
         case .inbox: return store.inboxTasks().count
         case .board: return store.boardTasks().count
         case .done: return store.doneTasks().count
-        case .activity: return nil
         }
     }
 

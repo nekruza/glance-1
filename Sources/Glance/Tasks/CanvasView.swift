@@ -1,12 +1,16 @@
 import SwiftUI
 
-/// The spatial canvas — the Board tab's new face. Cards float on a dot grid:
+/// The spatial canvas — Board and Inbox tabs. Cards float on a dot grid:
 /// undragged ones flow into columns (order = pins + current sort), dragged
-/// ones stay where the user left them until "Tidy". Overlays: confetti,
-/// momentum meter, undo toast, quick-capture card, hint pill.
+/// ones stay where the user left them until "Tidy". Board mode adds the
+/// completion overlays (confetti, momentum meter, undo toast, quick capture);
+/// inbox mode is a triage surface (accept / archive).
 struct CanvasView: View {
+    enum Mode { case board, inbox }
+
     @ObservedObject var session: TaskBoardSession
     @ObservedObject var store: TaskStore
+    var mode: Mode = .board
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Measured card heights (PreferenceKey) — flow layout input.
@@ -23,7 +27,7 @@ struct CanvasView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let tasks = session.canvasTasks()
+            let tasks = mode == .board ? session.canvasTasks() : session.inboxCanvasTasks()
             let positions = layout(tasks, width: geo.size.width)
             let contentHeight = max(geo.size.height,
                                     (positions.values.map { $0.y }.max() ?? 0) + 260)
@@ -68,8 +72,10 @@ struct CanvasView: View {
                                 removal: .scale(scale: 0.85).combined(with: .opacity)))
                         }
 
-                        ConfettiOverlay(bursts: session.confettiBursts)
-                            .frame(width: geo.size.width, height: contentHeight)
+                        if mode == .board {
+                            ConfettiOverlay(bursts: session.confettiBursts)
+                                .frame(width: geo.size.width, height: contentHeight)
+                        }
                     }
                     .frame(width: geo.size.width, height: contentHeight, alignment: .topLeading)
                 }
@@ -137,7 +143,7 @@ struct CanvasView: View {
     // MARK: - Overlays (viewport-fixed)
 
     @ViewBuilder private var overlays: some View {
-        // Hint pill, bottom-left (mockup).
+        // Hint pill, bottom-left (mockup); momentum meter on board only.
         VStack {
             Spacer()
             HStack {
@@ -145,7 +151,9 @@ struct CanvasView: View {
                     Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
                         .font(DS.Typo.caption)
                         .foregroundStyle(DS.textSecondary)
-                    Text("Drag to arrange · click a title to open details")
+                    Text(mode == .board
+                         ? "Drag to arrange · click a title to open details"
+                         : "New work lands here · accept to move it onto the canvas")
                         .font(DS.Typo.caption)
                         .foregroundStyle(DS.textSecondary)
                 }
@@ -156,13 +164,27 @@ struct CanvasView: View {
 
                 Spacer()
 
-                MomentumMeter(store: store)
+                if mode == .board {
+                    MomentumMeter(store: store)
+                } else if session.inboxCanvasTasks().count > 1 {
+                    // Bulk triage twin of the old list's "Accept all" bar.
+                    Button(action: {
+                        for t in session.inboxCanvasTasks() { store.acceptFromInbox(t.id) }
+                    }) {
+                        Label("Accept all \(session.inboxCanvasTasks().count)",
+                              systemImage: "checkmark.circle")
+                            .font(DS.Typo.label)
+                    }
+                    .buttonStyle(DSSecondaryButtonStyle())
+                    .foregroundStyle(DS.accentText)
+                    .help("Move everything in the Inbox onto the canvas")
+                }
             }
             .padding(DS.Space.md)
         }
 
         // Undo toast, bottom-center.
-        if let toast = session.undoToast {
+        if mode == .board, let toast = session.undoToast {
             VStack {
                 Spacer()
                 HStack(spacing: DS.Space.sm) {
@@ -189,8 +211,8 @@ struct CanvasView: View {
             .animation(reduceMotion ? nil : DS.spring, value: session.undoToast)
         }
 
-        // Quick capture, top-center.
-        if session.showCapture {
+        // Quick capture, top-center (board only — capture creates board tasks).
+        if mode == .board, session.showCapture {
             CaptureCard(session: session)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.top, Self.topInset + DS.Space.md)
@@ -198,24 +220,34 @@ struct CanvasView: View {
         }
     }
 
-    private var emptyState: some View {
+    @ViewBuilder private var emptyState: some View {
         VStack(spacing: DS.Space.sm) {
-            Text("Clear canvas.")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(DS.textPrimary)
-            (Text("Everything's done, or nothing's captured yet.\nPress ")
-             + Text(" N ").font(DS.Typo.mono).foregroundColor(DS.textSecondary)
-             + Text(" to drop a task."))
-                .font(.system(size: 16))
-                .foregroundStyle(DS.textTertiary)
-                .multilineTextAlignment(.center)
+            if mode == .board {
+                Text("Clear canvas.")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(DS.textPrimary)
+                (Text("Everything's done, or nothing's captured yet.\nPress ")
+                 + Text(" N ").font(DS.Typo.mono).foregroundColor(DS.textSecondary)
+                 + Text(" to drop a task."))
+                    .font(.system(size: 16))
+                    .foregroundStyle(DS.textTertiary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("Inbox zero.")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(DS.textPrimary)
+                Text("Pulled work from Jira, Slack, Granola and Calendar\nlands here for your accept.")
+                    .font(.system(size: 16))
+                    .foregroundStyle(DS.textTertiary)
+                    .multilineTextAlignment(.center)
+            }
         }
     }
 
     // MARK: - N key (quick capture)
 
     private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
+        guard mode == .board, keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard event.charactersIgnoringModifiers?.lowercased() == "n",
                   event.modifierFlags.intersection([.command, .option, .control]).isEmpty,

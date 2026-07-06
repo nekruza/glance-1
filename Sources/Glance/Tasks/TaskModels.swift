@@ -38,6 +38,13 @@ struct TaskItem: Identifiable, Codable, Equatable {
     /// AI-written handoff prompt for pasting into an external assistant
     /// (code tasks). User edits win; optional so old JSON decodes.
     var handoffPrompt: String?
+    /// AI-written meeting prep notes (calendar/meeting tasks). User edits
+    /// win; optional so old JSON decodes.
+    var prepNotes: String?
+    /// AI-written helper output for the remaining task types (Slack reply
+    /// draft, writing draft, research brief, suggested approach). User edits
+    /// win; optional so old JSON decodes.
+    var helperDraft: String?
     /// Spatial canvas position (top-left, canvas coords). nil = auto-placed
     /// by the flow layout; set only by a user drag. Optional so old JSON decodes.
     var canvasX: Double?
@@ -66,6 +73,94 @@ struct TaskStep: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var text: String
     var done: Bool = false
+}
+
+// MARK: - Helper action (one per task, routed by type)
+
+/// Every task gets exactly one AI helper action, picked by what the task is:
+/// meetings get prep notes, code gets a handoff prompt, Slack asks get a
+/// reply draft, writing gets a first draft, research gets a brief, and
+/// everything else gets a suggested approach.
+enum TaskHelper {
+    case prepNotes      // → TaskItem.prepNotes
+    case handoffPrompt  // → TaskItem.handoffPrompt
+    case reply          // → TaskItem.helperDraft
+    case draft          // → TaskItem.helperDraft
+    case brief          // → TaskItem.helperDraft
+    case approach       // → TaskItem.helperDraft
+
+    var buttonTitle: String {
+        switch self {
+        case .prepNotes: return "Prep notes"
+        case .handoffPrompt: return "Create prompt"
+        case .reply: return "Draft reply"
+        case .draft: return "Draft it"
+        case .brief: return "Research brief"
+        case .approach: return "Suggest approach"
+        }
+    }
+
+    var regenerateTitle: String {
+        switch self {
+        case .prepNotes: return "Regenerate notes"
+        case .handoffPrompt: return "Regenerate prompt"
+        case .reply: return "Redraft reply"
+        case .draft: return "Redraft"
+        case .brief: return "Regenerate brief"
+        case .approach: return "Rethink approach"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .prepNotes: return "note.text.badge.plus"
+        case .handoffPrompt: return "wand.and.sparkles"
+        case .reply: return "arrowshape.turn.up.left"
+        case .draft: return "square.and.pencil"
+        case .brief: return "book"
+        case .approach: return "signpost.right"
+        }
+    }
+
+    var sectionTitle: String {
+        switch self {
+        case .prepNotes: return "Meeting prep"
+        case .handoffPrompt: return "Prompt for your AI"
+        case .reply: return "Suggested reply"
+        case .draft: return "Draft"
+        case .brief: return "Research brief"
+        case .approach: return "Suggested approach"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .prepNotes:
+            return "Fetches your last working day from Granola/Slack/Jira/GitHub and writes grounded prep notes into this task"
+        case .handoffPrompt:
+            return "AI writes a prompt you can paste into another assistant"
+        case .reply:
+            return "AI drafts the reply to send back — copy, tweak, paste"
+        case .draft:
+            return "AI writes a first draft of the deliverable"
+        case .brief:
+            return "AI outlines key questions, where to look, and next steps"
+        case .approach:
+            return "AI suggests how to tackle this — a short plan and the first move"
+        }
+    }
+}
+
+extension TaskItem {
+    /// Which helper this task gets (first matching rule wins).
+    var helper: TaskHelper {
+        if source == .calendar || labels.contains("meeting") { return .prepNotes }
+        if taskKind == .code { return .handoffPrompt }
+        if source == .slack { return .reply }
+        if taskKind == .writing { return .draft }
+        if taskKind == .research { return .brief }
+        return .approach
+    }
 }
 
 enum TaskStatus: String, Codable, CaseIterable {

@@ -8,7 +8,7 @@ final class TaskBoardSession: ObservableObject {
 
     enum Tab: String, CaseIterable {
         // Declaration order = tab order: Inbox (triage) first.
-        case inbox = "Inbox", board = "Board", done = "Done", activity = "Activity"
+        case inbox = "Inbox", board = "Board", done = "Done"
     }
 
     struct ActivityEvent: Identifiable {
@@ -48,6 +48,12 @@ final class TaskBoardSession: ObservableObject {
 
     /// Tasks with a handoff-prompt generation in flight (detail spinner).
     @Published var promptBusyTaskIds: Set<UUID> = []
+    /// Tasks with meeting prep-notes generation in flight (detail spinner),
+    /// with the current phase for the label.
+    @Published var prepBusyTaskIds: Set<UUID> = []
+    @Published var prepPhase: String = "Gathering context…"
+    /// Tasks with a helper-draft generation in flight (reply/draft/brief/approach).
+    @Published var draftBusyTaskIds: Set<UUID> = []
 
     /// Canvas completion choreography: tasks mid check-animation (still
     /// rendered), live confetti bursts, and the undo toast.
@@ -68,6 +74,9 @@ final class TaskBoardSession: ObservableObject {
     let runner: TaskRunner
     private let ai: TaskAI
     private let ingest: ComposioIngest
+    /// Shared last-working-day digests (Granola/Slack/Jira/GitHub) — TTL
+    /// cache so prep notes across meetings reuse one fetch per source.
+    private(set) lazy var workContext = WorkContext(ingest: ingest)
 
     var dismissHandler: (() -> Void)?
     var settingsHandler: (() -> Void)?
@@ -202,7 +211,6 @@ final class TaskBoardSession: ObservableObject {
         case .board: base = store.boardTasks()
         case .inbox: base = store.inboxTasks()
         case .done:  base = store.doneTasks()
-        case .activity: base = [] // activity tab renders its own feed
         }
         // Alternative sorts for the board (AI order comes pre-sorted, pins first).
         if tab == .board {
@@ -230,6 +238,11 @@ final class TaskBoardSession: ObservableObject {
             base.sort { $0.createdAt > $1.createdAt }
         }
         return base
+    }
+
+    /// Inbox tasks for the inbox canvas — newest first, search dims not filters.
+    func inboxCanvasTasks() -> [TaskItem] {
+        store.inboxTasks()
     }
 
     private var searchQuery: String {
@@ -371,6 +384,76 @@ final class TaskBoardSession: ObservableObject {
         }
     }
 
+    /// Prep notes (meeting tasks): gather last-working-day digests from
+    /// Granola/Slack/Jira/GitHub (cached in WorkContext — no double fetch),
+    /// then AI writes grounded prep notes; saved on the task so they survive
+    /// restarts. Failure = no change.
+    func generatePrepNotes(_ task: TaskItem) {
+        guard !prepBusyTaskIds.contains(task.id) else { return }
+        prepBusyTaskIds.insert(task.id)
+        prepPhase = "Gathering context…"
+        let boardContext = boardDigest(excluding: task.id)
+        workContext.digests { [weak self] digests in
+            guard let self else { return }
+            self.prepPhase = "Writing notes…"
+            self.ai.prepNotes(for: task, workDigests: digests,
+                              boardContext: boardContext) { [weak self] text in
+                guard let self else { return }
+                self.prepBusyTaskIds.remove(task.id)
+                guard let text, var t = self.store.task(task.id) else { return }
+                t.prepNotes = text
+                self.store.update(t)
+            }
+        }
+    }
+
+    /// Helper draft (reply / writing draft / research brief / approach):
+    /// AI writes the type-appropriate helper output; saved on the task so it
+    /// survives restarts. Failure = no change.
+    func generateHelperDraft(_ task: TaskItem) {
+        guard !draftBusyTaskIds.contains(task.id) else { return }
+        draftBusyTaskIds.insert(task.id)
+        ai.helperDraft(for: task, helper: task.helper) { [weak self] text in
+            guard let self else { return }
+            self.draftBusyTaskIds.remove(task.id)
+            guard let text, var t = self.store.task(task.id) else { return }
+            t.helperDraft = text
+            self.store.update(t)
+        }
+    }
+
+    /// Compact snapshot of the local board for prep-notes grounding: what's
+    /// on the canvas, what's waiting in the inbox, what got done recently.
+    private func boardDigest(excluding taskId: UUID) -> String {
+        func line(_ t: TaskItem) -> String {
+            var bits = ["\(t.aiPriority.rawValue) \(t.title.prefix(90))"]
+            if !t.labels.isEmpty { bits.append("[\(t.labels.prefix(3).joined(separator: ","))]") }
+            if t.status != .ready { bits.append("(\(t.status.display))") }
+            if let due = t.dueAt { bits.append("due \(due.formatted(.dateTime.month(.abbreviated).day()))") }
+            return "- " + bits.joined(separator: " ")
+        }
+        var sections: [String] = []
+        let board = store.boardTasks().filter { $0.id != taskId }.prefix(20)
+        if !board.isEmpty {
+            sections.append("Canvas (active work):\n" + board.map(line).joined(separator: "\n"))
+        }
+        let inbox = store.inboxTasks().filter { $0.id != taskId }.prefix(15)
+        if !inbox.isEmpty {
+            sections.append("Inbox (untriaged):\n" + inbox.map(line).joined(separator: "\n"))
+        }
+        // Recently finished — last 3 days covers "since last time" reporting.
+        let cutoff = Date().addingTimeInterval(-3 * 86_400)
+        let done = store.doneTasks()
+            .filter { ($0.completedAt ?? .distantPast) > cutoff }
+            .prefix(15)
+        if !done.isEmpty {
+            sections.append("Done recently:\n" + done.map {
+                "- \($0.title.prefix(90)) (done \(($0.completedAt ?? Date()).formatted(.dateTime.month(.abbreviated).day())))"
+            }.joined(separator: "\n"))
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
     // MARK: - Activity feed + export (FR58–59)
 
     /// Chronological audit: every gate decision and run, newest first.
@@ -487,10 +570,12 @@ final class TaskBoardSession: ObservableObject {
         store.setStatus(toast.taskId, .ready)
     }
 
-    /// "Tidy": arrange the board into 4 fixed columns, one per TaskKind
-    /// (code, writing, research, other), each column ordered by priority.
-    /// Persists explicit positions — a deliberate grid, not a free reflow.
+    /// "Tidy": arrange the current canvas (board or inbox tab) into 4 fixed
+    /// columns, one per TaskKind (code, writing, research, other), each
+    /// column ordered by priority. Persists explicit positions — a
+    /// deliberate grid, not a free reflow.
     func tidyCanvas() {
+        let tasks = tab == .inbox ? inboxCanvasTasks() : canvasTasks()
         let columns = TaskKind.allCases // [code, writing, research, other]
         let colWidth = TaskCanvasCard.width + CanvasView.gutter
         var colY = [CGFloat](repeating: CanvasView.topInset, count: columns.count)
@@ -498,7 +583,7 @@ final class TaskBoardSession: ObservableObject {
         for kind in columns {
             let idx = columns.firstIndex(of: kind)!
             let x = CanvasView.margin + CGFloat(idx) * colWidth
-            let inKind = canvasTasks()
+            let inKind = tasks
                 .filter { $0.taskKind == kind }
                 .sorted { $0.aiPriority < $1.aiPriority }
             for task in inKind {

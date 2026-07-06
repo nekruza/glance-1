@@ -182,6 +182,129 @@ final class TaskAI {
         runText(prompt: prompt, model: nil, completion: completion)
     }
 
+    // MARK: - Meeting prep notes (calendar tasks)
+
+    /// Writes prep notes for an upcoming meeting, grounded in live work
+    /// context (Granola/Slack/Jira/GitHub digests from WorkContext) plus what
+    /// the task already knows. Raw markdown out (no JSON).
+    func prepNotes(for task: TaskItem, workDigests: [WorkContext.Source: String],
+                   boardContext: String, completion: @escaping (String?) -> Void) {
+        var meeting = [
+            "Title: \(task.title)",
+            "Details: \(task.descriptionMD.isEmpty ? "(none)" : task.descriptionMD)"
+        ]
+        if !task.labels.isEmpty { meeting.append("Labels: \(task.labels.joined(separator: ", "))") }
+        if let due = task.dueAt {
+            meeting.append("When: \(due.formatted(date: .abbreviated, time: .shortened))")
+        }
+
+        let contextSection: String
+        if workDigests.isEmpty {
+            contextSection = "(no work context available — tools not connected)"
+        } else {
+            contextSection = WorkContext.Source.allCases.compactMap { source in
+                guard let digest = workDigests[source] else { return nil }
+                return "### \(source.displayName)\n\(digest)"
+            }.joined(separator: "\n\n")
+        }
+
+        let prompt = """
+        Write concise prep notes for the meeting below — for ME, the attendee, \
+        to skim in the 5 minutes before it starts. Output ONLY markdown, no \
+        preamble, no fences wrapping the whole output. Structure: \
+        **Purpose** (1 line — infer from the title/agenda), \
+        **Since last time** (2-5 bullets: MY relevant progress/updates from the \
+        work context below — the things I'd report at this meeting), \
+        **Open threads** (bullets: unresolved items from the context that this \
+        meeting's people/topics touch — blockers, waiting-ons, review requests), \
+        **Questions to ask** (1-3 bullets), \
+        and **Who's in the room** (only if attendees are listed — group them, \
+        don't repeat every email). \
+        Ground every bullet in the meeting details, my task board, or the \
+        work context; pick ONLY what's relevant to this meeting's topic and \
+        attendees, drop the rest. Recently-done board tasks feed "Since last \
+        time"; open/inbox board tasks feed "Open threads". Never invent facts.
+
+        Meeting:
+        \(meeting.joined(separator: "\n"))
+
+        My task board (local — current state of my work):
+        \(boardContext.isEmpty ? "(empty)" : boardContext)
+
+        My recent work context (fetched live from my tools):
+        \(contextSection)
+        """
+        runText(prompt: prompt, model: nil, completion: completion)
+    }
+
+    // MARK: - Helper drafts (reply / draft / brief / approach)
+
+    /// One-shot helper output for the non-meeting, non-code task types.
+    /// Raw markdown out (no JSON envelope).
+    func helperDraft(for task: TaskItem, helper: TaskHelper,
+                     completion: @escaping (String?) -> Void) {
+        var context = [
+            "Title: \(task.title)",
+            "Details: \(task.descriptionMD.isEmpty ? "(none)" : task.descriptionMD)"
+        ]
+        if !task.labels.isEmpty { context.append("Labels: \(task.labels.joined(separator: ", "))") }
+        if let due = task.dueAt {
+            context.append("Due: \(due.formatted(date: .abbreviated, time: .shortened))")
+        }
+        let taskBlock = context.joined(separator: "\n")
+
+        let instruction: String
+        switch helper {
+        case .reply:
+            instruction = """
+            The task below came from a Slack message someone sent me. Write the \
+            reply I should send back — ready to paste into Slack. Match the \
+            sender's register (casual Slack tone), be direct, commit to \
+            something concrete (what I'll do and by when, or what I need from \
+            them first). Base it ONLY on the quoted context; if key info is \
+            missing, the reply should ask for it. Output ONLY the message text \
+            as markdown — no preamble, no options, no commentary.
+            """
+        case .draft:
+            instruction = """
+            The task below is a writing deliverable. Write a solid first draft \
+            of it — the actual content, not advice about writing it. Infer \
+            format and length from the task (email → an email; doc → sections; \
+            post → a post). Ground everything in the details given; where facts \
+            are missing, leave a clearly-marked [placeholder] rather than \
+            inventing. Output ONLY the draft as markdown.
+            """
+        case .brief:
+            instruction = """
+            The task below is a research task. Write a compact research brief: \
+            **Goal** (1 line), **Key questions** (3-6 bullets), **Where to \
+            look** (specific sources/tools/people implied by the context), and \
+            **First step** (the single next action). Ground it in the details \
+            given; don't invent constraints. Output ONLY markdown.
+            """
+        case .approach:
+            instruction = """
+            Suggest how to tackle the task below: **Approach** (2-4 sentences), \
+            **Steps** (3-6 checklist bullets, smallest-first), and **First \
+            move** (the one thing to do right now, concrete enough to start in \
+            a minute). Ground it in the details given — no invented \
+            requirements. Output ONLY markdown.
+            """
+        case .prepNotes, .handoffPrompt:
+            // Handled by dedicated methods (prepNotes / handoffPrompt).
+            completion(nil)
+            return
+        }
+
+        let prompt = """
+        \(instruction)
+
+        Task:
+        \(taskBlock)
+        """
+        runText(prompt: prompt, model: nil, completion: completion)
+    }
+
     // MARK: - Meeting action items (transcript pane reader)
 
     /// Extract ONLY the user's own action items from meeting notes.
