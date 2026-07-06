@@ -16,9 +16,9 @@ struct CanvasView: View {
     /// N-key monitor token.
     @State private var keyMonitor: Any?
 
-    private static let margin: CGFloat = DS.Space.lg
-    private static let gutter: CGFloat = DS.Space.lg
-    private static let topInset: CGFloat = 76      // room for the floating pill
+    static let margin: CGFloat = DS.Space.lg
+    static let gutter: CGFloat = DS.Space.lg
+    static let topInset: CGFloat = 76      // room for the floating pill
     private static let estimatedHeight: CGFloat = 96
 
     var body: some View {

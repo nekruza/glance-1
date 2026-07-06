@@ -487,9 +487,34 @@ final class TaskBoardSession: ObservableObject {
         store.setStatus(toast.taskId, .ready)
     }
 
-    /// "Tidy": drop all dragged positions → animated reflow by current sort.
+    /// "Tidy": arrange the board into 4 fixed columns, one per TaskKind
+    /// (code, writing, research, other), each column ordered by priority.
+    /// Persists explicit positions — a deliberate grid, not a free reflow.
     func tidyCanvas() {
-        store.clearAllCanvasPositions()
+        let columns = TaskKind.allCases // [code, writing, research, other]
+        let colWidth = TaskCanvasCard.width + CanvasView.gutter
+        var colY = [CGFloat](repeating: CanvasView.topInset, count: columns.count)
+
+        for kind in columns {
+            let idx = columns.firstIndex(of: kind)!
+            let x = CanvasView.margin + CGFloat(idx) * colWidth
+            let inKind = canvasTasks()
+                .filter { $0.taskKind == kind }
+                .sorted { $0.aiPriority < $1.aiPriority }
+            for task in inKind {
+                store.setCanvasPosition(task.id, x: Double(x), y: Double(colY[idx]))
+                colY[idx] += Self.estimatedCardHeight(task) + DS.Space.lg - 4
+            }
+        }
+    }
+
+    /// Deterministic height guess for tidy's grid spacing (no view-tree
+    /// height measurement needed — small gaps are an acceptable trade-off).
+    private static func estimatedCardHeight(_ task: TaskItem) -> CGFloat {
+        var h: CGFloat = 92
+        if task.title.count > 40 { h += 20 }
+        if !task.stepList.isEmpty { h += 28 }
+        return h
     }
 
     // MARK: - Card actions (FR23)

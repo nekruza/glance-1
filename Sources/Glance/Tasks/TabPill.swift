@@ -145,7 +145,7 @@ struct TabPill: View {
                 }
                 .buttonStyle(.plain)
             }
-            .help("Arrange all cards by \(session.sortMode.rawValue)")
+            .help("Arrange into 4 columns by kind (code / writing / research / other), priority-sorted")
 
             Menu {
                 ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
