@@ -99,12 +99,30 @@ final class AppCoordinator {
         runner.onEvent = { [weak self] message, taskId in
             self?.taskNotifications.post(message: message, taskId: taskId)
         }
+        runner.onGate = { [weak self] gate, message, taskId, runId in
+            self?.taskNotifications.postGate(gate, message: message,
+                                             taskId: taskId, runId: runId)
+        }
         runner.onTaskCompleted = { [weak overlayCtl] in
             overlayCtl?.session.boardCompositionChanged()
         }
         taskNotifications.setup()
         taskNotifications.onOpenTask = { [weak overlayCtl] taskId in
             overlayCtl?.reveal(taskId: taskId)
+        }
+        // One-click gate actions from the notification itself. Approving a
+        // review never releases boundary actions (push/PR) — those stay in-app.
+        taskNotifications.onApprovePlan = { [weak runner] runId in
+            runner?.approvePlan(runId: runId)
+        }
+        taskNotifications.onRejectPlan = { [weak runner] runId, reason in
+            runner?.rejectPlan(runId: runId, reason: reason)
+        }
+        taskNotifications.onApproveReview = { [weak runner] runId in
+            runner?.approveReview(runId: runId, releaseBoundary: false)
+        }
+        taskNotifications.onRejectReview = { [weak runner] runId, reason in
+            runner?.rejectReview(runId: runId, reason: reason)
         }
         taskRunner = runner
         taskOverlay = overlayCtl
@@ -142,6 +160,7 @@ final class AppCoordinator {
     // MARK: - Scheduled pulls
 
     private var schedulerTimer: DispatchSourceTimer?
+    private let autopilot = Autopilot()
 
     /// Minute tick; fires the configured pull when due. Overlap-safe: the
     /// session ignores pulls while one is running, and lastRun only advances
@@ -155,6 +174,14 @@ final class AppCoordinator {
     }
 
     private func schedulerTick() {
+        // Meeting prep autopilot rides the same tick but has its own pref,
+        // independent of scheduled pulls.
+        if let session = taskOverlay?.session {
+            autopilot.tick(session: session) { [weak self] message, taskId in
+                self?.taskNotifications.post(message: message, taskId: taskId)
+            }
+        }
+
         let prefs = Preferences.shared
         guard prefs.schedEnabled, !prefs.composioKey.isEmpty,
               let session = taskOverlay?.session, session.pullingSource == nil else { return }

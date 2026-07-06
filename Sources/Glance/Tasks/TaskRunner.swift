@@ -31,6 +31,9 @@ final class TaskRunner: ObservableObject {
     private let hardCap: TimeInterval = 45 * 60
 
     var onEvent: ((String, UUID) -> Void)?              // (message, taskId) → notifications
+    /// Fired when a run lands in a human gate (plan / review) — carries the
+    /// runId so notifications can offer one-click approve/reject.
+    var onGate: ((TaskGate, String, UUID, UUID) -> Void)?  // (gate, message, taskId, runId)
     /// Fired when a task reaches `done` — the board should re-rank (FR39).
     var onTaskCompleted: (() -> Void)?
 
@@ -95,7 +98,7 @@ final class TaskRunner: ObservableObject {
                 } else {
                     task.status = .awaitingPlanApproval
                     self.store.update(task)
-                    self.onEvent?("Plan ready for “\(task.title)”", taskId)
+                    self.onGate?(.plan, "Plan ready for “\(task.title)”", taskId, run.id)
                 }
             } else {
                 self.finishRun(run.id, state: .failed, reason: "Couldn't generate a plan (Claude CLI error).")
@@ -333,7 +336,7 @@ final class TaskRunner: ObservableObject {
         store.update(t)
         unlockRepo(t)
         activeRunIds.remove(runId)
-        onEvent?("“\(task.title)” finished — awaiting your review", task.id)
+        onGate?(.review, "“\(task.title)” finished — awaiting your review", task.id, runId)
         startNextQueued()
     }
 

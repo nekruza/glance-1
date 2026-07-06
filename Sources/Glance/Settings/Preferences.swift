@@ -24,6 +24,8 @@ final class Preferences: ObservableObject {
         static let schedMode = "sched.mode"
         static let schedDailyMinutes = "sched.dailyMinutes"
         static let schedLastRun = "sched.lastRun"
+        static let prepAutopilot = "prep.autopilotEnabled"
+        static let prepLeadMinutes = "prep.leadMinutes"
         static let completionSound = "tasks.completionSound"
         static let completionSoundName = "tasks.completionSoundName"
         static let confetti = "tasks.confetti"
@@ -118,6 +120,16 @@ final class Preferences: ObservableObject {
         set { defaults.set(newValue, forKey: Keys.schedLastRun) }
     }
 
+    /// Meeting prep autopilot: auto-generate prep notes shortly before each
+    /// calendar meeting and notify when they're ready.
+    @Published var prepAutopilotEnabled: Bool {
+        didSet { defaults.set(prepAutopilotEnabled, forKey: Keys.prepAutopilot) }
+    }
+    /// How many minutes before the meeting start prep kicks off.
+    @Published var prepLeadMinutes: Int {
+        didSet { defaults.set(prepLeadMinutes, forKey: Keys.prepLeadMinutes) }
+    }
+
     /// Play a system sound when a task is completed by hand.
     @Published var completionSoundEnabled: Bool {
         didSet { defaults.set(completionSoundEnabled, forKey: Keys.completionSound) }
@@ -205,6 +217,10 @@ final class Preferences: ObservableObject {
         schedMode = ScheduleMode(rawValue: defaults.string(forKey: Keys.schedMode) ?? "") ?? .daily
         schedDailyMinutes = defaults.object(forKey: Keys.schedDailyMinutes) == nil
             ? 9 * 60 : defaults.integer(forKey: Keys.schedDailyMinutes)
+        prepAutopilotEnabled = defaults.object(forKey: Keys.prepAutopilot) == nil
+            ? true : defaults.bool(forKey: Keys.prepAutopilot)
+        prepLeadMinutes = defaults.object(forKey: Keys.prepLeadMinutes) == nil
+            ? 20 : max(5, defaults.integer(forKey: Keys.prepLeadMinutes))
         completionSoundEnabled = defaults.object(forKey: Keys.completionSound) == nil
             ? true : defaults.bool(forKey: Keys.completionSound)
         completionSoundName = defaults.string(forKey: Keys.completionSoundName) ?? "Glass"

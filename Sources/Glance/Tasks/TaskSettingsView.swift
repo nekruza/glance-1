@@ -625,6 +625,22 @@ struct TaskSettingsView: View {
                     }
                 }
             }
+            Divider().overlay(DS.divider)
+            row("Meeting prep autopilot", "Write prep notes automatically before each meeting") {
+                Toggle("", isOn: $prefs.prepAutopilotEnabled)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            if prefs.prepAutopilotEnabled {
+                Divider().overlay(DS.divider)
+                row("Prep lead time", "How long before the meeting prep starts") {
+                    Picker("", selection: $prefs.prepLeadMinutes) {
+                        ForEach([10, 15, 20, 30, 45, 60], id: \.self) { m in
+                            Text("\(m) min").tag(m)
+                        }
+                    }
+                    .labelsHidden().controlSize(.small).frame(width: 90)
+                }
+            }
         }
     }
 
