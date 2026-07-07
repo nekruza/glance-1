@@ -55,6 +55,16 @@ struct TaskCanvasCard: View {
                 .strokeBorder(stepsSuggestDone ? DS.accent : DS.border.opacity(0.6),
                               lineWidth: stepsSuggestDone ? 1.5 : 1)
         )
+        // Provenance strip: full-height bar on the trailing edge, color by
+        // source (grey = added in-app). A card-sized rounded rect masked to its
+        // right 4pt so the strip's top/bottom follow the card's corner radius
+        // exactly (a 4pt-wide shape can't itself hold the 14pt corner).
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.Radius.large)
+                .fill(DS.sourceAccent(task.source))
+                .mask(alignment: .trailing) { Rectangle().frame(width: 4) }
+                .help("From \(task.source.displayName)")
+        }
         .scaleEffect(cardScale)
         .opacity(matches ? 1 : 0.25)
         .allowsHitTesting(matches)

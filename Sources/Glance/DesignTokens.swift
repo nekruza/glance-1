@@ -55,6 +55,19 @@ enum DS {
         }
     }
 
+    /// Leading accent strip on canvas cards, colored by where the task was
+    /// pulled from — a glanceable provenance cue. App-added tasks (manual /
+    /// prompt) stay quiet grey; integrations get their brand-ish hue.
+    static func sourceAccent(_ s: TaskSource) -> Color {
+        switch s {
+        case .jira:     return Color(hexRGB: "2684FF")! // Atlassian blue
+        case .slack:    return Color(hexRGB: "611F69")! // Slack aubergine
+        case .granola:  return Color(hexRGB: "F2994A")! // meeting orange
+        case .calendar: return Color(hexRGB: "34A853")! // calendar green
+        case .manual, .prompt: return textTertiary      // added in-app → grey
+        }
+    }
+
     // MARK: - Motion (gate every use behind accessibilityReduceMotion)
 
     /// Default playful spring — card drops, reflows, meter fills.
