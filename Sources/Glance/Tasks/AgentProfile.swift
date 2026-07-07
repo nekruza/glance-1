@@ -6,6 +6,7 @@ import Foundation
 struct AgentProfile: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var name: String
+    var humanName: String?        // display name (e.g. "Alex"); nil = show `name` only
     var icon: String              // emoji (e.g. "💻")
     var skills: String            // one-liner used for AI routing
     var systemPrompt: String      // appended to plan + execution system prompt
@@ -55,6 +56,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0001-4000-8000-000000000001")!,
             name: "Coder",
+            humanName: "Alex",
             icon: "💻",
             skills: "Code changes in repos: bug fixes, features, refactors, tests, scripts.",
             systemPrompt: """
@@ -71,6 +73,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0002-4000-8000-000000000002")!,
             name: "Writer",
+            humanName: "Mia",
             icon: "✍️",
             skills: "Drafting: documents, replies, summaries, announcements, specs.",
             systemPrompt: """
@@ -86,6 +89,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0003-4000-8000-000000000003")!,
             name: "Researcher",
+            humanName: "Sam",
             icon: "🔍",
             skills: "Investigation: web research, comparisons, analysis, fact-finding.",
             systemPrompt: """
@@ -101,6 +105,7 @@ extension AgentProfile {
         AgentProfile(
             id: UUID(uuidString: "A6E1C0DE-0004-4000-8000-000000000004")!,
             name: "Reviewer",
+            humanName: "Jordan",
             icon: "✅",
             skills: "Critique: review diffs, PRs, documents; find risks and gaps.",
             systemPrompt: """
@@ -111,6 +116,22 @@ extension AgentProfile {
             edits — you produce a review report.
             """,
             preferredModel: nil,
+            allowedTools: ["Bash", "Read", "Glob", "Grep"],
+            isBuiltIn: true
+        ),
+        AgentProfile(
+            id: UUID(uuidString: "A6E1C0DE-0005-4000-8000-000000000005")!,
+            name: "Analyst",
+            humanName: "Priya",
+            icon: "📊",
+            skills: "Writes and optimizes SQL against analytics databases; explores schemas, builds correct joins.",
+            systemPrompt: """
+            You are a careful data analyst. Method: explore the schema before \
+            writing a query; prefer explicit joins and named CTEs over dense \
+            one-liners; sanity-check row counts and null handling; explain \
+            what a query returns and any assumptions behind it.
+            """,
+            preferredModel: "opus",
             allowedTools: ["Bash", "Read", "Glob", "Grep"],
             isBuiltIn: true
         )
