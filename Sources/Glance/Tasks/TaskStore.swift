@@ -352,3 +352,38 @@ extension JSONDecoder {
         return d
     }
 }
+
+// MARK: - Agent stats (derived on read — no extra persistence)
+
+/// Headline numbers for an agent's profile card, computed from run history.
+struct AgentStats {
+    var totalRuns: Int
+    /// Percent of succeeded over succeeded+failed. nil until one such run exists.
+    var successPercent: Int?
+    /// Mean of 1-5 star ratings; unrated runs are excluded, not counted as 0.
+    var averageRating: Double?
+}
+
+extension TaskStore {
+
+    func stats(forAgent agentId: UUID) -> AgentStats {
+        let agentRuns = runs.filter { $0.agentId == agentId }
+        let decided = agentRuns.filter { $0.state == .succeeded || $0.state == .failed }
+        let ratings = agentRuns.compactMap(\.rating)
+        return AgentStats(
+            totalRuns: agentRuns.count,
+            successPercent: decided.isEmpty ? nil
+                : Int((Double(decided.filter { $0.state == .succeeded }.count)
+                       / Double(decided.count) * 100).rounded()),
+            averageRating: ratings.isEmpty ? nil
+                : Double(ratings.reduce(0, +)) / Double(ratings.count)
+        )
+    }
+
+    /// Newest-first terminal runs for an agent's activity feed.
+    func recentRuns(forAgent agentId: UUID, limit: Int = 20) -> [TaskRun] {
+        Array(runs.filter { $0.agentId == agentId && $0.state.isTerminal }
+            .sorted { $0.startedAt > $1.startedAt }
+            .prefix(limit))
+    }
+}

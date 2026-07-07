@@ -317,12 +317,15 @@ struct TaskDetailView: View {
                     t.agentId = agent.id
                     session.store.update(t)
                 } label: {
-                    Text("\(agent.icon) \(agent.name) — \(agent.skills)")
+                    Text("\(agent.icon) \(agent.displayName) (\(agent.name)) — \(agent.skills)")
                 }
             }
         } label: {
-            pickerChip(current == nil ? "🤖 agent" : "\(current!.icon) \(current!.name)",
-                       isSet: current != nil)
+            HStack(spacing: DS.Space.xxs) {
+                if let current { AgentAvatarView(agent: current, size: 18) }
+                pickerChip(current == nil ? "🤖 agent" : current!.displayName,
+                           isSet: current != nil)
+            }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -1009,6 +1012,9 @@ struct TaskDetailView: View {
                                 .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                             Text(r.state.rawValue).font(DS.Typo.mono)
                                 .foregroundStyle(r.state == .succeeded ? DS.success : DS.textSecondary)
+                            if r.state == .succeeded || r.state == .failed {
+                                starRating(r)
+                            }
                             Spacer()
                             if let path = r.transcriptPath {
                                 Button("transcript") {
@@ -1024,6 +1030,26 @@ struct TaskDetailView: View {
                 }
             }
         }
+    }
+
+    /// 1-5 star rating for a finished run — feeds the agent's profile stats.
+    /// Re-tapping a different star overwrites; tapping the current one clears.
+    private func starRating(_ run: TaskRun) -> some View {
+        HStack(spacing: 1) {
+            ForEach(1...5, id: \.self) { star in
+                Button {
+                    var r = run
+                    r.rating = (run.rating == star) ? nil : star
+                    session.store.updateRun(r)
+                } label: {
+                    Image(systemName: star <= (run.rating ?? 0) ? "star.fill" : "star")
+                        .font(DS.Typo.overline)
+                        .foregroundStyle(star <= (run.rating ?? 0) ? DS.warning : DS.textTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .help("Rate how this run went")
     }
 
     // MARK: - Bits

@@ -17,6 +17,9 @@ struct AgentProfile: Identifiable, Codable, Equatable {
 
 extension AgentProfile {
 
+    /// What the UI calls this agent: human name when set, else the role.
+    var displayName: String { humanName ?? name }
+
     /// True when `icon` is a legacy SF-Symbol name (pre-emoji builds).
     var hasLegacyIcon: Bool {
         icon.unicodeScalars.allSatisfy { $0.isASCII }

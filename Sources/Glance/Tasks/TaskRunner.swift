@@ -61,7 +61,8 @@ final class TaskRunner: ObservableObject {
         store.update(task)
         lockRepo(task)
 
-        let run = store.addRun(TaskRun(taskId: taskId, workspacePath: task.workspacePath ?? ""))
+        let run = store.addRun(TaskRun(taskId: taskId, agentId: task.agentId,
+                                       workspacePath: task.workspacePath ?? ""))
         activeRunIds.insert(run.id)
 
         let prompt = """

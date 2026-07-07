@@ -282,6 +282,12 @@ enum TaskEstimate: String, Codable, CaseIterable {
 struct TaskRun: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var taskId: UUID
+    /// Agent assigned when the run started — survives later task reassignment
+    /// so profile activity history stays accurate. Optional so old JSON decodes.
+    var agentId: UUID?
+    /// User star rating 1-5 for the outcome. nil = unrated (excluded from
+    /// averages, not treated as 0). Optional so old JSON decodes.
+    var rating: Int?
     var state: RunState = .planning
     var plan: String = ""
     var planApprovedAt: Date?

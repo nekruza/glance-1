@@ -210,7 +210,13 @@ struct TaskCanvasCard: View {
             }
 
             if let agent = Preferences.shared.agent(task.agentId) {
-                Text(agent.icon).font(DS.Typo.caption).help(agent.name)
+                HStack(spacing: 3) {
+                    AgentAvatarView(agent: agent, size: 14)
+                    Text(agent.displayName)
+                        .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+                        .lineLimit(1).fixedSize()
+                }
+                .help("\(agent.displayName) · \(agent.name)")
             }
 
             statusBadge

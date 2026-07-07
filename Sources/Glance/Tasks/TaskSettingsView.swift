@@ -445,13 +445,24 @@ struct TaskSettingsView: View {
 
     @ViewBuilder private func agentRow(_ agent: AgentProfile) -> some View {
         let editing = editingAgentId == agent.id
+        let stats = session.store.stats(forAgent: agent.id)
         Hover { hovering in
             VStack(alignment: .leading, spacing: DS.Space.xs) {
-                HStack(spacing: DS.Space.xs) {
-                    Text(agent.icon).font(DS.Typo.headline).frame(width: 18)
-                    Text(agent.name).font(DS.Typo.label)
-                    if agent.isBuiltIn {
-                        dsBadge("built-in", tint: DS.textTertiary, soft: DS.surface)
+                HStack(alignment: .top, spacing: DS.Space.xs + 2) {
+                    AgentAvatarView(agent: agent, size: 36)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: DS.Space.xs) {
+                            Text(agent.humanName ?? agent.name).font(DS.Typo.label)
+                            if agent.humanName != nil {
+                                Text("· \(agent.name)")
+                                    .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
+                            }
+                            if agent.isBuiltIn {
+                                dsBadge("built-in", tint: DS.textTertiary, soft: DS.surface)
+                            }
+                        }
+                        Text(statsLine(stats))
+                            .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                     }
                     Spacer()
                     Text(agent.preferredModel ?? "auto")
@@ -464,7 +475,9 @@ struct TaskSettingsView: View {
                 if !editing {
                     Text(agent.skills).font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                         .lineLimit(1)
+                    agentFeed(agent, limit: 2, interactive: false)
                 } else {
+                    agentFeed(agent, limit: 20, interactive: true)
                     agentEditor(agent)
                 }
             }
@@ -473,6 +486,64 @@ struct TaskSettingsView: View {
                 .fill(hovering && !editing ? DS.surfaceHover : DS.bg))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.medium)
                 .strokeBorder(DS.border, lineWidth: 1))
+        }
+    }
+
+    /// "N tasks · X% success · Y★ avg" — segments appear once there is data.
+    private func statsLine(_ stats: AgentStats) -> String {
+        var parts = ["\(stats.totalRuns) task\(stats.totalRuns == 1 ? "" : "s")"]
+        if let pct = stats.successPercent { parts.append("\(pct)% success") }
+        if let avg = stats.averageRating {
+            parts.append(String(format: "%.1f★ avg", avg))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static let feedTime: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
+    /// Activity feed: terminal runs attributed to this agent. Preview mode
+    /// (interactive: false) shows a muted glimpse; expanded mode is scrollable
+    /// and rows jump to the task.
+    @ViewBuilder private func agentFeed(_ agent: AgentProfile, limit: Int,
+                                        interactive: Bool) -> some View {
+        let recent = session.store.recentRuns(forAgent: agent.id, limit: limit)
+        if !recent.isEmpty {
+            let rows = ForEach(recent) { run in
+                HStack(spacing: DS.Space.xs) {
+                    Image(systemName: run.state == .succeeded
+                          ? "checkmark.circle.fill" : "xmark.circle")
+                        .font(DS.Typo.overline)
+                        .foregroundStyle(run.state == .succeeded ? DS.success : DS.textTertiary)
+                    Text(session.store.task(run.taskId)?.title ?? "(deleted task)")
+                        .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+                        .lineLimit(1)
+                    if let stars = run.rating {
+                        Text("\(stars)★").font(DS.Typo.caption).foregroundStyle(DS.warning)
+                    }
+                    Spacer()
+                    Text(Self.feedTime.localizedString(for: run.startedAt, relativeTo: Date()))
+                        .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard interactive else { return }
+                    session.selectedTaskId = run.taskId
+                    session.showSettings = false
+                }
+            }
+            if interactive {
+                VStack(alignment: .leading, spacing: DS.Space.xxs) {
+                    overline("Recent work")
+                    ScrollView { VStack(alignment: .leading, spacing: DS.Space.xxs) { rows } }
+                        .frame(maxHeight: 160)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: DS.Space.xxs) { rows }
+            }
         }
     }
 
@@ -493,6 +564,16 @@ struct TaskSettingsView: View {
             HStack(spacing: DS.Space.xs) {
                 TextField("Name", text: bind(\.name))
                     .textFieldStyle(.roundedBorder).font(DS.Typo.caption).frame(width: 130)
+                TextField(agent.name, text: Binding(
+                    get: { prefs.agents.first { $0.id == agent.id }?.humanName ?? "" },
+                    set: { newValue in
+                        guard let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) else { return }
+                        let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                        prefs.agents[idx].humanName = trimmed.isEmpty ? nil : trimmed
+                    }
+                ))
+                .textFieldStyle(.roundedBorder).font(DS.Typo.caption).frame(width: 100)
+                .help("Display name — how this agent appears around the app")
                 TextField("Emoji", text: bind(\.icon))
                     .textFieldStyle(.roundedBorder).font(DS.Typo.caption).frame(width: 60)
                 Picker("", selection: bind(\.preferredModel)) {
