@@ -63,6 +63,15 @@ struct TaskCanvasCard: View {
             RoundedRectangle(cornerRadius: DS.Radius.large)
                 .fill(DS.sourceAccent(task.source))
                 .mask(alignment: .trailing) { Rectangle().frame(width: 4) }
+                // Mask clips pixels, not hit testing — without this the
+                // invisible card-sized fill eats clicks meant for the
+                // checkbox and title underneath.
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .trailing) {
+            // Tooltip hit target confined to the visible 4pt strip.
+            Color.clear.frame(width: 4)
+                .contentShape(Rectangle())
                 .help("From \(task.source.displayName)")
         }
         .scaleEffect(cardScale)
