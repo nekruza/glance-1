@@ -386,9 +386,20 @@ final class ComposioIngest {
             Using the composio tools, fetch my recent Slack activity (last 2 \
             days): messages mentioning me and direct messages, and extract \
             things that need action FROM ME. Read actions only. \(readOnlyRules)
-            One task per actionable item — ignore FYIs and resolved threads. \
-            sourceKey = the message permalink or channel+ts; sourceURL = the \
-            permalink. Quote the relevant message in the description. \(outputRules)
+            IMPORTANT — expand threads: whenever a message has replies (it has \
+            a thread_ts, a reply_count > 0, or a "N replies" indicator), you \
+            MUST fetch the full thread with the replies action (e.g. Slack \
+            conversations.replies / fetch-thread, passing the channel and the \
+            parent thread_ts) and read EVERY reply before deciding. The \
+            actionable detail (specs, templates, requested deliverables) is \
+            often in a reply, not the parent — the parent may only be a \
+            mention or heads-up. Base the task on the whole thread, and quote \
+            the specific reply that contains the ask, preserving its bold \
+            headings / bullet structure in the description markdown. \
+            One task per actionable item — ignore FYIs and threads that are \
+            fully resolved. sourceKey = the actionable message's permalink or \
+            channel+ts (the reply's ts when the ask is in a reply); sourceURL \
+            = that permalink. \(outputRules)
             """
         case .calendar:
             return """
