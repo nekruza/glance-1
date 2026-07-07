@@ -30,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transcriber.onLiveSegment = { seg in panel.append(text: seg.text, at: seg.start) }
         transcriber.onLiveReplaceLast = { seg in panel.replaceLast(text: seg.text, at: seg.start) }
         transcriber.onLivePartial = { text in panel.updatePartial(text) }
+        // FR31: once the summary lands, mine the transcript for MY action items
+        // → Inbox (deduped on sourceRef so a re-processed meeting adds nothing).
+        transcriber.onSummarized = { [weak self] url in
+            self?.coordinator.autoIngestMeeting(notesURL: url)
+        }
         panel.startHandler = { [weak self] in
             guard let self, !self.transcriber.isRecording else { return }
             self.toggleTranscription()
@@ -55,9 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 TranscriptPanelModel.shared.recordingStopped()
                 if let url = await self.transcriber.stop() {
                     // Show the notes; the AI summary is prepended when ready.
+                    // Action-item extraction runs from onSummarized once the
+                    // summary lands (see applicationDidFinishLaunching).
                     NSWorkspace.shared.open(url)
-                    // FR31: action items → Inbox for review.
-                    self.coordinator.autoIngestMeeting(notesURL: url)
                 }
             }
             return

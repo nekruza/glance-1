@@ -30,6 +30,9 @@ struct TaskBoardView: View {
                             CanvasView(session: session, store: store)
                         case .inbox:
                             CanvasView(session: session, store: store, mode: .inbox)
+                        case .review:
+                            ReviewQueueView(session: session, store: store)
+                                .padding(.top, Self.pillInset)
                         case .done:
                             DoneHistoryView(session: session, store: store)
                                 .padding(.top, Self.pillInset)

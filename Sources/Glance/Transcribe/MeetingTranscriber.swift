@@ -157,6 +157,10 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Called on main when recording state flips (menu refresh).
     var onStateChange: (() -> Void)?
+    /// Fired on main after the transcript file is finalized (AI summary
+    /// prepended if one was generated) — carries the notes file URL. Drives
+    /// post-meeting action-item extraction.
+    var onSummarized: ((URL) -> Void)?
     /// Live feed for the overlay transcript pane (main thread).
     var onLiveSegment: ((Segment) -> Void)?
     var onLiveReplaceLast: ((Segment) -> Void)?
@@ -356,9 +360,14 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
         return url
     }
 
-    /// One-shot `claude -p` → Granola-style notes prepended to the file.
+    /// One-shot `claude -p` → Granola-style notes prepended to the file. Fires
+    /// `onSummarized` when the file is finalized, whether or not notes landed
+    /// (so downstream action-item extraction always runs once).
     private func summarize(transcript: String, into url: URL) {
-        guard case .ok(let binary, _) = ClaudeLocator.check() else { return }
+        guard case .ok(let binary, _) = ClaudeLocator.check() else {
+            DispatchQueue.main.async { [weak self] in self?.onSummarized?(url) }
+            return
+        }
 
         let body = String(transcript.suffix(60_000)) // bound the prompt
         let prompt = """
@@ -379,18 +388,23 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
         let out = Pipe()
         proc.standardOutput = out
         proc.standardError = Pipe()
-        proc.terminationHandler = { p in
+        proc.terminationHandler = { [weak self] p in
             let data = out.fileHandleForReading.readDataToEndOfFile()
-            guard p.terminationStatus == 0,
-                  let notes = String(data: data, encoding: .utf8)?
-                      .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !notes.isEmpty,
-                  let existing = try? String(contentsOf: url, encoding: .utf8)
-            else { return }
-            let combined = notes + "\n\n---\n\n" + existing
-            try? combined.write(to: url, atomically: true, encoding: .utf8)
+            if p.terminationStatus == 0,
+               let notes = String(data: data, encoding: .utf8)?
+                   .trimmingCharacters(in: .whitespacesAndNewlines),
+               !notes.isEmpty,
+               let existing = try? String(contentsOf: url, encoding: .utf8) {
+                let combined = notes + "\n\n---\n\n" + existing
+                try? combined.write(to: url, atomically: true, encoding: .utf8)
+            }
+            DispatchQueue.main.async { self?.onSummarized?(url) }
         }
-        try? proc.run()
+        do {
+            try proc.run()
+        } catch {
+            DispatchQueue.main.async { [weak self] in self?.onSummarized?(url) }
+        }
     }
 }
 

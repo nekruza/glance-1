@@ -26,6 +26,8 @@ final class Preferences: ObservableObject {
         static let schedLastRun = "sched.lastRun"
         static let prepAutopilot = "prep.autopilotEnabled"
         static let prepLeadMinutes = "prep.leadMinutes"
+        static let autoTriage = "tasks.autoTriageEnabled"
+        static let draftAutopilot = "tasks.draftAutopilotEnabled"
         static let completionSound = "tasks.completionSound"
         static let completionSoundName = "tasks.completionSoundName"
         static let confetti = "tasks.confetti"
@@ -130,6 +132,18 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(prepLeadMinutes, forKey: Keys.prepLeadMinutes) }
     }
 
+    /// Auto-triage: after a pull, AI enriches each freshly-landed inbox item,
+    /// filling only the fields the pull left empty (user/pull values win).
+    @Published var autoTriageEnabled: Bool {
+        didSet { defaults.set(autoTriageEnabled, forKey: Keys.autoTriage) }
+    }
+    /// Draft autopilot: generate the outbound draft for accepted Slack/Jira
+    /// tasks without one and park them in the Review queue. Sending always
+    /// stays behind an explicit per-item approval.
+    @Published var draftAutopilotEnabled: Bool {
+        didSet { defaults.set(draftAutopilotEnabled, forKey: Keys.draftAutopilot) }
+    }
+
     /// Play a system sound when a task is completed by hand.
     @Published var completionSoundEnabled: Bool {
         didSet { defaults.set(completionSoundEnabled, forKey: Keys.completionSound) }
@@ -221,6 +235,10 @@ final class Preferences: ObservableObject {
             ? true : defaults.bool(forKey: Keys.prepAutopilot)
         prepLeadMinutes = defaults.object(forKey: Keys.prepLeadMinutes) == nil
             ? 20 : max(5, defaults.integer(forKey: Keys.prepLeadMinutes))
+        autoTriageEnabled = defaults.object(forKey: Keys.autoTriage) == nil
+            ? true : defaults.bool(forKey: Keys.autoTriage)
+        draftAutopilotEnabled = defaults.object(forKey: Keys.draftAutopilot) == nil
+            ? true : defaults.bool(forKey: Keys.draftAutopilot)
         completionSoundEnabled = defaults.object(forKey: Keys.completionSound) == nil
             ? true : defaults.bool(forKey: Keys.completionSound)
         completionSoundName = defaults.string(forKey: Keys.completionSoundName) ?? "Glass"

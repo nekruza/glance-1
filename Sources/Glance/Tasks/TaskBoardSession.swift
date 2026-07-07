@@ -7,8 +7,9 @@ import SwiftUI
 final class TaskBoardSession: ObservableObject {
 
     enum Tab: String, CaseIterable {
-        // Declaration order = tab order: Inbox (triage) first.
-        case inbox = "Inbox", board = "Board", done = "Done"
+        // Declaration order = tab order: Inbox (triage) first, then the board,
+        // then the human-gate Review queue, then Done.
+        case inbox = "Inbox", board = "Board", review = "Review", done = "Done"
     }
 
     struct ActivityEvent: Identifiable {
@@ -54,6 +55,10 @@ final class TaskBoardSession: ObservableObject {
     @Published var prepPhase: String = "Gathering context…"
     /// Tasks with a helper-draft generation in flight (reply/draft/brief/approach).
     @Published var draftBusyTaskIds: Set<UUID> = []
+    /// Tasks with an approved outbound send in flight (review-queue spinner).
+    @Published var sendBusyTaskIds: Set<UUID> = []
+    /// Last send failure per task (surfaced in the draft-review gate).
+    @Published var sendError: [UUID: String] = [:]
 
     /// Canvas completion choreography: tasks mid check-animation (still
     /// rendered), live confetti bursts, and the undo toast.
@@ -85,6 +90,9 @@ final class TaskBoardSession: ObservableObject {
     /// Wired to notifications — fired when a pull lands new Inbox items
     /// (matters for scheduled pulls with the overlay closed).
     var pullNotifyHandler: ((String) -> Void)?
+    /// Wired to notifications — fired when an approved outbound send succeeds
+    /// or an autopilot draft lands in the Review queue.
+    var sendNotifyHandler: ((String, UUID) -> Void)?
 
     private var lastPrioritized = Date.distantPast
     /// FR42: at most one automatic reflow per 10 minutes.
@@ -136,6 +144,7 @@ final class TaskBoardSession: ObservableObject {
             guard let self else { return }
             self.pullingSource = nil
             self.showPullStatus(Self.describe(source, result))
+            self.autoTriage(result.createdIds)
             if result.created > 0 {
                 self.tab = .inbox
                 self.pullNotifyHandler?("\(source.rawValue): \(result.created) new task\(result.created == 1 ? "" : "s") in Inbox")
@@ -167,6 +176,7 @@ final class TaskBoardSession: ObservableObject {
             ingest.pull(source, store: store) { [weak self] result in
                 guard let self else { return }
                 totalCreated += result.created
+                self.autoTriage(result.createdIds)
                 if result.error != nil {
                     summary.append("\(source.rawValue) ✗")
                 } else {
@@ -208,9 +218,10 @@ final class TaskBoardSession: ObservableObject {
     func visibleTasks() -> [TaskItem] {
         var base: [TaskItem]
         switch tab {
-        case .board: base = store.boardTasks()
-        case .inbox: base = store.inboxTasks()
-        case .done:  base = store.doneTasks()
+        case .board:  base = store.boardTasks()
+        case .inbox:  base = store.inboxTasks()
+        case .review: base = reviewTasks()
+        case .done:   base = store.doneTasks()
         }
         // Alternative sorts for the board (AI order comes pre-sorted, pins first).
         if tab == .board {
@@ -243,6 +254,15 @@ final class TaskBoardSession: ObservableObject {
     /// Inbox tasks for the inbox canvas — newest first, search dims not filters.
     func inboxCanvasTasks() -> [TaskItem] {
         store.inboxTasks()
+    }
+
+    /// Everything parked at a human gate — plan approval, run review, or a
+    /// draft awaiting send/approve. Feeds the Review tab + queue. Most recently
+    /// updated first (freshest gate on top).
+    func reviewTasks() -> [TaskItem] {
+        store.tasks
+            .filter { $0.status == .awaitingPlanApproval || $0.status == .awaitingReview }
+            .sorted { $0.updatedAt > $1.updatedAt }
     }
 
     private var searchQuery: String {
@@ -431,7 +451,7 @@ final class TaskBoardSession: ObservableObject {
     /// Helper draft (reply / writing draft / research brief / approach):
     /// AI writes the type-appropriate helper output; saved on the task so it
     /// survives restarts. Failure = no change.
-    func generateHelperDraft(_ task: TaskItem) {
+    func generateHelperDraft(_ task: TaskItem, thenReview: Bool = false) {
         guard !draftBusyTaskIds.contains(task.id) else { return }
         draftBusyTaskIds.insert(task.id)
         ai.helperDraft(for: task, helper: task.helper) { [weak self] text in
@@ -439,8 +459,103 @@ final class TaskBoardSession: ObservableObject {
             self.draftBusyTaskIds.remove(task.id)
             guard let text, var t = self.store.task(task.id) else { return }
             t.helperDraft = text
+            // Autopilot path: park at the review gate in the same write as the
+            // draft itself — a quit between the two can't strand a finished
+            // draft outside Review. Only promote a task still sitting in Ready
+            // (the user may have acted on it while the draft was generating).
+            if thenReview, t.status == .ready {
+                t.status = .awaitingReview
+            }
             self.store.update(t)
+            if thenReview, t.status == .awaitingReview {
+                self.sendNotifyHandler?("Draft ready — \(t.title)", t.id)
+            }
         }
+    }
+
+    // MARK: - Auto-triage (post-pull)
+
+    /// Enrich each freshly-pulled inbox task, filling only fields the pull left
+    /// empty (enrich never overwrites set values). Gated by autoTriageEnabled;
+    /// a per-task enrich failure just leaves that task raw — no retry loop.
+    private func autoTriage(_ ids: [UUID]) {
+        guard Preferences.shared.autoTriageEnabled else { return }
+        for id in ids {
+            guard let task = store.task(id) else { continue }
+            enrich(task)
+        }
+    }
+
+    // MARK: - Review queue (draft gate) — approve / send / reject
+
+    /// HARD TRUST BOUNDARY: the ONLY path that triggers an outbound write.
+    /// Called exclusively from an explicit user "Approve & send" click on one
+    /// task. Persists any edit first (edited text is exactly what's sent),
+    /// builds a single-action instruction from the task's outboundTarget +
+    /// final draft, and performs exactly one Composio write. Success →
+    /// sentAt/.done/notify; failure → task stays put, error surfaced, no retry.
+    /// Never reachable from Autopilot, pull, triage, or a timer.
+    func approveSend(_ task: TaskItem, editedDraft: String?) {
+        guard !sendBusyTaskIds.contains(task.id),
+              let target = task.outboundTarget else { return }
+        // Persist the edit up front so the sent text and the saved draft match.
+        if let edited = editedDraft, var t = store.task(task.id), t.helperDraft != edited {
+            t.helperDraft = edited
+            store.update(t)
+        }
+        let finalText = (editedDraft ?? task.helperDraft ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !finalText.isEmpty else { return }
+
+        let instruction: String
+        switch target {
+        case .slackReply(let permalink):
+            instruction = """
+            Post this message as a reply in the Slack thread at this permalink: \
+            \(permalink)
+            Message text:
+            \(finalText)
+            """
+        case .jiraComment(let issueKey):
+            instruction = """
+            Add this comment to Jira issue \(issueKey).
+            Comment text:
+            \(finalText)
+            """
+        }
+
+        sendBusyTaskIds.insert(task.id)
+        sendError[task.id] = nil
+        ingest.performWrite(instruction: instruction) { [weak self] result in
+            guard let self else { return }
+            self.sendBusyTaskIds.remove(task.id)
+            switch result {
+            case .success:
+                guard var done = self.store.task(task.id) else { return }
+                done.sentAt = Date()
+                done.status = .done
+                done.completedAt = Date()
+                self.store.update(done)
+                self.sendNotifyHandler?("Sent — \(task.title)", task.id)
+            case .failure(let error):
+                self.sendError[task.id] = error.localizedDescription
+            }
+        }
+    }
+
+    /// Approve a draft with no outbound target (research brief / suggested
+    /// approach, or a Slack/Jira task missing its sourceRef): accept it as
+    /// done. No Composio call.
+    func approveDraft(_ task: TaskItem) {
+        store.setStatus(task.id, .done)
+    }
+
+    /// Reject a draft in the review queue → back to Ready, draft kept for
+    /// reference. No outbound anything.
+    func rejectDraft(_ task: TaskItem) {
+        guard var t = store.task(task.id) else { return }
+        t.status = .ready
+        store.update(t)
     }
 
     /// Compact snapshot of the local board for prep-notes grounding: what's

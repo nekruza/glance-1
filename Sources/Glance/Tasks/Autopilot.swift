@@ -13,15 +13,29 @@ final class Autopilot {
     private var prepNotified: Set<UUID> = []
     /// Day we last ran the morning calendar safety pull for.
     private var calendarPullDay: Date?
+    /// Tasks we've kicked draft generation off for (this launch) — the
+    /// retry-throttle: a failed draft is retried only on next launch.
+    private var draftRequested: Set<UUID> = []
 
     func tick(session: TaskBoardSession, notify: (String, UUID) -> Void) {
         let prefs = Preferences.shared
-        guard prefs.prepAutopilotEnabled else { return }
+        if prefs.prepAutopilotEnabled {
+            prepTick(session: session, notify: notify)
+        }
+        // Drafting is pointless without Composio (nothing to send) — skip
+        // silently, matching triage/send behaviour when the key is absent.
+        if prefs.draftAutopilotEnabled, !prefs.composioKey.isEmpty {
+            draftTick(session: session)
+        }
+    }
 
+    // MARK: - Meeting prep (its own pref)
+
+    private func prepTick(session: TaskBoardSession, notify: (String, UUID) -> Void) {
         let now = Date()
         morningCalendarPull(session: session, now: now)
 
-        let lead = TimeInterval(prefs.prepLeadMinutes * 60)
+        let lead = TimeInterval(Preferences.shared.prepLeadMinutes * 60)
         for task in session.store.tasks {
             guard task.source == .calendar,
                   let start = task.dueAt,
@@ -40,6 +54,28 @@ final class Autopilot {
                 prepRequested.insert(task.id)
                 session.generatePrepNotes(task)
             }
+        }
+    }
+
+    // MARK: - Draft autopilot (its own pref)
+
+    /// Generate the outbound draft for accepted Slack/Jira tasks that don't
+    /// have one yet; the session parks them in Review the moment the draft
+    /// persists (same store write — a relaunch can't strand a finished draft).
+    /// Ready-only: Inbox items stay untouched until the user accepts them.
+    /// Each task fires at most once per launch (draftRequested); regeneration
+    /// and, crucially, sending stay manual — nothing here calls performWrite.
+    private func draftTick(session: TaskBoardSession) {
+        for task in session.store.tasks {
+            guard task.helperDraft == nil,
+                  task.status == .ready,
+                  task.source == .slack || task.source == .jira,
+                  [.reply, .draft, .approach].contains(task.helper),
+                  !draftRequested.contains(task.id),
+                  !session.draftBusyTaskIds.contains(task.id) else { continue }
+
+            draftRequested.insert(task.id)
+            session.generateHelperDraft(task, thenReview: true)
         }
     }
 

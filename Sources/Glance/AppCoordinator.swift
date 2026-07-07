@@ -146,6 +146,10 @@ final class AppCoordinator {
             self?.taskNotifications.post(message: message,
                                          taskId: self?.taskStore.inboxTasks().first?.id ?? UUID())
         }
+        // Approved outbound send succeeded — notify + deep-link to the task.
+        overlayCtl.session.sendNotifyHandler = { [weak self] message, taskId in
+            self?.taskNotifications.post(message: message, taskId: taskId)
+        }
         startPullScheduler()
 
         // Transcript-pane reader actions.
@@ -235,10 +239,19 @@ final class AppCoordinator {
         guard let taskAI,
               let text = try? String(contentsOf: notesURL, encoding: .utf8),
               text.count > 200 else { return } // skip empty/junk recordings
+        let filename = notesURL.lastPathComponent
         let title = notesURL.deletingPathExtension().lastPathComponent
         taskAI.extractActionItems(meetingText: text) { [weak self] items in
             guard let self, let items, !items.isEmpty else { return }
+            // Dedupe on sourceRef so re-processing the same transcript adds
+            // nothing (I/O matrix: re-extraction skips existing keys).
+            let existingKeys = Set(self.taskStore.tasks.compactMap { $0.sourceRef?.key })
+            var created = 0
             for d in items {
+                // Slugged title, not a positional index — re-extraction that
+                // reorders or inserts items must still dedupe per item.
+                let key = "\(filename)#\(Self.actionItemSlug(d.title))"
+                guard !existingKeys.contains(key) else { continue }
                 var t = TaskItem(title: d.title, source: .granola)
                 t.status = .inbox
                 t.descriptionMD = (d.description ?? "") + "\n\n_From: \(title)_"
@@ -246,13 +259,28 @@ final class AppCoordinator {
                 t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
                 t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
                 t.agentId = AgentProfile.idFor(name: d.agent)
+                t.sourceRef = SourceRef(key: key, url: nil)
                 t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
                 _ = self.taskStore.add(t)
+                created += 1
             }
+            guard created > 0 else { return }
             self.taskNotifications.post(
-                message: "\(items.count) action item\(items.count == 1 ? "" : "s") from the meeting — review in Inbox",
+                message: "\(created) action item\(created == 1 ? "" : "s") from the meeting — review in Inbox",
                 taskId: self.taskStore.inboxTasks().first?.id ?? UUID())
         }
+    }
+
+    /// Stable per-item dedupe slug: lowercased alphanumerics with dashes,
+    /// capped — the same action item re-extracted maps to the same key.
+    private static func actionItemSlug(_ title: String) -> String {
+        let slug = title.lowercased()
+            .map { $0.isLetter || $0.isNumber ? $0 : "-" }
+            .reduce(into: "") { out, ch in
+                if ch != "-" || out.last != "-" { out.append(ch) }
+            }
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return String(slug.prefix(60))
     }
 
     /// Extract the user's action items from saved notes → task board.

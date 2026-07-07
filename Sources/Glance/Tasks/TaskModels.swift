@@ -26,6 +26,9 @@ struct TaskItem: Identifiable, Codable, Equatable {
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var completedAt: Date?
+    /// When an approved outbound write (Slack reply / Jira comment) actually
+    /// left the machine. nil until a send succeeds. Optional so old JSON decodes.
+    var sentAt: Date?
     /// AI-filled field names (FR37 — glyph in UI; user edits win).
     var aiFilledFields: [String] = []
     /// FR33: flagged by the store when a live task looks like the same work.
@@ -161,6 +164,28 @@ extension TaskItem {
         if taskKind == .research { return .brief }
         return .approach
     }
+
+    /// The single gated outbound write this task could perform on approval,
+    /// derived solely from source + sourceRef. nil = nothing to send (plain
+    /// Approve only). This is the ONE source of truth for send eligibility —
+    /// UI shows "Approve & send" iff this is non-nil.
+    var outboundTarget: OutboundTarget? {
+        guard let ref = sourceRef, !ref.key.isEmpty else { return nil }
+        switch source {
+        // Slack ingest may store "channel+ts" as the dedupe key; the url field
+        // is the real permalink when present — prefer it as the send target.
+        case .slack: return .slackReply(permalink: ref.url ?? ref.key)
+        case .jira:  return .jiraComment(issueKey: ref.key)
+        default:     return nil
+        }
+    }
+}
+
+/// A gated outbound action the user can approve for one task. Every value
+/// embeds the concrete target so `performWrite` can name exactly one action.
+enum OutboundTarget: Equatable {
+    case slackReply(permalink: String)
+    case jiraComment(issueKey: String)
 }
 
 enum TaskStatus: String, Codable, CaseIterable {

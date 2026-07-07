@@ -641,6 +641,16 @@ struct TaskSettingsView: View {
                     .labelsHidden().controlSize(.small).frame(width: 90)
                 }
             }
+            Divider().overlay(DS.divider)
+            row("Auto-triage new items", "AI fills kind, labels and description on freshly pulled inbox items") {
+                Toggle("", isOn: $prefs.autoTriageEnabled)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            Divider().overlay(DS.divider)
+            row("Draft autopilot", "Draft Slack replies and Jira comments for accepted items — ready to review, never auto-sent") {
+                Toggle("", isOn: $prefs.draftAutopilotEnabled)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
         }
     }
 

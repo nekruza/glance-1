@@ -43,6 +43,8 @@ final class ComposioIngest {
         var created: Int
         var skippedDuplicates: Int
         var error: String?
+        /// IDs of the tasks this pull landed — auto-triage enriches exactly these.
+        var createdIds: [UUID] = []
     }
 
     private let binaryPath: String
@@ -65,6 +67,7 @@ final class ComposioIngest {
             }
             var created = 0
             var skipped = 0
+            var createdIds: [UUID] = []
             for f in fetched {
                 if let key = f.sourceKey, existingKeys.contains(key) {
                     skipped += 1
@@ -84,11 +87,70 @@ final class ComposioIngest {
                 }
                 t.agentId = AgentProfile.idFor(name: f.agent)
                 t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
-                _ = store.add(t)
+                createdIds.append(store.add(t).id)
                 created += 1
             }
-            completion(Result(created: created, skippedDuplicates: skipped, error: nil))
+            completion(Result(created: created, skippedDuplicates: skipped, error: nil,
+                              createdIds: createdIds))
         }
+    }
+
+    // MARK: - Outbound write (HARD TRUST BOUNDARY)
+
+    /// The ONE outbound write path. It runs the same subprocess and 4-meta-tool
+    /// allowlist as reads (Composio's router can't split read/write at the
+    /// permission layer); safety is the single-action prompt scope PLUS the
+    /// app-level approval gate. `instruction` must name exactly one action and
+    /// embed the concrete target (permalink / issue key) + full final text.
+    ///
+    /// SECURITY: only ever call this from TaskBoardSession.approveSend, which
+    /// fires solely on an explicit per-item user approval click. Never from
+    /// Autopilot, pull, triage, or any timer. Replies DONE / FAILED: <reason>.
+    @MainActor
+    func performWrite(instruction: String, completion: @escaping (Swift.Result<Void, Error>) -> Void) {
+        let prompt = """
+        \(Self.writeRules)
+
+        The one action to perform:
+        \(instruction)
+        """
+        Self.run(binaryPath: binaryPath, prompt: prompt, on: queue) { text, error in
+            guard let text else {
+                completion(.failure(Self.writeError(error ?? "No response from Composio.")))
+                return
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // FAILED anywhere wins; success needs the final line to be exactly
+            // DONE (the prompt demands it) — prose like "already done" must
+            // never mark a task sent when nothing left the machine.
+            let lastLine = trimmed.components(separatedBy: .newlines)
+                .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            if trimmed.range(of: "FAILED", options: .caseInsensitive) == nil,
+               lastLine.caseInsensitiveCompare("DONE") == .orderedSame {
+                completion(.success(()))
+            } else {
+                let reason = trimmed.isEmpty ? "Composio didn't confirm the write." : String(trimmed.prefix(300))
+                completion(.failure(Self.writeError(reason)))
+            }
+        }
+    }
+
+    /// Strict single-action envelope for the write prompt — the scope that
+    /// keeps a write-capable meta-tool from doing more than the one approved
+    /// action. Deliberately NOT `readOnlyRules` (that forbids all writes).
+    static let writeRules = """
+    STRICT SINGLE-ACTION RULES: Execute EXACTLY ONE write action — the one \
+    described below and nothing else. Do NOT perform any additional create, \
+    update, delete, send, post, transition, or modify action beyond it. Read \
+    or search only the minimum needed to perform this single write. When it \
+    succeeds, reply with exactly: DONE. If it cannot be completed, reply with: \
+    FAILED: <short reason>. Output nothing else.
+    """
+
+    private static func writeError(_ message: String) -> NSError {
+        NSError(domain: "Glance.ComposioWrite", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     // MARK: - Connections (settings page)

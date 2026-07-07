@@ -24,6 +24,9 @@ struct TaskDetailView: View {
     @State private var editingHelper = false
     @State private var draftHelper = ""
     @State private var helperCopied = false
+    /// Editable buffer for the draft-review gate (seeded once from helperDraft).
+    @State private var draftReviewText = ""
+    @State private var draftReviewSeeded = false
     @State private var newStepText = ""
     @State private var showDuePicker = false
     @State private var dueDraft = Date()
@@ -68,7 +71,10 @@ struct TaskDetailView: View {
                     case .awaitingPlanApproval: planGate
                     case .planning: workingRow("Planning…")
                     case .executing: executionStream
-                    case .awaitingReview: reviewGate
+                    case .awaitingReview:
+                        // A finished run parks here with the run at .succeeded
+                        // (run gate); a draft awaiting send has no such run.
+                        if hasRunReviewGate { reviewGate } else { draftReviewGate }
                     case .failed: failureBlock
                     default: EmptyView()
                     }
@@ -781,6 +787,101 @@ struct TaskDetailView: View {
                     .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
             }
         }
+    }
+
+    // MARK: - Draft-review gate (outbound send / approve / reject)
+
+    /// True when a finished run is parked at the review gate — distinguishes it
+    /// from a draft gate (which has a helper draft and no such run). A task
+    /// with neither (stale run state) also lands here, never on an empty
+    /// draft gate with send buttons.
+    private var hasRunReviewGate: Bool {
+        run?.state == .succeeded || task.helperDraft == nil
+    }
+
+    /// Title varies with the concrete target so the button says what it does.
+    private var sendButtonTitle: String {
+        switch task.outboundTarget {
+        case .slackReply: return "Approve & send reply"
+        case .jiraComment: return "Approve & post comment"
+        case .none: return "Approve & send"
+        }
+    }
+
+    /// The draft awaiting the user's call: editable text, then Approve & send
+    /// (outbound, when a target exists), plain Approve (accept as done), or
+    /// Reject (back to Ready). Draft-gate tasks always come from Slack/Jira, so
+    /// the send button shows; it's disabled with a hint when the source link is
+    /// missing (per the I/O matrix).
+    private var draftReviewGate: some View {
+        gateBox(title: "DRAFT — YOUR APPROVAL NEEDED", tint: DS.warning, soft: DS.warningSoft) {
+            TextEditor(text: $draftReviewText)
+                .font(DS.Typo.body)
+                .scrollContentBackground(.hidden)
+                .frame(height: 160)
+                .dsField()
+                .onAppear {
+                    if !draftReviewSeeded {
+                        draftReviewText = task.helperDraft ?? ""
+                        draftReviewSeeded = true
+                    }
+                }
+            if task.outboundTarget == nil {
+                Text("No \(task.source == .slack ? "Slack thread" : "Jira issue") link on this task — sending is unavailable, but you can still approve it.")
+                    .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
+            }
+            if let err = session.sendError[task.id] {
+                Text(err).font(DS.Typo.caption).foregroundStyle(DS.danger)
+            }
+            // Once a send is in flight the message may already be out —
+            // freeze every decision button, not just the send one.
+            let sending = session.sendBusyTaskIds.contains(task.id)
+            HStack {
+                Button("Reject") {
+                    session.rejectDraft(task)
+                    session.selectedTaskId = nil
+                }
+                .buttonStyle(DSSecondaryButtonStyle())
+                .foregroundStyle(DS.danger)
+                .disabled(sending)
+                Spacer()
+                Button("Approve") {
+                    persistDraftEdit()
+                    session.approveDraft(task)
+                    session.selectedTaskId = nil
+                }
+                .buttonStyle(DSSecondaryButtonStyle())
+                .help("Accept this draft as done without sending")
+                .disabled(sending)
+                Button(action: { session.approveSend(task, editedDraft: draftReviewText) }) {
+                    HStack(spacing: DS.Space.xxs) {
+                        if session.sendBusyTaskIds.contains(task.id) {
+                            ProgressView().controlSize(.small)
+                            Text("Sending…")
+                        } else {
+                            Label(sendButtonTitle, systemImage: "paperplane.fill")
+                        }
+                    }
+                }
+                .buttonStyle(DSPrimaryButtonStyle())
+                .disabled(task.outboundTarget == nil
+                          || session.sendBusyTaskIds.contains(task.id)
+                          || draftReviewText.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help(task.outboundTarget == nil
+                      ? "No thread/issue link — can't send"
+                      : "Post to the exact Slack thread / Jira issue this came from")
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+
+    /// Persist an in-gate edit to helperDraft (plain Approve path — send
+    /// persists its own edit inside approveSend).
+    private func persistDraftEdit() {
+        guard draftReviewSeeded, var t = session.store.task(task.id),
+              t.helperDraft != draftReviewText else { return }
+        t.helperDraft = draftReviewText
+        session.store.update(t)
     }
 
     // MARK: - Review gate (FR52–53)

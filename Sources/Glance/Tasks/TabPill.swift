@@ -54,12 +54,13 @@ struct TabPill: View {
                                 .font(selected ? DS.Typo.headline : DS.Typo.body)
                                 .foregroundStyle(selected ? DS.textPrimary : DS.textSecondary)
                             if let n = tabCount(tab), n > 0 {
+                                let callout = tab == .inbox || tab == .review
                                 Text(n > 99 ? "99+" : "\(n)")
                                     .font(DS.Typo.overline)
-                                    .foregroundStyle(tab == .inbox ? DS.accentText : DS.textSecondary)
+                                    .foregroundStyle(callout ? DS.accentText : DS.textSecondary)
                                     .padding(.horizontal, DS.Space.xxs)
                                     .frame(minWidth: 15, minHeight: 15)
-                                    .background(Capsule().fill(tab == .inbox ? DS.accentSoft : DS.surfaceHover))
+                                    .background(Capsule().fill(callout ? DS.accentSoft : DS.surfaceHover))
                             }
                         }
                         .padding(.horizontal, DS.Space.xs + 2)
@@ -87,6 +88,7 @@ struct TabPill: View {
         switch tab {
         case .inbox: return store.inboxTasks().count
         case .board: return store.boardTasks().count
+        case .review: return session.reviewTasks().count
         case .done: return store.doneTasks().count
         }
     }
