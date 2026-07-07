@@ -213,6 +213,19 @@ final class Preferences: ObservableObject {
                                                         name: decoded[i].name)
                 migrated = true
             }
+            // Backfill humanName on built-ins persisted before this field existed.
+            for i in decoded.indices where decoded[i].isBuiltIn && decoded[i].humanName == nil {
+                if let shipped = AgentProfile.builtIns.first(where: { $0.id == decoded[i].id }) {
+                    decoded[i].humanName = shipped.humanName
+                    migrated = true
+                }
+            }
+            // Add any built-ins shipped after this install's first launch (e.g. Analyst).
+            let knownIds = Set(decoded.map(\.id))
+            for shipped in AgentProfile.builtIns where !knownIds.contains(shipped.id) {
+                decoded.append(shipped)
+                migrated = true
+            }
             agents = decoded
             if migrated, let data = try? JSONEncoder().encode(decoded) {
                 defaults.set(data, forKey: Keys.agents)
