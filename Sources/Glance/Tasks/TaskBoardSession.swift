@@ -707,9 +707,10 @@ final class TaskBoardSession: ObservableObject {
     }
 
     /// "Tidy": arrange the current canvas (board or inbox tab) into 4 fixed
-    /// columns, one per TaskKind (code, writing, research, other), each
-    /// column ordered by priority. Persists explicit positions — a
-    /// deliberate grid, not a free reflow.
+    /// columns, one per TaskKind — Coding, Communication, Research, Other —
+    /// each column ordered by the active sort mode (the toolbar dropdown, so
+    /// the control the user sees is the control that runs). Persists explicit
+    /// positions — a deliberate grid, not a free reflow.
     func tidyCanvas() {
         let tasks = tab == .inbox ? inboxCanvasTasks() : canvasTasks()
         let columns = TaskKind.allCases // [code, writing, research, other]
@@ -719,12 +720,24 @@ final class TaskBoardSession: ObservableObject {
         for kind in columns {
             let idx = columns.firstIndex(of: kind)!
             let x = CanvasView.margin + CGFloat(idx) * colWidth
-            let inKind = tasks
-                .filter { $0.taskKind == kind }
-                .sorted { $0.aiPriority < $1.aiPriority }
+            let inKind = tidySorted(tasks.filter { $0.taskKind == kind })
             for task in inKind {
                 store.setCanvasPosition(task.id, x: Double(x), y: Double(colY[idx]))
                 colY[idx] += Self.estimatedCardHeight(task) + DS.Space.lg - 4
+            }
+        }
+    }
+
+    /// Within-column order for Tidy, matching the toolbar sort dropdown so the
+    /// two never disagree. Priority always breaks ties on aiRank; pinned tasks
+    /// float to the top of every mode (they're the user's manual override).
+    private func tidySorted(_ tasks: [TaskItem]) -> [TaskItem] {
+        tasks.sorted { a, b in
+            if a.isPinned != b.isPinned { return a.isPinned }
+            switch sortMode {
+            case .priority:  return (a.aiPriority, a.aiRank) < (b.aiPriority, b.aiRank)
+            case .dateAdded: return a.createdAt > b.createdAt
+            case .aiRank:    return a.aiRank < b.aiRank
             }
         }
     }

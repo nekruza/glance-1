@@ -39,7 +39,9 @@ final class TaskAI {
         (no prose, no fences) with keys: "title" (cleaned, <=200 chars), \
         "description" (markdown: 1-3 sentence context; add acceptance criteria \
         bullets ONLY if clearly inferable), "labels" (array, 1-4 short lowercase \
-        tags), "taskKind" (one of: code, writing, research, other), "estimate" \
+        tags), "taskKind" (one of: code = software/repo work; writing = any \
+        communication or authored text — emails, Slack/DMs, messages, docs, \
+        follow-ups, replies; research = investigation/reading; other), "estimate" \
         (one of: minutes, hour, halfday, day+), "repoName" (one of \(repoNames) \
         if the task clearly belongs to that repo, else null), "agent" (the \
         best-fit agent NAME from the roster below, or null if none clearly fits).

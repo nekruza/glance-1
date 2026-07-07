@@ -271,12 +271,14 @@ struct TaskDetailView: View {
         }
     }
 
-    /// Priority dot + status text as one pill — the two facts read together
-    /// ("how urgent, what state") instead of as two separate chips.
+    /// Priority label + status text as one pill — the two facts read together
+    /// ("how urgent, what state") instead of as two separate chips. Priority
+    /// shows as a colored P0/P1 label (no dot) to match the canvas cards.
     private var statusBadge: some View {
         HStack(spacing: DS.Space.xxs) {
-            Circle().fill(DS.priorityDot(task.aiPriority)).frame(width: 6, height: 6)
             Text(task.aiPriority.rawValue)
+                .fontWeight(.semibold)
+                .foregroundStyle(DS.priorityDot(task.aiPriority))
             Text("·").foregroundStyle(DS.textTertiary)
             Text(task.status.display)
         }
@@ -365,7 +367,7 @@ struct TaskDetailView: View {
     private var kindPicker: some View {
         Menu {
             ForEach(TaskKind.allCases, id: \.self) { kind in
-                Button(kind.rawValue) {
+                Button(kind.displayName) {
                     var t = task
                     t.taskKind = kind
                     if kind != .code { t.workspacePath = nil }
@@ -373,11 +375,11 @@ struct TaskDetailView: View {
                 }
             }
         } label: {
-            chip(task.taskKind.rawValue)
+            chip(task.taskKind.displayName)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Task kind — code tasks run in a repo worktree")
+        .help("Task kind — coding tasks run in a repo worktree")
     }
 
     private var repoPicker: some View {

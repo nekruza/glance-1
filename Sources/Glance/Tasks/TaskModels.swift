@@ -258,6 +258,19 @@ struct SourceRef: Codable, Equatable {
 
 enum TaskKind: String, Codable, CaseIterable {
     case code, writing, research, other
+
+    /// User-facing column/chip label. Raw values stay stable for persistence
+    /// and agent routing (`.code` gates worktree runs); only the label reads
+    /// human. `.writing` presents as "Communication" (emails, Slack, docs,
+    /// messages, follow-ups) — the tidy column it feeds.
+    var displayName: String {
+        switch self {
+        case .code: return "Coding"
+        case .writing: return "Communication"
+        case .research: return "Research"
+        case .other: return "Other"
+        }
+    }
 }
 
 enum TaskEstimate: String, Codable, CaseIterable {

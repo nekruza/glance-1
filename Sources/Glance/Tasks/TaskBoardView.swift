@@ -73,7 +73,11 @@ struct TaskBoardView: View {
                 .overlay(alignment: .leading) {
                     Divider().overlay(DS.divider)
                 }
-                .shadow(color: .black.opacity(0.18), radius: 24, x: -6)
+                // Flatten first: otherwise the panel shadow renders per inner
+                // card (it traces every opaque sub-shape), giving each section a
+                // spurious drop shadow. Grouped, it shadows only the panel edge.
+                .compositingGroup()
+                .shadow(color: .black.opacity(0.12), radius: 16, x: -6)
                 .transition(.move(edge: .trailing))
                 .onExitCommand { session.selectedTaskId = nil }
         }

@@ -146,25 +146,30 @@ struct TabPill: View {
                 }
                 .buttonStyle(.plain)
             }
-            .help("Arrange into 4 columns by kind (code / writing / research / other), priority-sorted")
+            .help("Arrange into 4 columns — Coding / Communication / Research / Other — ordered by the sort at right")
 
             Menu {
-                ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
-                    Button(action: { session.sortMode = mode }) {
-                        HStack {
-                            Text(mode.rawValue)
-                            if session.sortMode == mode { Image(systemName: "checkmark") }
+                Section("Sort columns by") {
+                    ForEach(TaskBoardSession.SortMode.allCases, id: \.self) { mode in
+                        Button(action: { session.sortMode = mode }) {
+                            HStack {
+                                Text(mode.rawValue)
+                                if session.sortMode == mode { Image(systemName: "checkmark") }
+                            }
                         }
                     }
                 }
             } label: {
-                Image(systemName: "chevron.down")
-                    .font(DS.Typo.overline)
-                    .foregroundStyle(session.sortMode == .aiRank ? DS.textTertiary : DS.accentText)
+                HStack(spacing: 2) {
+                    Text(session.sortMode.rawValue)
+                    Image(systemName: "chevron.down")
+                }
+                .font(DS.Typo.overline)
+                .foregroundStyle(session.sortMode == .aiRank ? DS.textTertiary : DS.accentText)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Tidy order: \(session.sortMode.rawValue)")
+            .help("Column order when you Tidy: \(session.sortMode.rawValue)")
         }
     }
 

@@ -181,10 +181,7 @@ struct TaskCanvasCard: View {
         // then wraps vertically ("1 0 J u l"). Wrapping reflows overflow onto a
         // second line and proposes each item its ideal width, so nothing squeezes.
         WrapLayout(spacing: DS.Space.xs, lineSpacing: DS.Space.xxs) {
-            Circle()
-                .fill(DS.priorityDot(task.aiPriority))
-                .frame(width: 8, height: 8)
-                .help("Priority \(task.aiPriority.rawValue)")
+            priorityTag
 
             if let due = task.dueAt {
                 let d = Self.dueLabel(due)
@@ -213,6 +210,21 @@ struct TaskCanvasCard: View {
                 .foregroundStyle(DS.textTertiary)
                 .help(task.source.displayName)
         }
+    }
+
+    /// Priority as an explicit label (P0/P1/P2/P3) instead of a bare dot —
+    /// P0/P1 carry weight (red/amber), P2/P3 stay quiet so they don't shout.
+    private var priorityTag: some View {
+        let p = task.aiPriority
+        let (tint, soft): (Color, Color) = {
+            switch p {
+            case .p0: return (DS.danger, DS.dangerSoft)
+            case .p1: return (DS.warning, DS.warningSoft)
+            case .p2, .p3: return (DS.textSecondary, DS.surface)
+            }
+        }()
+        return dsBadge(p.rawValue, tint: tint, soft: soft)
+            .help("Priority \(p.rawValue)")
     }
 
     /// Due-date chip content: "overdue"/"today" demand attention, the rest whisper.
