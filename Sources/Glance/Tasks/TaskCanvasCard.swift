@@ -175,7 +175,12 @@ struct TaskCanvasCard: View {
     }
 
     private var metaRow: some View {
-        HStack(spacing: DS.Space.xs) {
+        // WrapLayout, not HStack: at the fixed 340 card width a single row of
+        // fixed-size badges overflows once labels are long, and HStack shrinks
+        // the only flexible child (the due-date Text) to one glyph wide — it
+        // then wraps vertically ("1 0 J u l"). Wrapping reflows overflow onto a
+        // second line and proposes each item its ideal width, so nothing squeezes.
+        WrapLayout(spacing: DS.Space.xs, lineSpacing: DS.Space.xxs) {
             Circle()
                 .fill(DS.priorityDot(task.aiPriority))
                 .frame(width: 8, height: 8)
@@ -188,6 +193,8 @@ struct TaskCanvasCard: View {
                     Text(d.text)
                 }
                 .font(DS.Typo.caption)
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(d.color)
             }
 
