@@ -16,10 +16,13 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     var isTranscribing: (() -> Bool)?
     /// Provides the live backend status for the status line.
     var statusProvider: (() -> (connected: Bool, label: String))?
+    /// Provides hotkey bindings that failed to register (empty = all good).
+    var hotkeyWarningProvider: (() -> [String])?
 
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var statusLineItem: NSMenuItem?
+    private var hotkeyWarningItem: NSMenuItem?
     private var transcribeItem: NSMenuItem?
 
     func install() {
@@ -50,6 +53,13 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
         status.isEnabled = false
         statusLineItem = status
         menu.addItem(status)
+
+        // Hotkey conflict warning (hidden unless a binding failed).
+        let hotkeyWarning = NSMenuItem()
+        hotkeyWarning.isEnabled = false
+        hotkeyWarning.isHidden = true
+        hotkeyWarningItem = hotkeyWarning
+        menu.addItem(hotkeyWarning)
 
         menu.addItem(.separator())
 
@@ -108,6 +118,16 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
             (dot, color, NSFont.systemFont(ofSize: 12)),
             (label, NSColor.secondaryLabelColor, NSFont.systemFont(ofSize: 12))
         ])
+
+        let warnings = hotkeyWarningProvider?() ?? []
+        hotkeyWarningItem?.isHidden = warnings.isEmpty
+        if !warnings.isEmpty {
+            hotkeyWarningItem?.attributedTitle = attributed([
+                ("⚠ ", NSColor.systemOrange, NSFont.systemFont(ofSize: 12)),
+                (warnings.joined(separator: " · "), NSColor.secondaryLabelColor,
+                 NSFont.systemFont(ofSize: 12))
+            ])
+        }
     }
 
     // MARK: - Actions

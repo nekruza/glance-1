@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.statusProvider = { [weak coordinator] in
             coordinator?.backendStatusLine() ?? (false, "Claude CLI status unknown")
         }
+        statusItem.hotkeyWarningProvider = { [weak coordinator] in
+            coordinator?.hotkeyWarnings() ?? []
+        }
         statusItem.onToggleTranscription = { [weak self] in self?.toggleTranscription() }
         statusItem.isTranscribing = { [weak self] in self?.transcriber.isRecording ?? false }
 

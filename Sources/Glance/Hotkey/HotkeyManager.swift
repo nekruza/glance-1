@@ -18,7 +18,25 @@ final class HotkeyManager {
 
     private var hotKeyRefs: [Slot: EventHotKeyRef] = [:]
     private var callbacks: [Slot: () -> Void] = [:]
+    private var combos: [Slot: KeyCombo] = [:]
     private var eventHandler: EventHandlerRef?
+
+    /// Slots whose last `RegisterEventHotKey` call failed (e.g. another app
+    /// holds the combo exclusively). Registration is otherwise one-shot, so
+    /// failures are sticky until a retry or a rebind succeeds.
+    private(set) var failures: [Slot: OSStatus] = [:] {
+        didSet { syncRetryTimer() }
+    }
+
+    /// Alive only while `failures` is non-empty — no idle polling when healthy.
+    private var retryTimer: Timer?
+
+    /// Human-readable descriptions of failed bindings, for the menu warning.
+    var failureDescriptions: [String] {
+        failures.compactMap { slot, _ in
+            combos[slot].map { "\($0.displayString) is taken by another app" }
+        }
+    }
 
     private static let signature: OSType = {
         // FourCharCode 'GLnc'
@@ -37,6 +55,7 @@ final class HotkeyManager {
     }
 
     deinit {
+        retryTimer?.invalidate()
         for slot in Slot.allCases { unregister(slot) }
         if let eventHandler { RemoveEventHandler(eventHandler) }
     }
@@ -50,6 +69,7 @@ final class HotkeyManager {
     func register(_ combo: KeyCombo, for slot: Slot, onFire: (() -> Void)? = nil) {
         guard combo.isValid else { return }
         if let onFire { callbacks[slot] = onFire }
+        combos[slot] = combo
         unregister(slot)
         var ref: EventHotKeyRef?
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: slot.rawValue)
@@ -61,8 +81,35 @@ final class HotkeyManager {
                                          &ref)
         if status == noErr {
             hotKeyRefs[slot] = ref
+            failures[slot] = nil
         } else {
+            failures[slot] = status
             NSLog("Glance: RegisterEventHotKey failed (status \(status)) for \(combo.displayString)")
+        }
+    }
+
+    /// Retry slots whose registration failed. A grab lost at launch (combo
+    /// held by another app that has since quit) is recaptured here — Carbon
+    /// never retries on its own. Healthy slots are left untouched so an
+    /// active binding is never cycled. No-op when everything is bound.
+    func retryFailedRegistrations() {
+        for slot in Array(failures.keys) {
+            if let combo = combos[slot] { register(combo, for: slot) }
+        }
+    }
+
+    /// Start the retry timer on the first failure; stop it once all slots
+    /// bind again. `.common` mode so it fires even during menu tracking.
+    private func syncRetryTimer() {
+        if failures.isEmpty {
+            retryTimer?.invalidate()
+            retryTimer = nil
+        } else if retryTimer == nil {
+            let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+                self?.retryFailedRegistrations()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            retryTimer = timer
         }
     }
 

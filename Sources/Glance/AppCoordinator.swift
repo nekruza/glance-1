@@ -50,6 +50,14 @@ final class AppCoordinator {
             .sink { [weak self] combo in self?.hotkey.register(combo) }
             .store(in: &cancellables)
 
+        // A hotkey grab lost at launch (combo held by an app that later quit)
+        // is sticky — HotkeyManager retries on its own timer while any slot is
+        // failed; wake is an extra nudge since sleep pauses timers.
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.didWakeNotification)
+            .sink { [weak self] _ in self?.hotkey.retryFailedRegistrations() }
+            .store(in: &cancellables)
+
         setupTasks()
 
         overlay.onDismiss = { [weak self] in self?.endSession() }
@@ -308,6 +316,11 @@ final class AppCoordinator {
             }
             completion(items.count)
         }
+    }
+
+    /// Hotkey bindings that failed to register, for the menu warning line.
+    func hotkeyWarnings() -> [String] {
+        hotkey.failureDescriptions
     }
 
     /// Current backend status for the menu's status line.
