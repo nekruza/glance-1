@@ -42,6 +42,7 @@ struct TaskSettingsView: View {
     @State private var connectionsLoading = false
     @State private var connectionsError: String?
     @State private var connectionsCheckedAt: Date?
+    @State private var keyDraft = ""
 
     @ObservedObject var session: TaskBoardSession
     var onClose: () -> Void
@@ -56,7 +57,9 @@ struct TaskSettingsView: View {
                 ScrollView {
                     content
                         .padding(DS.Space.lg)
-                        .frame(maxWidth: 560, alignment: .leading)
+                        // Full-width, responsive: content fills the window (was
+                        // capped at 560). The connectors grid + adaptive columns
+                        // reflow to whatever width is available.
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .background(DS.bg)
@@ -182,19 +185,12 @@ struct TaskSettingsView: View {
     }
 
     private var connectionsSection: some View {
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
-            row("Composio MCP", "Read-only pulls: Jira / Granola / Slack / Calendar → Inbox") {
-                VStack(alignment: .trailing, spacing: DS.Space.xxs) {
-                    TextField("MCP URL", text: $prefs.composioURL)
-                        .textFieldStyle(.roundedBorder).frame(width: 200).font(DS.Typo.caption)
-                    SecureField("API key (ck_…)", text: $prefs.composioKey)
-                        .textFieldStyle(.roundedBorder).frame(width: 200).font(DS.Typo.caption)
-                }
-            }
+        VStack(alignment: .leading, spacing: DS.Space.md) {
+            apiKeyHeader
             Divider().overlay(DS.divider)
-            HStack {
-                Text("Apps linked to your Composio account. Pulls only work for active connections.")
-                    .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+
+            HStack(spacing: DS.Space.xs) {
+                overline("Connected apps")
                 Spacer()
                 Button(action: refreshConnections) {
                     HStack(spacing: DS.Space.xxs) {
@@ -202,58 +198,216 @@ struct TaskSettingsView: View {
                         Text(connectionsLoading ? "Checking…" : "Refresh")
                     }
                 }
-                .controlSize(.small)
-                .disabled(connectionsLoading)
+                .buttonStyle(DSSecondaryButtonStyle()).disabled(connectionsLoading)
+                Button("Open dashboard") {
+                    NSWorkspace.shared.open(URL(string: "https://dashboard.composio.dev/")!)
+                }
+                .buttonStyle(DSPrimaryButtonStyle())
             }
 
             if let err = connectionsError {
                 Text(err).font(DS.Typo.caption).foregroundStyle(DS.danger)
             }
 
-            if connections.isEmpty && !connectionsLoading && connectionsError == nil {
-                Text(connectionsCheckedAt == nil
-                     ? "Click Refresh to check your connections."
-                     : "No connections found.")
+            let sorted = connections.sorted { a, b in
+                if a.isActive != b.isActive { return a.isActive }
+                return a.app.localizedCaseInsensitiveCompare(b.app) == .orderedAscending
+            }
+            if sorted.isEmpty {
+                Text(connectionsEmptyMessage)
                     .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: DS.Space.sm)],
+                          alignment: .leading, spacing: DS.Space.sm) {
+                    ForEach(sorted) { c in connectionCard(c) }
+                }
             }
 
-            ForEach(connections) { c in
-                Hover { hovering in
-                    HStack(spacing: DS.Space.xs + 2) {
-                        Image(systemName: iconForApp(c.app))
-                            .font(DS.Typo.label)
-                            .foregroundStyle(DS.textSecondary)
-                            .frame(width: 16)
-                        Text(c.app.capitalized).font(DS.Typo.label)
-                        Spacer()
-                        pill(c.isActive ? "Active" : c.status.capitalized,
-                             c.isActive ? DS.success : DS.warning,
-                             soft: c.isActive ? DS.successSoft : DS.warningSoft)
+            Text("Every connected app has a switch — toggled-on apps are the sources Glance pulls tasks from and show in the board's pull menu. Connect more apps in the Composio dashboard.")
+                .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
+        }
+        // Auto-load connections the first time this page opens.
+        .onAppear {
+            if connectionsCheckedAt == nil && !connectionsLoading { refreshConnections() }
+        }
+    }
+
+    private var connectionsEmptyMessage: String {
+        if connectionsLoading { return "Checking your connected apps…" }
+        if connectionsCheckedAt == nil { return "Loading your connected apps…" }
+        return "No connected apps yet. Open the Composio dashboard to connect one, then Refresh."
+    }
+
+    // MARK: API key header (matches the reference: masked-Saved pill + Save/Clear)
+
+    private var apiKeyHeader: some View {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            HStack(spacing: DS.Space.xs) {
+                Text("Composio API Key").font(DS.Typo.headline).foregroundStyle(DS.textPrimary)
+                if let masked = maskedKey {
+                    pill(masked, DS.success, soft: DS.successSoft)
+                } else {
+                    pill("Not set", DS.warning, soft: DS.warningSoft)
+                }
+                Spacer()
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://dashboard.composio.dev/developers")!)
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("Get API Key")
+                        Image(systemName: "arrow.up.right")
                     }
-                    .padding(.vertical, DS.Space.xxs + 1).padding(.horizontal, DS.Space.xs + 2)
-                    .background(RoundedRectangle(cornerRadius: DS.Radius.small)
-                        .fill(hovering ? DS.surfaceHover : DS.bg))
+                    .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+                }
+                .buttonStyle(.plain).pointerCursor()
+            }
+
+            HStack(spacing: DS.Space.xs) {
+                SecureField("Paste a new key to replace the saved one", text: $keyDraft)
+                    .textFieldStyle(.plain).font(DS.Typo.body)
+                    .padding(DS.Space.xs)
+                    .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.surface))
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.small)
                         .strokeBorder(DS.border, lineWidth: 1))
-                }
+                Button("Save key") { saveKey() }
+                    .buttonStyle(DSPrimaryButtonStyle())
+                    .disabled(keyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Clear") { prefs.composioKey = "" }
+                    .buttonStyle(DSSecondaryButtonStyle())
+                    .disabled(prefs.composioKey.isEmpty)
             }
 
-            if let at = connectionsCheckedAt {
-                Text("Checked \(at.formatted(date: .omitted, time: .shortened))")
-                    .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
-            }
+            Text("Your key is stored locally and used for read-only pulls. Paste a new key to replace it, or Clear to remove.")
+                .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
 
-            Divider().overlay(DS.divider)
-            HStack {
-                Text("Add or repair connections in the Composio dashboard.")
-                    .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
-                Spacer()
-                Button("Open dashboard") {
-                    NSWorkspace.shared.open(URL(string: "https://dashboard.composio.dev/")!)
-                }
-                .controlSize(.small)
+            HStack(spacing: DS.Space.xs) {
+                Text("MCP URL").font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
+                TextField("https://…", text: $prefs.composioURL)
+                    .textFieldStyle(.roundedBorder).font(DS.Typo.caption).frame(maxWidth: 320)
             }
         }
+    }
+
+    // MARK: Connected-app card
+
+    @ViewBuilder private func connectionCard(_ c: ComposioIngest.Connection) -> some View {
+        let source = fetchSource(matching: c.app)
+        let match = catalogEntry(for: c.app)
+        let name = match?.name ?? c.app.capitalized
+        let slug = match?.slug ?? c.app.lowercased()
+
+        HStack(alignment: .top, spacing: DS.Space.xs) {
+            Text(monogram(name))
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.small)
+                    .fill(tileColor(slug)))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(DS.Typo.body).fontWeight(.semibold)
+                    .foregroundStyle(DS.textPrimary).lineLimit(1)
+                if let category = match?.category {
+                    Text(category).font(DS.Typo.caption)
+                        .foregroundStyle(DS.textSecondary).lineLimit(1)
+                }
+                statusPill(for: c)
+            }
+            Spacer(minLength: DS.Space.xxs)
+
+            let target: ComposioIngest.FetchTarget = source.map { .builtin($0) }
+                ?? .app(slug: normalizedApp(c.app), name: name)
+            Toggle("", isOn: Binding(
+                get: { prefs.isFetchEnabled(target) },
+                set: { prefs.setFetch(target, $0) }
+            ))
+            .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+        }
+        .padding(DS.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.medium).fill(DS.surface))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.medium)
+            .strokeBorder(DS.border, lineWidth: 1))
+    }
+
+    // MARK: Connected-app helpers
+
+    /// Matching lives on `ComposioIngest.Source` now (the pull pipeline needs
+    /// it too); these stay as local shorthands.
+    private func normalizedApp(_ app: String) -> String {
+        ComposioIngest.Source.normalizedApp(app)
+    }
+
+    private func fetchSource(matching app: String) -> ComposioIngest.Source? {
+        ComposioIngest.Source.match(app: app)
+    }
+
+    /// Catalog entry for a connection, matched precisely: exact slug first, then
+    /// the canonical entry for a recognised fetch source. Avoids the substring
+    /// false-positive where a Google Calendar connection matched Cal.com ("cal").
+    private func catalogEntry(for app: String) -> ComposioCatalog.App? {
+        let a = normalizedApp(app)
+        if let exact = ComposioCatalog.all.first(where: { $0.slug == a }) { return exact }
+        if let source = fetchSource(matching: a) {
+            let canonical: String
+            switch source {
+            case .jira:     canonical = "jira"
+            case .slack:    canonical = "slack"
+            case .granola:  canonical = "granola"
+            case .calendar: canonical = "googlecalendar"
+            case .github:   canonical = "github"
+            case .gmail:    canonical = "gmail"
+            }
+            return ComposioCatalog.all.first { $0.slug == canonical }
+        }
+        return nil
+    }
+
+    @ViewBuilder private func statusPill(for conn: ComposioIngest.Connection?) -> some View {
+        if connectionsCheckedAt == nil {
+            EmptyView()
+        } else if let conn {
+            if conn.isActive {
+                pill("Connected", DS.success, soft: DS.successSoft)
+            } else {
+                pill(conn.status.capitalized, DS.warning, soft: DS.warningSoft)
+            }
+        } else {
+            pill("Not linked", DS.textTertiary, soft: DS.surfaceHover)
+        }
+    }
+
+    private var maskedKey: String? {
+        let k = prefs.composioKey
+        guard !k.isEmpty else { return nil }
+        return "Saved · ••••" + String(k.suffix(4))
+    }
+
+    private func saveKey() {
+        let k = keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !k.isEmpty else { return }
+        prefs.composioKey = k
+        keyDraft = ""
+    }
+
+    /// 1–2 uppercase initials for the icon tile (no brand-logo assets shipped).
+    private func monogram(_ name: String) -> String {
+        let words = name.split { $0 == " " || $0 == "." || $0 == "/" }.filter { !$0.isEmpty }
+        if words.count >= 2, let a = words[0].first, let b = words[1].first {
+            return (String(a) + String(b)).uppercased()
+        }
+        return String(name.prefix(1)).uppercased()
+    }
+
+    /// Deterministic tile color from the slug (stable across launches).
+    private static let tilePalette: [Color] = [
+        "4C6EF5", "12B886", "E8590C", "BE4BDB", "1098AD",
+        "7048E8", "E64980", "2B8A3E", "F08C00", "0CA678",
+    ].map { Color(hexRGB: $0)! }
+
+    private func tileColor(_ slug: String) -> Color {
+        let sum = slug.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        return Self.tilePalette[sum % Self.tilePalette.count]
     }
 
     private func refreshConnections() {
@@ -264,23 +418,27 @@ struct TaskSettingsView: View {
             connectionsCheckedAt = Date()
             if let list {
                 connections = list.sorted { $0.app < $1.app }
+                syncKnownApps(from: list)
             } else {
                 connectionsError = error
             }
         }
     }
 
-    private func iconForApp(_ app: String) -> String {
-        switch app.lowercased() {
-        case let a where a.contains("jira"): return "ticket"
-        case let a where a.contains("slack"): return "number"
-        case let a where a.contains("granola"): return "mic"
-        case let a where a.contains("calendar"): return "calendar"
-        case let a where a.contains("gmail"): return "envelope"
-        case let a where a.contains("github"): return "chevron.left.forwardslash.chevron.right"
-        default: return "app.connected.to.app.below.fill"
+    /// Cache active connections with no curated source so the canvas pull
+    /// menu can offer them (slug → display name). Prune stale entries and
+    /// their enabled-toggle keys when an app is disconnected.
+    private func syncKnownApps(from list: [ComposioIngest.Connection]) {
+        var apps: [String: String] = [:]
+        for c in list where c.isActive && fetchSource(matching: c.app) == nil {
+            let slug = normalizedApp(c.app)
+            apps[slug] = catalogEntry(for: c.app)?.name ?? c.app.capitalized
         }
+        let removed = Set(prefs.knownApps.keys).subtracting(apps.keys)
+        for slug in removed { prefs.enabledSources.remove("app:\(slug)") }
+        prefs.knownApps = apps
     }
+
 
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -371,273 +529,36 @@ struct TaskSettingsView: View {
         }
     }
 
-    // MARK: - Agents
+    // MARK: - Agents (moved to the dedicated AI Agents page)
 
-    @State private var editingAgentId: UUID?
-    @State private var generateRequest = ""
-    @State private var generating = false
-    @State private var generateError: String?
-
+    /// Agent creation/editing now lives on its own full-page surface
+    /// (`AgentManagementView`). This section is a short signpost so the old
+    /// Settings ▸ Agents entry still lands somewhere sensible.
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
-            Text("Skill profiles. New tasks are routed to the best fit by AI; you can override per task. A profile sets the persona, preferred model, and which tools its runs may use.")
+            Text("Agents have moved to their own page")
+                .font(DS.Typo.body).foregroundStyle(DS.textPrimary)
+            Text("Create, edit, and manage your AI agents on the dedicated AI Agents page — more room, a searchable roster, and a full editor.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-
-            ForEach(prefs.agents) { agent in
-                agentRow(agent)
-            }
-
-            // AI-generated agent: describe the need, Opus designs the profile.
-            VStack(alignment: .leading, spacing: DS.Space.xxs + 2) {
-                overline("Create with AI")
-                HStack(spacing: DS.Space.xs) {
-                    TextField("Describe the agent you need — e.g. “SQL analyst for our metrics DB, careful with joins”",
-                              text: $generateRequest)
-                        .textFieldStyle(.roundedBorder).font(DS.Typo.caption)
-                        .onSubmit { generateAgent() }
-                    Button(action: { generateAgent() }) {
-                        HStack(spacing: DS.Space.xxs) {
-                            if generating { ProgressView().controlSize(.mini) }
-                            Text(generating ? "Designing…" : "Generate")
-                        }
-                    }
-                    .buttonStyle(DSPrimaryButtonStyle())
-                    .disabled(generating || generateRequest.trimmingCharacters(in: .whitespaces).isEmpty)
+            HStack(spacing: DS.Space.xs + 2) {
+                ForEach(prefs.agents.prefix(6)) { agent in
+                    AgentAvatarView(agent: agent, size: 32)
                 }
-                if let err = generateError {
-                    Text(err).font(DS.Typo.caption).foregroundStyle(DS.danger)
-                }
-                Text("Opus writes the persona, picks the model and least-privilege tools. Review and tweak before first use.")
-                    .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
-            }
-            .padding(DS.Space.sm)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.medium).fill(DS.surface))
-
-            Button("Add agent manually…") {
-                let fresh = AgentProfile(name: "New agent", icon: "🤖",
-                                         skills: "Describe what this agent is best at",
-                                         systemPrompt: "", preferredModel: nil,
-                                         allowedTools: ["Read", "Glob", "Grep"])
-                prefs.agents.append(fresh)
-                editingAgentId = fresh.id
-            }
-            .controlSize(.small)
-        }
-    }
-
-    private func generateAgent() {
-        let request = generateRequest.trimmingCharacters(in: .whitespaces)
-        guard !request.isEmpty, !generating else { return }
-        generating = true
-        generateError = nil
-        session.generateAgent(request: request) { profile in
-            generating = false
-            guard let profile else {
-                generateError = "Couldn't design an agent — try rephrasing."
-                return
-            }
-            prefs.agents.append(profile)
-            editingAgentId = profile.id
-            generateRequest = ""
-        }
-    }
-
-    @ViewBuilder private func agentRow(_ agent: AgentProfile) -> some View {
-        let editing = editingAgentId == agent.id
-        let stats = session.store.stats(forAgent: agent.id)
-        Hover { hovering in
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                HStack(alignment: .top, spacing: DS.Space.xs + 2) {
-                    AgentAvatarView(agent: agent, size: 36)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: DS.Space.xs) {
-                            Text(agent.humanName ?? agent.name).font(DS.Typo.label)
-                            if agent.humanName != nil {
-                                Text("· \(agent.name)")
-                                    .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
-                            }
-                            if agent.isBuiltIn {
-                                dsBadge("built-in", tint: DS.textTertiary, soft: DS.surface)
-                            }
-                        }
-                        Text(statsLine(stats))
-                            .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
-                    }
-                    Spacer()
-                    Text(agent.preferredModel ?? "auto")
-                        .font(DS.Typo.mono).foregroundStyle(DS.textTertiary)
-                    Button(editing ? "Done" : "Edit") {
-                        editingAgentId = editing ? nil : agent.id
-                    }
-                    .buttonStyle(.plain).font(DS.Typo.label).foregroundStyle(DS.accentText)
-                }
-                if !editing {
-                    Text(agent.skills).font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
-                        .lineLimit(1)
-                    agentFeed(agent, limit: 2, interactive: false)
-                } else {
-                    agentFeed(agent, limit: 20, interactive: true)
-                    agentEditor(agent)
-                }
-            }
-            .padding(.vertical, DS.Space.xs).padding(.horizontal, DS.Space.sm)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.medium)
-                .fill(hovering && !editing ? DS.surfaceHover : DS.bg))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.medium)
-                .strokeBorder(DS.border, lineWidth: 1))
-        }
-    }
-
-    /// "N tasks · X% success · Y★ avg" — segments appear once there is data.
-    private func statsLine(_ stats: AgentStats) -> String {
-        var parts = ["\(stats.totalRuns) task\(stats.totalRuns == 1 ? "" : "s")"]
-        if let pct = stats.successPercent { parts.append("\(pct)% success") }
-        if let avg = stats.averageRating {
-            parts.append(String(format: "%.1f★ avg", avg))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private static let feedTime: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
-
-    /// Activity feed: terminal runs attributed to this agent. Preview mode
-    /// (interactive: false) shows a muted glimpse; expanded mode is scrollable
-    /// and rows jump to the task.
-    @ViewBuilder private func agentFeed(_ agent: AgentProfile, limit: Int,
-                                        interactive: Bool) -> some View {
-        let recent = session.store.recentRuns(forAgent: agent.id, limit: limit)
-        if !recent.isEmpty {
-            let rows = ForEach(recent) { run in
-                HStack(spacing: DS.Space.xs) {
-                    Image(systemName: run.state == .succeeded
-                          ? "checkmark.circle.fill" : "xmark.circle")
-                        .font(DS.Typo.overline)
-                        .foregroundStyle(run.state == .succeeded ? DS.success : DS.textTertiary)
-                    Text(session.store.task(run.taskId)?.title ?? "(deleted task)")
-                        .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
-                        .lineLimit(1)
-                    if let stars = run.rating {
-                        Text("\(stars)★").font(DS.Typo.caption).foregroundStyle(DS.warning)
-                    }
-                    Spacer()
-                    Text(Self.feedTime.localizedString(for: run.startedAt, relativeTo: Date()))
+                if prefs.agents.count > 6 {
+                    Text("+\(prefs.agents.count - 6)")
                         .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard interactive else { return }
-                    session.selectedTaskId = run.taskId
-                    session.showSettings = false
-                }
             }
-            if interactive {
-                VStack(alignment: .leading, spacing: DS.Space.xxs) {
-                    overline("Recent work")
-                    ScrollView { VStack(alignment: .leading, spacing: DS.Space.xxs) { rows } }
-                        .frame(maxHeight: 160)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: DS.Space.xxs) { rows }
+            .padding(.vertical, DS.Space.xxs)
+            Button(action: {
+                session.showSettings = false
+                session.showAgents = true
+            }) {
+                Label("Open AI Agents", systemImage: "person.2")
             }
-        }
-    }
-
-    private func agentEditor(_ agent: AgentProfile) -> some View {
-        func bind<T>(_ keyPath: WritableKeyPath<AgentProfile, T>) -> Binding<T> {
-            Binding(
-                get: {
-                    prefs.agents.first { $0.id == agent.id }?[keyPath: keyPath]
-                        ?? agent[keyPath: keyPath]
-                },
-                set: { newValue in
-                    guard let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) else { return }
-                    prefs.agents[idx][keyPath: keyPath] = newValue
-                }
-            )
-        }
-        return VStack(alignment: .leading, spacing: DS.Space.xs) {
-            HStack(spacing: DS.Space.xs) {
-                TextField("Name", text: bind(\.name))
-                    .textFieldStyle(.roundedBorder).font(DS.Typo.caption).frame(width: 130)
-                TextField(agent.name, text: Binding(
-                    get: { prefs.agents.first { $0.id == agent.id }?.humanName ?? "" },
-                    set: { newValue in
-                        guard let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) else { return }
-                        let trimmed = newValue.trimmingCharacters(in: .whitespaces)
-                        prefs.agents[idx].humanName = trimmed.isEmpty ? nil : trimmed
-                    }
-                ))
-                .textFieldStyle(.roundedBorder).font(DS.Typo.caption).frame(width: 100)
-                .help("Display name — how this agent appears around the app")
-                TextField("Emoji", text: bind(\.icon))
-                    .textFieldStyle(.roundedBorder).font(DS.Typo.caption).frame(width: 60)
-                Picker("", selection: bind(\.preferredModel)) {
-                    Text("auto").tag(String?.none)
-                    ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in
-                        Text(m).tag(String?.some(m))
-                    }
-                }
-                .labelsHidden().controlSize(.small).frame(width: 90)
-            }
-            TextField("Skills (used for AI routing)", text: bind(\.skills))
-                .textFieldStyle(.roundedBorder).font(DS.Typo.caption)
-            overline("System prompt")
-            TextEditor(text: bind(\.systemPrompt))
-                .font(DS.Typo.mono)
-                .scrollContentBackground(.hidden)
-                .frame(height: 90)
-                .padding(DS.Space.xxs + 2)
-                .background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.codeBg))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.small)
-                    .strokeBorder(DS.border, lineWidth: 1))
-            overline("Tools")
-            HStack(spacing: DS.Space.xs + 2) {
-                ForEach(AgentProfile.toolVocabulary, id: \.self) { tool in
-                    Toggle(tool, isOn: Binding(
-                        get: { (prefs.agents.first { $0.id == agent.id }?.allowedTools ?? []).contains(tool) },
-                        set: { on in
-                            guard let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) else { return }
-                            if on {
-                                if !prefs.agents[idx].allowedTools.contains(tool) {
-                                    prefs.agents[idx].allowedTools.append(tool)
-                                }
-                            } else {
-                                prefs.agents[idx].allowedTools.removeAll { $0 == tool }
-                            }
-                        }
-                    ))
-                    .toggleStyle(.checkbox)
-                    .font(DS.Typo.caption)
-                }
-            }
-            HStack {
-                if agent.isBuiltIn {
-                    Button("Reset to shipped definition") {
-                        if let shipped = AgentProfile.builtIns.first(where: { $0.name == agent.name }),
-                           let idx = prefs.agents.firstIndex(where: { $0.id == agent.id }) {
-                            var restored = shipped
-                            restored.id = agent.id // keep task references intact
-                            restored.isBuiltIn = true
-                            prefs.agents[idx] = restored
-                        }
-                    }
-                    .controlSize(.small)
-                } else {
-                    Button("Delete agent", role: .destructive) {
-                        prefs.agents.removeAll { $0.id == agent.id }
-                        editingAgentId = nil
-                    }
-                    .controlSize(.small)
-                }
-                Spacer()
-            }
-            Text("Boundary actions (git push, PR/API writes) stay blocked for every agent.")
-                .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
+            .buttonStyle(DSPrimaryButtonStyle())
+            .pointerCursor()
         }
     }
 

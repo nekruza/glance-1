@@ -13,7 +13,9 @@ struct TaskBoardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if session.showSettings {
+            if session.showAgents {
+                AgentManagementView(session: session, onClose: { session.showAgents = false })
+            } else if session.showSettings {
                 TaskSettingsView(session: session, onClose: { session.showSettings = false })
             } else if session.decomposeMode {
                 decomposeView
@@ -179,12 +181,16 @@ struct TaskBoardView: View {
                     .lineLimit(1)
             }
             Spacer()
-            if session.showSettings {
-                // On the settings page the gear is pointless — offer jumps to
-                // the ask overlay and back to the board instead.
+            if session.showSettings || session.showAgents {
+                // On a full-page surface the gear/agents icons are pointless —
+                // offer jumps to the ask overlay and back to the board instead.
                 footerIcon("sparkle", help: "Open the ask overlay") { session.openAskHandler?() }
-                footerIcon("checklist", help: "Back to the board") { session.showSettings = false }
+                footerIcon("checklist", help: "Back to the board") {
+                    session.showSettings = false
+                    session.showAgents = false
+                }
             } else {
+                footerIcon("person.2", help: "AI Agents") { session.showAgents = true }
                 footerIcon("gearshape", help: "Settings") { session.showSettings = true }
             }
         }

@@ -190,10 +190,10 @@ struct TabPill: View {
     }
 
     @ViewBuilder private var pullControl: some View {
-        if let src = session.pullingSource {
+        if let target = session.pullingSource {
             HStack(spacing: DS.Space.xxs) {
                 ProgressView().controlSize(.mini)
-                Text("Pulling \(src.rawValue)…").font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+                Text("Pulling \(target.displayName)…").font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
             }
             .padding(.horizontal, DS.Space.xxs)
         } else {
@@ -201,8 +201,8 @@ struct TabPill: View {
                 Menu {
                     Button("Pull from all") { session.pullAll() }
                     Divider()
-                    ForEach(ComposioIngest.Source.allCases, id: \.self) { src in
-                        Button("Pull from \(src.rawValue)") { session.pull(src) }
+                    ForEach(Preferences.shared.enabledFetchTargets) { target in
+                        Button("Pull from \(target.displayName)") { session.pull(target) }
                     }
                 } label: {
                     Image(systemName: "tray.and.arrow.down")

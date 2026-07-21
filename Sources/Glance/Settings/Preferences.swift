@@ -19,6 +19,8 @@ final class Preferences: ObservableObject {
         static let autoPlanApprove = "tasks.autoPlanApprove"
         static let composioURL = "composio.url"
         static let composioKey = "composio.key"
+        static let enabledSources = "tasks.enabledSources"
+        static let knownApps = "tasks.knownApps"
         static let schedEnabled = "sched.enabled"
         static let schedSource = "sched.source"
         static let schedMode = "sched.mode"
@@ -100,6 +102,48 @@ final class Preferences: ObservableObject {
     }
     @Published var composioKey: String {
         didSet { defaults.set(composioKey, forKey: Keys.composioKey) }
+    }
+
+    /// Which ingest sources Glance fetches from — the single gate for manual
+    /// `pullAll`, the pill menu, and scheduled "All" pulls. Holds
+    /// `ComposioIngest.FetchTarget.key` values: built-in `Source` rawValues
+    /// ("Jira") plus "app:<slug>" for generic connected apps. Defaults to the
+    /// original four; everything else is opt-in.
+    @Published var enabledSources: Set<String> {
+        didSet { defaults.set(Array(enabledSources), forKey: Keys.enabledSources) }
+    }
+
+    /// Connected Composio apps with no curated fetch source, slug → display
+    /// name. Cached from the last connections listing so the pull menu can
+    /// offer them without a network round-trip.
+    @Published var knownApps: [String: String] {
+        didSet { defaults.set(knownApps, forKey: Keys.knownApps) }
+    }
+
+    func isFetchEnabled(_ target: ComposioIngest.FetchTarget) -> Bool {
+        enabledSources.contains(target.key)
+    }
+    func setFetch(_ target: ComposioIngest.FetchTarget, _ on: Bool) {
+        if on { enabledSources.insert(target.key) }
+        else { enabledSources.remove(target.key) }
+    }
+    func isFetchEnabled(_ source: ComposioIngest.Source) -> Bool {
+        isFetchEnabled(.builtin(source))
+    }
+    func setFetch(_ source: ComposioIngest.Source, _ on: Bool) {
+        setFetch(.builtin(source), on)
+    }
+
+    /// Every fetch target the user has toggled on: enabled built-ins first
+    /// (declaration order), then enabled generic apps alphabetically.
+    var enabledFetchTargets: [ComposioIngest.FetchTarget] {
+        let builtins = ComposioIngest.Source.allCases
+            .map { ComposioIngest.FetchTarget.builtin($0) }
+            .filter(isFetchEnabled)
+        let apps = knownApps.sorted { $0.value < $1.value }
+            .map { ComposioIngest.FetchTarget.app(slug: $0.key, name: $0.value) }
+            .filter(isFetchEnabled)
+        return builtins + apps
     }
 
     /// Scheduled pulls: run a Composio pull automatically on a cadence.
@@ -239,6 +283,12 @@ final class Preferences: ObservableObject {
         }
         composioURL = defaults.string(forKey: Keys.composioURL) ?? "https://connect.composio.dev/mcp"
         composioKey = defaults.string(forKey: Keys.composioKey) ?? ""
+        if let arr = defaults.array(forKey: Keys.enabledSources) as? [String] {
+            enabledSources = Set(arr)
+        } else {
+            enabledSources = Set(ComposioIngest.Source.defaultEnabled.map(\.rawValue))
+        }
+        knownApps = defaults.dictionary(forKey: Keys.knownApps) as? [String: String] ?? [:]
         schedEnabled = defaults.bool(forKey: Keys.schedEnabled)
         schedSource = defaults.string(forKey: Keys.schedSource) ?? "All"
         schedMode = ScheduleMode(rawValue: defaults.string(forKey: Keys.schedMode) ?? "") ?? .daily

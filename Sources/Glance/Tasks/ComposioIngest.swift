@@ -14,6 +14,13 @@ final class ComposioIngest {
         case granola = "Granola"
         case slack = "Slack"
         case calendar = "Calendar"
+        case github = "GitHub"
+        case gmail = "Gmail"
+
+        /// Sources enabled on a fresh install. GitHub/Gmail (and any generic
+        /// app) are opt-in — each extra source is one more `claude -p` call
+        /// per "Pull from all".
+        static let defaultEnabled: [Source] = [.jira, .granola, .slack, .calendar]
 
         var taskSource: TaskSource {
             switch self {
@@ -21,6 +28,67 @@ final class ComposioIngest {
             case .granola: return .granola
             case .slack: return .slack
             case .calendar: return .calendar
+            case .github: return .github
+            case .gmail: return .gmail
+            }
+        }
+
+        /// Normalize a Composio app name for matching: lowercase + strip the
+        /// common "_mcp" / "-mcp" suffix Composio appends to some toolkits
+        /// (e.g. the real Granola connection reports as "granola_mcp").
+        static func normalizedApp(_ app: String) -> String {
+            var a = app.lowercased()
+            for suffix in ["_mcp", "-mcp", " mcp"] where a.hasSuffix(suffix) {
+                a = String(a.dropLast(suffix.count))
+            }
+            return a
+        }
+
+        /// Which curated fetch source (if any) a connected app name maps to.
+        /// Exact-match on normalized Composio toolkit slugs — NOT substring,
+        /// so e.g. "cal" (Cal.com) never matches the Calendar source.
+        static func match(app: String) -> Source? {
+            switch normalizedApp(app) {
+            case "jira":    return .jira
+            case "slack":   return .slack
+            case "granola": return .granola
+            case "github":  return .github
+            case "gmail", "googlemail", "google_mail": return .gmail
+            case "googlecalendar", "google_calendar", "google-calendar", "gcal", "calendar":
+                return .calendar
+            default:        return nil
+            }
+        }
+    }
+
+    /// What a pull targets: a curated built-in source (hand-written prompt)
+    /// or any other connected Composio app (templated generic prompt).
+    enum FetchTarget: Hashable, Identifiable {
+        case builtin(Source)
+        case app(slug: String, name: String)
+
+        var id: String { key }
+
+        /// Stable key stored in `Preferences.enabledSources` — builtin
+        /// rawValue ("Jira") or "app:<slug>" for generic apps.
+        var key: String {
+            switch self {
+            case .builtin(let s): return s.rawValue
+            case .app(let slug, _): return "app:\(slug)"
+            }
+        }
+
+        var displayName: String {
+            switch self {
+            case .builtin(let s): return s.rawValue
+            case .app(_, let name): return name
+            }
+        }
+
+        var taskSource: TaskSource {
+            switch self {
+            case .builtin(let s): return s.taskSource
+            case .app: return .external
             }
         }
     }
@@ -54,15 +122,15 @@ final class ComposioIngest {
         self.binaryPath = binaryPath
     }
 
-    /// Fetch one source and land new items in the store's Inbox. Main-thread
+    /// Fetch one target and land new items in the store's Inbox. Main-thread
     /// completion with counts (dedup by sourceRef against all existing tasks).
     @MainActor
-    func pull(_ source: Source, store: TaskStore, completion: @escaping (Result) -> Void) {
+    func pull(_ target: FetchTarget, store: TaskStore, completion: @escaping (Result) -> Void) {
         let existingKeys = Set(store.tasks.compactMap { $0.sourceRef?.key })
-        fetch(source) { fetched, error in
+        fetch(target) { fetched, error in
             guard let fetched else {
                 completion(Result(created: 0, skippedDuplicates: 0,
-                                  error: error ?? "No response — is \(source.rawValue) connected in Composio?"))
+                                  error: error ?? "No response — is \(target.displayName) connected in Composio?"))
                 return
             }
             var created = 0
@@ -73,7 +141,7 @@ final class ComposioIngest {
                     skipped += 1
                     continue
                 }
-                var t = TaskItem(title: String(f.title.prefix(200)), source: source.taskSource)
+                var t = TaskItem(title: String(f.title.prefix(200)), source: target.taskSource)
                 t.status = .inbox
                 t.descriptionMD = f.description ?? ""
                 t.labels = f.labels ?? []
@@ -247,7 +315,7 @@ final class ComposioIngest {
 
     // MARK: - Fetch (background)
 
-    private func fetch(_ source: Source, completion: @escaping ([FetchedTask]?, String?) -> Void) {
+    private func fetch(_ target: FetchTarget, completion: @escaping ([FetchedTask]?, String?) -> Void) {
         queue.async { [binaryPath] in
             guard let configURL = Self.writeMCPConfig() else {
                 DispatchQueue.main.async { completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.") }
@@ -282,7 +350,7 @@ final class ComposioIngest {
 
             do {
                 try proc.run()
-                if let data = Self.prompt(for: source).data(using: .utf8) {
+                if let data = Self.prompt(for: target).data(using: .utf8) {
                     try? inPipe.fileHandleForWriting.write(contentsOf: data)
                 }
                 try? inPipe.fileHandleForWriting.close()
@@ -360,6 +428,25 @@ final class ComposioIngest {
         """
     }
 
+    private static func prompt(for target: FetchTarget) -> String {
+        switch target {
+        case .builtin(let source):
+            return prompt(for: source)
+        case .app(let slug, let name):
+            return """
+            Using the composio tools for \(name) (toolkit "\(slug)"), fetch \
+            recent items (last 7 days) that are assigned to me, mention me, or \
+            otherwise need action FROM ME. Discover the toolkit's read/list/\
+            search actions with COMPOSIO_SEARCH_TOOLS first. Read actions \
+            only. \(readOnlyRules)
+            One task per actionable item — ignore FYIs and do not invent \
+            tasks. sourceKey = "\(slug):<stable item id>"; sourceURL = a deep \
+            link if available. Mention \(name) and include source context in \
+            the description. \(outputRules)
+            """
+        }
+    }
+
     private static func prompt(for source: Source) -> String {
         switch source {
         case .jira:
@@ -414,6 +501,31 @@ final class ComposioIngest {
             event duration bucket. dueAt = the event's start datetime, ISO8601 \
             with timezone. sourceKey = the calendar event id; \
             sourceURL = the event's htmlLink. \(outputRules)
+            """
+        case .github:
+            return """
+            Using the composio tools, fetch MY current GitHub work: pull \
+            requests where my review is requested, my open pull requests, and \
+            issues assigned to me — updated in the last 30 days. Use GitHub \
+            search/read actions only. \(readOnlyRules)
+            One task per PR/issue. sourceKey = "<owner>/<repo>#<number>"; \
+            sourceURL = the PR/issue html URL. Prefix the title with the repo \
+            short name. Put state, labels, author and requested-reviewer \
+            context in the description. taskKind = "code" for PRs and code \
+            issues. \(outputRules)
+            """
+        case .gmail:
+            return """
+            Using the composio tools, fetch my recent Gmail inbox (last 3 \
+            days) and extract emails that need action FROM ME — a reply, a \
+            decision, or a deadline. Read actions only. \(readOnlyRules)
+            Ignore newsletters, automated notifications, receipts, and \
+            pure-FYI mail. One task per actionable email. Title = imperative \
+            summary of the ask, not the subject line verbatim. Include \
+            sender, subject and the specific ask in the description. \
+            sourceKey = the Gmail message id; sourceURL = \
+            "https://mail.google.com/mail/u/0/#inbox/<message id>". \
+            taskKind = "writing". \(outputRules)
             """
         }
     }

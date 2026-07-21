@@ -19,6 +19,8 @@ struct CanvasView: View {
     @State private var zTop: [UUID] = []
     /// N-key monitor token.
     @State private var keyMonitor: Any?
+    /// "Remove all" (inbox) confirmation gate.
+    @State private var confirmRemoveAll = false
 
     static let margin: CGFloat = DS.Space.lg
     static let gutter: CGFloat = DS.Space.lg
@@ -178,6 +180,26 @@ struct CanvasView: View {
                     .buttonStyle(DSSecondaryButtonStyle())
                     .foregroundStyle(DS.accentText)
                     .help("Move everything in the Inbox onto the canvas")
+
+                    Button(action: { confirmRemoveAll = true }) {
+                        Label("Remove all", systemImage: "trash")
+                            .font(DS.Typo.label)
+                    }
+                    .buttonStyle(DSSecondaryButtonStyle())
+                    .foregroundStyle(DS.danger)
+                    .help("Archive everything in the Inbox")
+                    .confirmationDialog(
+                        "Remove all \(session.inboxCanvasTasks().count) inbox items?",
+                        isPresented: $confirmRemoveAll,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Remove all", role: .destructive) {
+                            for t in session.inboxCanvasTasks() { session.archive(t) }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("They'll be archived, not deleted — you can still find them later.")
+                    }
                 }
             }
             .padding(DS.Space.md)

@@ -226,7 +226,7 @@ enum TaskPriority: String, Codable, CaseIterable, Comparable {
 }
 
 enum TaskSource: String, Codable {
-    case manual, prompt, jira, granola, slack, calendar
+    case manual, prompt, jira, granola, slack, calendar, github, gmail, external
 
     var displayName: String {
         switch self {
@@ -236,6 +236,9 @@ enum TaskSource: String, Codable {
         case .granola: return "From a meeting"
         case .slack: return "From Slack"
         case .calendar: return "From Calendar"
+        case .github: return "From GitHub"
+        case .gmail: return "From Gmail"
+        case .external: return "From a connected app"
         }
     }
 
@@ -247,6 +250,9 @@ enum TaskSource: String, Codable {
         case .granola: return "mic"
         case .slack: return "number"
         case .calendar: return "calendar"
+        case .github: return "arrow.triangle.pull"
+        case .gmail: return "envelope"
+        case .external: return "puzzlepiece.extension"
         }
     }
 }

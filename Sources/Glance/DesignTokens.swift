@@ -64,6 +64,9 @@ enum DS {
         case .slack:    return Color(hexRGB: "611F69")! // Slack aubergine
         case .granola:  return Color(hexRGB: "F2994A")! // meeting orange
         case .calendar: return Color(hexRGB: "34A853")! // calendar green
+        case .github:   return Color(hexRGB: "8250DF")! // GitHub accent purple
+        case .gmail:    return Color(hexRGB: "EA4335")! // Gmail red
+        case .external: return Color(hexRGB: "0CA678")! // generic app teal
         case .manual, .prompt: return textTertiary      // added in-app → grey
         }
     }

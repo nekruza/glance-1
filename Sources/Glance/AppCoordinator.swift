@@ -206,7 +206,8 @@ final class AppCoordinator {
         prefs.schedLastRun = now
 
         if let source = ComposioIngest.Source(rawValue: prefs.schedSource) {
-            session.pull(source)
+            // A specific source that the user has since disabled is skipped.
+            if prefs.isFetchEnabled(source) { session.pull(source) }
         } else {
             session.pullAll()
         }

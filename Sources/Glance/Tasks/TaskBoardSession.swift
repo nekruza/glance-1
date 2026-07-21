@@ -25,6 +25,8 @@ final class TaskBoardSession: ObservableObject {
 
     @Published var tab: Tab = .board
     @Published var showSettings = false
+    /// Dedicated AI-agent management page (create/edit/delete agents).
+    @Published var showAgents = false
     @Published var sortMode: SortMode = .aiRank
     @Published var quickAdd: String = ""
     @Published var searchText: String = ""
@@ -44,7 +46,7 @@ final class TaskBoardSession: ObservableObject {
     @Published var decomposeKeep: Set<Int> = []
 
     /// Composio pull state (header button + status line).
-    @Published var pullingSource: ComposioIngest.Source?
+    @Published var pullingSource: ComposioIngest.FetchTarget?
     @Published var pullStatus: String?
 
     /// Tasks with a handoff-prompt generation in flight (detail spinner).
@@ -137,32 +139,41 @@ final class TaskBoardSession: ObservableObject {
     // MARK: - Composio pulls (manual, read-only)
 
     func pull(_ source: ComposioIngest.Source) {
+        pull(.builtin(source))
+    }
+
+    func pull(_ target: ComposioIngest.FetchTarget) {
         guard pullingSource == nil, ensureComposioConfigured() else { return }
-        pullingSource = source
+        pullingSource = target
         pullStatus = nil
-        ingest.pull(source, store: store) { [weak self] result in
+        ingest.pull(target, store: store) { [weak self] result in
             guard let self else { return }
             self.pullingSource = nil
-            self.showPullStatus(Self.describe(source, result))
+            self.showPullStatus(Self.describe(target, result))
             self.autoTriage(result.createdIds)
             if result.created > 0 {
                 self.tab = .inbox
-                self.pullNotifyHandler?("\(source.rawValue): \(result.created) new task\(result.created == 1 ? "" : "s") in Inbox")
+                self.pullNotifyHandler?("\(target.displayName): \(result.created) new task\(result.created == 1 ? "" : "s") in Inbox")
             }
         }
     }
 
-    /// Pull every source, one at a time (a single agent call each), then show
-    /// an aggregate status line.
+    /// Pull every enabled target — built-in sources plus toggled-on connected
+    /// apps — one at a time (a single agent call each), then show an
+    /// aggregate status line.
     func pullAll() {
         guard pullingSource == nil, ensureComposioConfigured() else { return }
         pullStatus = nil
         var summary: [String] = []
         var totalCreated = 0
-        let sources = ComposioIngest.Source.allCases
+        let targets = Preferences.shared.enabledFetchTargets
+        guard !targets.isEmpty else {
+            showPullStatus("No fetch sources enabled — turn some on in Settings ▸ Connections.")
+            return
+        }
 
         func next(_ index: Int) {
-            guard index < sources.count else {
+            guard index < targets.count else {
                 pullingSource = nil
                 showPullStatus(summary.joined(separator: " · "))
                 if totalCreated > 0 {
@@ -171,16 +182,16 @@ final class TaskBoardSession: ObservableObject {
                 }
                 return
             }
-            let source = sources[index]
-            pullingSource = source
-            ingest.pull(source, store: store) { [weak self] result in
+            let target = targets[index]
+            pullingSource = target
+            ingest.pull(target, store: store) { [weak self] result in
                 guard let self else { return }
                 totalCreated += result.created
                 self.autoTriage(result.createdIds)
                 if result.error != nil {
-                    summary.append("\(source.rawValue) ✗")
+                    summary.append("\(target.displayName) ✗")
                 } else {
-                    summary.append("\(source.rawValue) +\(result.created)")
+                    summary.append("\(target.displayName) +\(result.created)")
                 }
                 next(index + 1)
             }
@@ -196,13 +207,13 @@ final class TaskBoardSession: ObservableObject {
         return true
     }
 
-    private static func describe(_ source: ComposioIngest.Source, _ result: ComposioIngest.Result) -> String {
-        if let error = result.error { return "\(source.rawValue): \(error)" }
+    private static func describe(_ target: ComposioIngest.FetchTarget, _ result: ComposioIngest.Result) -> String {
+        if let error = result.error { return "\(target.displayName): \(error)" }
         if result.created == 0 {
-            return "\(source.rawValue): nothing new"
+            return "\(target.displayName): nothing new"
                 + (result.skippedDuplicates > 0 ? " (\(result.skippedDuplicates) already on board)" : "")
         }
-        return "\(source.rawValue): \(result.created) new in Inbox"
+        return "\(target.displayName): \(result.created) new in Inbox"
             + (result.skippedDuplicates > 0 ? ", \(result.skippedDuplicates) known" : "")
     }
 
