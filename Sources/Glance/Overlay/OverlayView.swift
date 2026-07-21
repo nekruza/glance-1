@@ -78,25 +78,28 @@ struct OverlayView: View {
     private var promptRow: some View {
         HStack(spacing: 14) {
             spark
-            TextField("", text: $session.input, prompt: Text(placeholder).foregroundColor(Theme.faint))
+            TextField("", text: $session.input, prompt: Text(placeholder).foregroundColor(Theme.faint),
+                      axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 19))
+                .font(.system(size: 13))
+                .lineLimit(1...6)
                 .tint(Theme.accent)
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
+                .onKeyPress(.return, phases: .down, action: handleReturn)
             micButton
             kbd("↩ Ask")
         }
         .padding(.horizontal, 22).padding(.vertical, 20)
     }
 
-    private var thumbnail: some View {
-        RoundedRectangle(cornerRadius: 5)
-            .fill(LinearGradient(colors: [Theme.glassTint, Color(red: 26/255, green: 33/255, blue: 48/255)],
-                                 startPoint: .topLeading, endPoint: .bottomTrailing))
-            .frame(width: 52, height: 33)
+    private func thumbnail(_ image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: 44, height: 28)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.glassBorderHi, lineWidth: 1))
-            .opacity(session.attachImage ? 1 : 0.4)
     }
 
     // MARK: - Answer: transcript + follow-up
@@ -119,7 +122,7 @@ struct OverlayView: View {
     private var transcriptContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
-                askedHeader(turn, showThumb: idx == 0 && session.attachImage)
+                askedHeader(turn)
                 answerBlock(turn)
                     .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 18)
                 if idx < session.turns.count - 1 {
@@ -130,14 +133,14 @@ struct OverlayView: View {
         }
     }
 
-    private func askedHeader(_ turn: OverlaySession.Turn, showThumb: Bool) -> some View {
+    private func askedHeader(_ turn: OverlaySession.Turn) -> some View {
         HStack(alignment: .top, spacing: 12) {
             spark.font(.system(size: 16, weight: .semibold))
             Text(turn.question)
                 .font(.system(size: 14))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if showThumb {
-                thumbnail.frame(width: 44, height: 28)
+            if let thumb = turn.thumbnail {
+                thumbnail(thumb)
             }
         }
         .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 14)
@@ -197,17 +200,32 @@ struct OverlayView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.faint)
             TextField("", text: $session.input,
-                      prompt: Text(placeholder).foregroundColor(Theme.faint))
+                      prompt: Text(placeholder).foregroundColor(Theme.faint),
+                      axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15))
+                .font(.system(size: 13))
+                .lineLimit(1...6)
                 .tint(Theme.accent)
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
+                .onKeyPress(.return, phases: .down, action: handleReturn)
             micButton
         }
         .padding(.horizontal, 22).padding(.vertical, 14)
         .background(Color.white.opacity(0.03))
         .overlay(Divider().overlay(Theme.glassBorder), alignment: .top)
+    }
+
+    /// Shift+Return inserts a newline instead of submitting. Insertion goes
+    /// through the field editor so the break lands at the cursor, not the end.
+    private func handleReturn(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.contains(.shift) else { return .ignored }
+        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+            editor.insertText("\n", replacementRange: editor.selectedRange())
+        } else {
+            session.input += "\n"
+        }
+        return .handled
     }
 
     // MARK: - Shared controls

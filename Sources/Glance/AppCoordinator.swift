@@ -483,6 +483,7 @@ final class AppCoordinator {
         // First question: use the still captured at invocation (already clean).
         if let firstShot = pendingImagePNG {
             pendingImagePNG = nil
+            overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: firstShot))
             send(question, image: firstShot, via: backend)
             return
         }
@@ -492,6 +493,9 @@ final class AppCoordinator {
         Task { [weak self] in
             guard let self else { return }
             let png = await self.captureExcludingOverlay()
+            if let png {
+                self.overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: png))
+            }
             self.send(question, image: png, via: backend)
         }
     }

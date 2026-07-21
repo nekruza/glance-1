@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// View-model bridging the overlay UI and the backend for one overlay session
 /// (hotkey-press → dismissal). Distinct from the backend's Claude session.
@@ -10,6 +11,9 @@ final class OverlaySession: ObservableObject {
         let question: String
         var answer: String = ""
         var failed: Bool = false
+        /// Downscaled preview of the screenshot sent with this question, shown
+        /// in the asked header. nil for text-only turns.
+        var thumbnail: NSImage?
     }
 
     @Published var input: String = ""
@@ -89,6 +93,12 @@ final class OverlaySession: ObservableObject {
         turns = pairs.map { Turn(question: $0.question, answer: $0.answer) }
         isWorking = false
         input = ""
+    }
+
+    /// Attach the screenshot preview to the turn that was just submitted.
+    func setLastTurnThumbnail(_ image: NSImage?) {
+        guard !turns.isEmpty else { return }
+        turns[turns.count - 1].thumbnail = image
     }
 
     // MARK: - Backend event application (called on main)

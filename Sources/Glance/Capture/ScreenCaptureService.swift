@@ -1,6 +1,7 @@
 import AppKit
 import ScreenCaptureKit
 import CoreGraphics
+import ImageIO
 
 /// Result of a capture: the image plus PNG bytes ready for the backend.
 /// We keep bytes in memory only — never written to disk on our side — so FR9's
@@ -99,6 +100,21 @@ enum ScreenCaptureService {
                              displayIndex: index,
                              pixelWidth: cgImage.width,
                              pixelHeight: cgImage.height)
+    }
+
+    /// Small preview of a captured PNG for the overlay's asked header.
+    /// ImageIO decodes straight to thumbnail size — the full-resolution bitmap
+    /// (tens of MB for a retina display) is never materialized.
+    static func thumbnailImage(fromPNG data: Data, maxPixel: CGFloat = 320) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 
     // MARK: - Helpers
