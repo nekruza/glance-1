@@ -416,58 +416,77 @@ final class TaskBoardSession: ObservableObject {
     /// The same call doubles as the F6 semantic dedup pass: it sees the open
     /// board and may name an existing task as the same work.
     private func enrich(_ task: TaskItem) {
+        enrichBatch([task])
+    }
+
+    /// One Haiku call for the whole batch (F5) — auto-triage after a pull
+    /// enriches all new items together instead of one call per item.
+    private func enrichBatch(_ batch: [TaskItem]) {
+        guard !batch.isEmpty else { return }
         let repoNames = Preferences.shared.repos.map(\.name)
-        // Live tasks only, newest first, capped — enough to catch the Jira
-        // ticket / Slack thread / meeting action for the same work without
-        // bloating a Haiku prompt.
+        // Dedup candidates: live tasks, newest first, capped — enough to
+        // catch the Jira ticket / Slack thread / meeting action for the same
+        // work without bloating a Haiku prompt. Batch members stay in the
+        // list so same-pull cross-source dupes are caught too (the self-match
+        // guard below stops an item flagging itself).
         let openTasks = store.tasks
-            .filter { ![.done, .archived, .cancelled].contains($0.status) && $0.id != task.id }
+            .filter { ![.done, .archived, .cancelled].contains($0.status) }
             .sorted { $0.createdAt > $1.createdAt }
-            .prefix(40)
+            .prefix(25)
             .map { "\($0.id.uuidString) — \($0.title.prefix(80))" }
             .joined(separator: "\n")
-        ai.enrich(title: task.title, description: task.descriptionMD,
-                  repoNames: repoNames, openTasks: openTasks) { [weak self] e in
+        // Titles as sent — the apply step's race guard (user renames win).
+        let sentTitles = Dictionary(uniqueKeysWithValues: batch.map { ($0.id, $0.title) })
+        let items = batch.map { (id: $0.id, title: $0.title, description: $0.descriptionMD) }
+        ai.enrich(items: items, repoNames: repoNames, openTasks: openTasks) { [weak self] results in
             guard let self else { return }
-            guard let e else {
+            guard let results else {
                 // Background auto-triage: feed-only, no toast (see noteAIFailure).
-                self.noteAIFailure("Auto-enrich failed — \(task.title)", toast: false)
+                self.noteAIFailure("Auto-enrich failed — \(batch.count) item\(batch.count == 1 ? "" : "s") left raw", toast: false)
                 return
             }
-            guard var t = self.store.task(task.id) else { return }
-            var filled: [String] = []
-            if let title = e.title, !title.isEmpty, title != t.title, t.title == task.title {
-                t.title = title; filled.append("title")
+            for e in results {
+                guard let id = e.id.flatMap(UUID.init(uuidString:)),
+                      let sentTitle = sentTitles[id] else { continue }
+                self.applyEnrichment(e, to: id, sentTitle: sentTitle)
             }
-            if t.descriptionMD.isEmpty, let d = e.description, !d.isEmpty {
-                t.descriptionMD = d; filled.append("description")
-            }
-            if t.labels.isEmpty, let l = e.labels { t.labels = l; filled.append("labels") }
-            if t.taskKind == .other, let k = e.taskKind, let kind = TaskKind(rawValue: k) {
-                t.taskKind = kind; filled.append("taskKind")
-            }
-            if t.estimate == nil, let est = e.estimate, let parsed = TaskEstimate(rawValue: est) {
-                t.estimate = parsed; filled.append("estimate")
-            }
-            if t.workspacePath == nil, let repo = e.repoName,
-               let entry = Preferences.shared.repos.first(where: { $0.name == repo }) {
-                t.workspacePath = entry.path; filled.append("workspace")
-            }
-            if t.agentId == nil, let agentId = AgentProfile.idFor(name: e.agent) {
-                t.agentId = agentId; filled.append("agent")
-            }
-            // F6: flag (never merge) — validate the id points at a real live
-            // task so a hallucinated uuid can't wire a dangling dup badge.
-            if t.possibleDuplicateOf == nil,
-               let dupId = e.duplicateOf.flatMap(UUID.init(uuidString:)),
-               dupId != t.id,
-               let candidate = self.store.task(dupId),
-               ![.done, .archived, .cancelled].contains(candidate.status) {
-                t.possibleDuplicateOf = dupId
-            }
-            t.aiFilledFields = Array(Set(t.aiFilledFields + filled))
-            self.store.update(t)
         }
+    }
+
+    private func applyEnrichment(_ e: TaskAI.Enrichment, to id: UUID, sentTitle: String) {
+        guard var t = store.task(id) else { return }
+        var filled: [String] = []
+        if let title = e.title, !title.isEmpty, title != t.title, t.title == sentTitle {
+            t.title = title; filled.append("title")
+        }
+        if t.descriptionMD.isEmpty, let d = e.description, !d.isEmpty {
+            t.descriptionMD = d; filled.append("description")
+        }
+        if t.labels.isEmpty, let l = e.labels { t.labels = l; filled.append("labels") }
+        if t.taskKind == .other, let k = e.taskKind, let kind = TaskKind(rawValue: k) {
+            t.taskKind = kind; filled.append("taskKind")
+        }
+        if t.estimate == nil, let est = e.estimate, let parsed = TaskEstimate(rawValue: est) {
+            t.estimate = parsed; filled.append("estimate")
+        }
+        if t.workspacePath == nil, let repo = e.repoName,
+           let entry = Preferences.shared.repos.first(where: { $0.name == repo }) {
+            t.workspacePath = entry.path; filled.append("workspace")
+        }
+        if t.agentId == nil, let agentId = AgentProfile.idFor(name: e.agent) {
+            t.agentId = agentId; filled.append("agent")
+        }
+        // F6: flag (never merge) — validate the id points at a real live
+        // task so a hallucinated uuid can't wire a dangling dup badge.
+        if t.possibleDuplicateOf == nil,
+           let dupId = e.duplicateOf.flatMap(UUID.init(uuidString:)),
+           dupId != t.id,
+           let candidate = store.task(dupId),
+           ![.done, .archived, .cancelled].contains(candidate.status) {
+            t.possibleDuplicateOf = dupId
+        }
+        t.aiFilledFields = Array(Set(t.aiFilledFields + filled))
+        store.update(t)
     }
 
     /// Prioritization is MANUAL-ONLY (user decision, overriding FR39's
@@ -652,14 +671,17 @@ final class TaskBoardSession: ObservableObject {
 
     // MARK: - Auto-triage (post-pull)
 
-    /// Enrich each freshly-pulled inbox task, filling only fields the pull left
+    /// Enrich freshly-pulled inbox tasks, filling only fields the pull left
     /// empty (enrich never overwrites set values). Gated by autoTriageEnabled;
-    /// a per-task enrich failure just leaves that task raw — no retry loop.
+    /// a failed batch just leaves those tasks raw — no retry loop. Batched
+    /// (F5): one Haiku call per chunk instead of one per item; chunks keep
+    /// the output JSON comfortably within a single response.
     private func autoTriage(_ ids: [UUID]) {
         guard Preferences.shared.autoTriageEnabled else { return }
-        for id in ids {
-            guard let task = store.task(id) else { continue }
-            enrich(task)
+        let tasks = ids.compactMap { store.task($0) }
+        let chunkSize = 12
+        for start in stride(from: 0, to: tasks.count, by: chunkSize) {
+            enrichBatch(Array(tasks[start..<min(start + chunkSize, tasks.count)]))
         }
     }
 

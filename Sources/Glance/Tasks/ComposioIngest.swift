@@ -140,7 +140,13 @@ final class ComposioIngest {
             if let key = t.sourceRef?.key, !key.isEmpty { existingIds.insert(key.lowercased()) }
             if let url = t.sourceRef?.url, !url.isEmpty { existingIds.insert(url.lowercased()) }
         }
-        fetch(target) { fetched, error in
+        // Incremental window: ask only for items updated since the last
+        // successful pull. Stamped with the pull's START time so items
+        // updated mid-pull aren't missed next time; only on success, so a
+        // failed pull retries the full window.
+        let startedAt = Date()
+        let since = Preferences.shared.pullLastRun(target.key)
+        fetch(target, since: since) { fetched, error in
             guard let fetched else {
                 completion(Result(created: 0, skippedDuplicates: 0,
                                   error: error ?? "No response — is \(target.displayName) connected in Composio?"))
@@ -178,6 +184,7 @@ final class ComposioIngest {
                 createdIds.append(store.add(t).id)
                 created += 1
             }
+            Preferences.shared.setPullLastRun(target.key, startedAt)
             completion(Result(created: created, skippedDuplicates: skipped, error: nil,
                               createdIds: createdIds))
         }
@@ -298,6 +305,10 @@ final class ComposioIngest {
             proc.executableURL = URL(fileURLWithPath: binaryPath)
             proc.arguments = [
                 "-p",
+                // F5: pulls/writes are the app's most frequent agentic
+                // sessions — Sonnet handles "call tools, emit JSON" fine;
+                // the CLI default silently means the biggest model.
+                "--model", "sonnet",
                 "--mcp-config", configURL.path,
                 "--strict-mcp-config",
                 "--allowedTools", "mcp__composio__COMPOSIO_SEARCH_TOOLS",
@@ -335,7 +346,8 @@ final class ComposioIngest {
 
     // MARK: - Fetch (background)
 
-    private func fetch(_ target: FetchTarget, completion: @escaping ([FetchedTask]?, String?) -> Void) {
+    private func fetch(_ target: FetchTarget, since: Date? = nil,
+                       completion: @escaping ([FetchedTask]?, String?) -> Void) {
         queue.async { [binaryPath] in
             guard let configURL = Self.writeMCPConfig() else {
                 DispatchQueue.main.async { completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.") }
@@ -349,6 +361,7 @@ final class ComposioIngest {
             // swallow a trailing positional prompt argument.
             proc.arguments = [
                 "-p",
+                "--model", "sonnet", // F5 — see run()
                 "--mcp-config", configURL.path,
                 "--strict-mcp-config",
                 "--allowedTools", "mcp__composio__COMPOSIO_SEARCH_TOOLS",
@@ -370,7 +383,7 @@ final class ComposioIngest {
 
             do {
                 try proc.run()
-                if let data = Self.prompt(for: target).data(using: .utf8) {
+                if let data = Self.prompt(for: target, since: since).data(using: .utf8) {
                     try? inPipe.fileHandleForWriting.write(contentsOf: data)
                 }
                 try? inPipe.fileHandleForWriting.close()
@@ -448,17 +461,30 @@ final class ComposioIngest {
         """
     }
 
-    private static func prompt(for target: FetchTarget) -> String {
+    /// Fetch-window clause: a fixed default for first pulls, "since <my last
+    /// pull>" afterwards — narrow windows shrink the tool results that
+    /// dominate an MCP session's token cost. 1 h overlap absorbs clock skew
+    /// and mid-pull updates (dedup eats the repeats); the default window is
+    /// the widest we ever ask for.
+    private static func window(defaultDays: Int, since: Date?) -> String {
+        let floor = Date().addingTimeInterval(TimeInterval(-defaultDays * 86_400))
+        guard let since else { return "in the last \(defaultDays) days" }
+        let effective = max(since.addingTimeInterval(-3600), floor)
+        return "since \(ISO8601DateFormatter().string(from: effective)) " +
+               "(my previous pull — ONLY items created or updated after this)"
+    }
+
+    private static func prompt(for target: FetchTarget, since: Date?) -> String {
         switch target {
         case .builtin(let source):
-            return prompt(for: source)
+            return prompt(for: source, since: since)
         case .app(let slug, let name):
             return """
             Using the composio tools for \(name) (toolkit "\(slug)"), fetch \
-            recent items (last 7 days) that are assigned to me, mention me, or \
-            otherwise need action FROM ME. Discover the toolkit's read/list/\
-            search actions with COMPOSIO_SEARCH_TOOLS first. Read actions \
-            only. \(readOnlyRules)
+            items \(window(defaultDays: 7, since: since)) that are assigned \
+            to me, mention me, or otherwise need action FROM ME. Discover the \
+            toolkit's read/list/search actions with COMPOSIO_SEARCH_TOOLS \
+            first. Read actions only. \(readOnlyRules)
             One task per actionable item — ignore FYIs and do not invent \
             tasks. sourceKey = "\(slug):<stable item id>"; sourceURL = a deep \
             link if available. Mention \(name) and include source context in \
@@ -467,12 +493,12 @@ final class ComposioIngest {
         }
     }
 
-    private static func prompt(for source: Source) -> String {
+    private static func prompt(for source: Source, since: Date?) -> String {
         switch source {
         case .jira:
             return """
             Using the composio tools, fetch MY open Jira issues: assigned to me, \
-            status not done/closed/resolved, updated in the last 30 days. Use \
+            status not done/closed/resolved, updated \(window(defaultDays: 30, since: since)). Use \
             Jira search/read actions only. \(readOnlyRules)
             One task per issue. sourceKey = the Jira issue key (e.g. "CW-123"); \
             sourceURL = the issue's browse URL. Put the issue summary in the \
@@ -481,9 +507,10 @@ final class ComposioIngest {
             """
         case .granola:
             return """
-            Using the composio tools, fetch my Granola meetings from the last \
-            3 days and extract action items that belong to ME (committed to, \
-            assigned, or clearly mine). Read actions only. \(readOnlyRules)
+            Using the composio tools, fetch my Granola meetings \
+            \(window(defaultDays: 3, since: since)) and extract action items \
+            that belong to ME (committed to, assigned, or clearly mine). Read \
+            actions only. \(readOnlyRules)
             One task per action item — do not invent tasks. sourceKey = \
             "<meeting id, or exact meeting title if no id>#<slug>" where slug \
             is the action item's first 6 words, lowercased, every run of \
@@ -495,9 +522,10 @@ final class ComposioIngest {
             """
         case .slack:
             return """
-            Using the composio tools, fetch my recent Slack activity (last 2 \
-            days): messages mentioning me and direct messages, and extract \
-            things that need action FROM ME. Read actions only. \(readOnlyRules)
+            Using the composio tools, fetch my Slack activity \
+            \(window(defaultDays: 2, since: since)): messages mentioning me \
+            and direct messages, and extract things that need action FROM ME. \
+            Read actions only. \(readOnlyRules)
             IMPORTANT — expand threads: whenever a message has replies (it has \
             a thread_ts, a reply_count > 0, or a "N replies" indicator), you \
             MUST fetch the full thread with the replies action (e.g. Slack \
@@ -533,7 +561,7 @@ final class ComposioIngest {
             return """
             Using the composio tools, fetch MY current GitHub work: pull \
             requests where my review is requested, my open pull requests, and \
-            issues assigned to me — updated in the last 30 days. Use GitHub \
+            issues assigned to me — updated \(window(defaultDays: 30, since: since)). Use GitHub \
             search/read actions only. \(readOnlyRules)
             One task per PR/issue. sourceKey = "<owner>/<repo>#<number>"; \
             sourceURL = the PR/issue html URL. Prefix the title with the repo \
@@ -543,9 +571,10 @@ final class ComposioIngest {
             """
         case .gmail:
             return """
-            Using the composio tools, fetch my recent Gmail inbox (last 3 \
-            days) and extract emails that need action FROM ME — a reply, a \
-            decision, or a deadline. Read actions only. \(readOnlyRules)
+            Using the composio tools, fetch my Gmail inbox \
+            (\(window(defaultDays: 3, since: since))) and extract emails that \
+            need action FROM ME — a reply, a decision, or a deadline. Read \
+            actions only. \(readOnlyRules)
             Ignore newsletters, automated notifications, receipts, and \
             pure-FYI mail. One task per actionable email. Title = imperative \
             summary of the ask, not the subject line verbatim. Include \

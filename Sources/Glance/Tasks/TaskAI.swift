@@ -4,6 +4,10 @@ import Foundation
 /// (FR39–42), prompt→tasks decomposition (FR27). Each is a one-shot
 /// `claude -p` call requesting strict JSON, parsed defensively — a malformed
 /// response degrades to "no change", never corrupts the board.
+///
+/// Model policy (F5): mechanical JSON work pins Haiku, drafts/notes/briefing/
+/// extraction pin Sonnet, agent-profile design pins Opus. Nothing here runs
+/// on the CLI default — that silently means "the biggest model you have".
 final class TaskAI {
 
     private let binaryPath: String
@@ -16,6 +20,8 @@ final class TaskAI {
     // MARK: - Enrichment (FR36)
 
     struct Enrichment: Decodable {
+        /// Echoed input id — matches the enrichment back to its task.
+        var id: String?
         var title: String?
         var description: String?
         var labels: [String]?
@@ -35,11 +41,17 @@ final class TaskAI {
             .joined(separator: "\n")
     }
 
-    /// `openTasks` — "uuid — title" lines of live tasks for semantic dedup
-    /// (F6); empty string skips the duplicate check.
-    func enrich(title: String, description: String, repoNames: [String],
-                openTasks: String = "",
-                completion: @escaping (Enrichment?) -> Void) {
+    /// Enrich a BATCH of tasks in ONE Haiku call (F5: a pull landing 15 items
+    /// used to cost 15 calls; the per-item prompt was 90% identical). Also
+    /// the F6 semantic-dedup pass: `openTasks` = "uuid — title" lines of live
+    /// tasks; empty skips the duplicate check.
+    func enrich(items: [(id: UUID, title: String, description: String)],
+                repoNames: [String], openTasks: String = "",
+                completion: @escaping ([Enrichment]?) -> Void) {
+        guard !items.isEmpty else {
+            completion([])
+            return
+        }
         let dupKey = openTasks.isEmpty ? "" : """
         , "duplicateOf" (the id of the existing task below that is the SAME \
         underlying work item as this one — the same ticket, thread, meeting \
@@ -52,23 +64,33 @@ final class TaskAI {
         Existing open tasks (id — title):
         \(openTasks)
         """
+        let taskLines = items.map { item in
+            """
+            id: \(item.id.uuidString)
+            title: \(item.title)
+            description: \(item.description.isEmpty ? "(none)" : String(item.description.prefix(1200)))
+            """
+        }.joined(separator: "\n---\n")
         let prompt = """
-        You enrich a todo task. Given its raw title/description, produce JSON only \
-        (no prose, no fences) with keys: "title" (cleaned, <=200 chars), \
-        "description" (markdown: 1-3 sentence context; add acceptance criteria \
-        bullets ONLY if clearly inferable), "labels" (array, 1-4 short lowercase \
-        tags), "taskKind" (one of: code = software/repo work; writing = any \
-        communication or authored text — emails, Slack/DMs, messages, docs, \
-        follow-ups, replies; research = investigation/reading; other), "estimate" \
-        (one of: minutes, hour, halfday, day+), "repoName" (one of \(repoNames) \
-        if the task clearly belongs to that repo, else null), "agent" (the \
-        best-fit agent NAME from the roster below, or null if none clearly fits)\(dupKey).
+        You enrich todo tasks. For EACH task in the input below, produce one \
+        JSON object with keys: "id" (copied VERBATIM from the input), "title" \
+        (cleaned, <=200 chars), "description" (markdown: 1-3 sentence context; \
+        add acceptance criteria bullets ONLY if clearly inferable), "labels" \
+        (array, 1-4 short lowercase tags), "taskKind" (one of: code = \
+        software/repo work; writing = any communication or authored text — \
+        emails, Slack/DMs, messages, docs, follow-ups, replies; research = \
+        investigation/reading; other), "estimate" (one of: minutes, hour, \
+        halfday, day+), "repoName" (one of \(repoNames) if the task clearly \
+        belongs to that repo, else null), "agent" (the best-fit agent NAME \
+        from the roster below, or null if none clearly fits)\(dupKey).
+        Output ONLY a JSON array (no prose, no fences) with exactly one \
+        object per input task, in input order.
 
         Agent roster:
-        \(Self.agentRoster())
+        \(Self.agentRoster())\(dupSection)
 
-        Task title: \(title)
-        Task description: \(description.isEmpty ? "(none)" : description)\(dupSection)
+        Tasks:
+        \(taskLines)
         """
         runJSON(prompt: prompt, model: "haiku", completion: completion)
     }
@@ -136,7 +158,7 @@ final class TaskAI {
         Text:
         \(userText)
         """
-        runJSON(prompt: prompt, model: nil, completion: completion)
+        runJSON(prompt: prompt, model: "sonnet", completion: completion)
     }
 
     // MARK: - Agent generation (Settings ▸ Agents)
@@ -199,7 +221,7 @@ final class TaskAI {
         Task:
         \(context.joined(separator: "\n"))
         """
-        runText(prompt: prompt, model: nil, completion: completion)
+        runText(prompt: prompt, model: "sonnet", completion: completion)
     }
 
     // MARK: - Meeting prep notes (calendar tasks)
@@ -254,7 +276,7 @@ final class TaskAI {
         My recent work context (fetched live from my tools):
         \(contextSection)
         """
-        runText(prompt: prompt, model: nil, completion: completion)
+        runText(prompt: prompt, model: "sonnet", completion: completion)
     }
 
     // MARK: - Helper drafts (reply / draft / brief / approach)
@@ -322,7 +344,7 @@ final class TaskAI {
         Task:
         \(taskBlock)
         """
-        runText(prompt: prompt, model: nil, completion: completion)
+        runText(prompt: prompt, model: "sonnet", completion: completion)
     }
 
     // MARK: - Morning briefing (A1)
@@ -348,7 +370,7 @@ final class TaskAI {
         Data:
         \(context)
         """
-        runText(prompt: prompt, model: nil, completion: completion)
+        runText(prompt: prompt, model: "sonnet", completion: completion)
     }
 
     // MARK: - Meeting action items (transcript pane reader)
@@ -372,7 +394,7 @@ final class TaskAI {
         Notes:
         \(String(meetingText.prefix(30_000)))
         """
-        runJSON(prompt: prompt, model: nil, completion: completion)
+        runJSON(prompt: prompt, model: "sonnet", completion: completion)
     }
 
     // MARK: - Plumbing

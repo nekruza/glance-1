@@ -20,6 +20,7 @@ final class Preferences: ObservableObject {
         static let composioURL = "composio.url"
         static let composioKey = "composio.key"
         static let enabledSources = "tasks.enabledSources"
+        static let pullLastRuns = "tasks.pullLastRuns"
         static let knownApps = "tasks.knownApps"
         static let schedEnabled = "sched.enabled"
         static let schedSource = "sched.source"
@@ -137,6 +138,20 @@ final class Preferences: ObservableObject {
     }
     func setFetch(_ source: ComposioIngest.Source, _ on: Bool) {
         setFetch(.builtin(source), on)
+    }
+
+    /// Per-target last successful pull, keyed by `FetchTarget.key` — lets the
+    /// fetch prompts ask for "updated since my last pull" instead of a fixed
+    /// 30-day window (the dominant token cost of an MCP pull session is the
+    /// tool results, so narrow windows are the big saver). Plain defaults
+    /// dict, not @Published — no UI observes it.
+    func pullLastRun(_ targetKey: String) -> Date? {
+        (defaults.dictionary(forKey: Keys.pullLastRuns)?[targetKey]) as? Date
+    }
+    func setPullLastRun(_ targetKey: String, _ date: Date) {
+        var d = defaults.dictionary(forKey: Keys.pullLastRuns) ?? [:]
+        d[targetKey] = date
+        defaults.set(d, forKey: Keys.pullLastRuns)
     }
 
     /// Every fetch target the user has toggled on: enabled built-ins first
