@@ -45,9 +45,15 @@ final class TaskBoardSession: ObservableObject {
     @Published var decomposePreview: [TaskAI.DecomposedTask] = []
     @Published var decomposeKeep: Set<Int> = []
 
-    /// Composio pull state (header button + status line).
+    /// Composio pull state (header button + status line). `pullingSource` is
+    /// the single-source pull; "Pull from all" tracks a count instead (it runs
+    /// sources in parallel).
     @Published var pullingSource: ComposioIngest.FetchTarget?
+    @Published var pullAllRemaining = 0
     @Published var pullStatus: String?
+
+    /// Any pull activity at all — the guard every scheduler/autopilot uses.
+    var isPulling: Bool { pullingSource != nil || pullAllRemaining > 0 }
 
     /// Tasks with a handoff-prompt generation in flight (detail spinner).
     @Published var promptBusyTaskIds: Set<UUID> = []
@@ -62,6 +68,19 @@ final class TaskBoardSession: ObservableObject {
     /// Last send failure per task (surfaced in the draft-review gate).
     @Published var sendError: [UUID: String] = [:]
 
+    /// AI helper failures this session (F4): enrich/draft/prep degrade to
+    /// "no change" by design, but silently — log them so the activity feed
+    /// and the footer status line show the misses.
+    @Published private(set) var aiFailures: [ActivityEvent] = []
+
+    /// Record an AI failure: always into the activity feed; user-triggered
+    /// ones also flash the footer status line (background auto-triage stays
+    /// quiet — a toast per failed enrich would be noise).
+    func noteAIFailure(_ text: String, toast: Bool = true) {
+        aiFailures.append(.init(at: Date(), icon: "exclamationmark.triangle", text: text))
+        if toast { showPullStatus(text) }
+    }
+
     /// Canvas completion choreography: tasks mid check-animation (still
     /// rendered), live confetti bursts, and the undo toast.
     @Published var completingTaskIds: Set<UUID> = []
@@ -69,6 +88,9 @@ final class TaskBoardSession: ObservableObject {
     @Published var undoToast: UndoToast?
     /// Floating quick-capture card (N key / pill +).
     @Published var showCapture = false
+    /// Morning briefing panel (A1) — floats over the board canvas.
+    @Published var showBriefing = false
+    @Published var briefingBusy = false
     /// Most recently created task — drives the pop-in animation on canvas.
     @Published var lastCreatedTaskId: UUID?
 
@@ -92,9 +114,14 @@ final class TaskBoardSession: ObservableObject {
     /// Wired to notifications — fired when a pull lands new Inbox items
     /// (matters for scheduled pulls with the overlay closed).
     var pullNotifyHandler: ((String) -> Void)?
-    /// Wired to notifications — fired when an approved outbound send succeeds
-    /// or an autopilot draft lands in the Review queue.
+    /// Wired to notifications — fired when an approved outbound send succeeds.
     var sendNotifyHandler: ((String, UUID) -> Void)?
+    /// Wired to notifications — fired when an autopilot draft lands in the
+    /// Review queue (gets the "Approve & send" notification actions).
+    var draftReadyNotifyHandler: ((String, UUID) -> Void)?
+    /// Wired to notifications — fired when the morning briefing is ready;
+    /// click-through opens the briefing panel on the board.
+    var briefingNotifyHandler: ((String) -> Void)?
 
     private var lastPrioritized = Date.distantPast
     /// FR42: at most one automatic reflow per 10 minutes.
@@ -143,7 +170,7 @@ final class TaskBoardSession: ObservableObject {
     }
 
     func pull(_ target: ComposioIngest.FetchTarget) {
-        guard pullingSource == nil, ensureComposioConfigured() else { return }
+        guard !isPulling, ensureComposioConfigured() else { return }
         pullingSource = target
         pullStatus = nil
         ingest.pull(target, store: store) { [weak self] result in
@@ -158,45 +185,60 @@ final class TaskBoardSession: ObservableObject {
         }
     }
 
+    /// How many sources "Pull from all" runs at once. Each is its own
+    /// subprocess; store mutation happens on the main actor either way.
+    private static let maxParallelPulls = 3
+
     /// Pull every enabled target — built-in sources plus toggled-on connected
-    /// apps — one at a time (a single agent call each), then show an
-    /// aggregate status line.
+    /// apps — up to `maxParallelPulls` at a time (each pull is a full
+    /// CLI+MCP session, so serial worst-case was minutes × sources), then
+    /// show an aggregate status line in the original target order.
     func pullAll() {
-        guard pullingSource == nil, ensureComposioConfigured() else { return }
+        guard !isPulling, ensureComposioConfigured() else { return }
         pullStatus = nil
-        var summary: [String] = []
-        var totalCreated = 0
         let targets = Preferences.shared.enabledFetchTargets
         guard !targets.isEmpty else {
             showPullStatus("No fetch sources enabled — turn some on in Settings ▸ Connections.")
             return
         }
 
-        func next(_ index: Int) {
-            guard index < targets.count else {
-                pullingSource = nil
-                showPullStatus(summary.joined(separator: " · "))
-                if totalCreated > 0 {
-                    tab = .inbox
-                    pullNotifyHandler?("Pull finished: \(totalCreated) new task\(totalCreated == 1 ? "" : "s") in Inbox (\(summary.joined(separator: ", ")))")
+        var summary = [String?](repeating: nil, count: targets.count)
+        var totalCreated = 0
+        var nextIndex = 0
+        var active = 0
+        pullAllRemaining = targets.count
+
+        // All state above mutates on the main actor only — ingest.pull calls
+        // its completion on main, so this windowed fan-out has no races.
+        func launchMore() {
+            while active < Self.maxParallelPulls, nextIndex < targets.count {
+                let index = nextIndex
+                let target = targets[index]
+                nextIndex += 1
+                active += 1
+                ingest.pull(target, store: store) { [weak self] result in
+                    guard let self else { return }
+                    active -= 1
+                    totalCreated += result.created
+                    self.autoTriage(result.createdIds)
+                    summary[index] = result.error != nil
+                        ? "\(target.displayName) ✗"
+                        : "\(target.displayName) +\(result.created)"
+                    self.pullAllRemaining -= 1
+                    if self.pullAllRemaining == 0 {
+                        let parts = summary.compactMap { $0 }
+                        self.showPullStatus(parts.joined(separator: " · "))
+                        if totalCreated > 0 {
+                            self.tab = .inbox
+                            self.pullNotifyHandler?("Pull finished: \(totalCreated) new task\(totalCreated == 1 ? "" : "s") in Inbox (\(parts.joined(separator: ", ")))")
+                        }
+                    } else {
+                        launchMore()
+                    }
                 }
-                return
-            }
-            let target = targets[index]
-            pullingSource = target
-            ingest.pull(target, store: store) { [weak self] result in
-                guard let self else { return }
-                totalCreated += result.created
-                self.autoTriage(result.createdIds)
-                if result.error != nil {
-                    summary.append("\(target.displayName) ✗")
-                } else {
-                    summary.append("\(target.displayName) +\(result.created)")
-                }
-                next(index + 1)
             }
         }
-        next(0)
+        launchMore()
     }
 
     private func ensureComposioConfigured() -> Bool {
@@ -344,6 +386,9 @@ final class TaskBoardSession: ObservableObject {
         ai.decompose(prompt: text) { [weak self] result in
             guard let self else { return }
             self.decomposeBusy = false
+            if result == nil {
+                self.noteAIFailure("Split into tasks failed. Try again.")
+            }
             self.decomposePreview = result ?? []
             self.decomposeKeep = Set(self.decomposePreview.indices)
         }
@@ -371,7 +416,13 @@ final class TaskBoardSession: ObservableObject {
     private func enrich(_ task: TaskItem) {
         let repoNames = Preferences.shared.repos.map(\.name)
         ai.enrich(title: task.title, description: task.descriptionMD, repoNames: repoNames) { [weak self] e in
-            guard let self, let e, var t = self.store.task(task.id) else { return }
+            guard let self else { return }
+            guard let e else {
+                // Background auto-triage: feed-only, no toast (see noteAIFailure).
+                self.noteAIFailure("Auto-enrich failed — \(task.title)", toast: false)
+                return
+            }
+            guard var t = self.store.task(task.id) else { return }
             var filled: [String] = []
             if let title = e.title, !title.isEmpty, title != t.title, t.title == task.title {
                 t.title = title; filled.append("title")
@@ -410,7 +461,10 @@ final class TaskBoardSession: ObservableObject {
         ai.prioritize(board: board) { [weak self] entries in
             guard let self else { return }
             self.isPrioritizing = false
-            guard let entries else { return }
+            guard let entries else {
+                self.noteAIFailure("Prioritize failed — board order unchanged. Try again.")
+                return
+            }
             let mapped: [(UUID, String, TaskPriority)] = entries.compactMap { e in
                 guard let id = UUID(uuidString: e.id) else { return nil }
                 let p = TaskPriority(rawValue: e.priority.uppercased()) ?? .p2
@@ -430,7 +484,11 @@ final class TaskBoardSession: ObservableObject {
         ai.handoffPrompt(for: task, repoName: repoName, agent: agent) { [weak self] text in
             guard let self else { return }
             self.promptBusyTaskIds.remove(task.id)
-            guard let text, var t = self.store.task(task.id) else { return }
+            guard let text else {
+                self.noteAIFailure("Prompt failed — \(task.title). Try again.")
+                return
+            }
+            guard var t = self.store.task(task.id) else { return }
             t.handoffPrompt = text
             self.store.update(t)
         }
@@ -452,7 +510,11 @@ final class TaskBoardSession: ObservableObject {
                               boardContext: boardContext) { [weak self] text in
                 guard let self else { return }
                 self.prepBusyTaskIds.remove(task.id)
-                guard let text, var t = self.store.task(task.id) else { return }
+                guard let text else {
+                    self.noteAIFailure("Prep notes failed — \(task.title). Try again.")
+                    return
+                }
+                guard var t = self.store.task(task.id) else { return }
                 t.prepNotes = text
                 self.store.update(t)
             }
@@ -468,7 +530,13 @@ final class TaskBoardSession: ObservableObject {
         ai.helperDraft(for: task, helper: task.helper) { [weak self] text in
             guard let self else { return }
             self.draftBusyTaskIds.remove(task.id)
-            guard let text, var t = self.store.task(task.id) else { return }
+            guard let text else {
+                self.noteAIFailure(thenReview
+                    ? "Draft failed — \(task.title). Will retry next launch."
+                    : "Draft failed — \(task.title). Try again.")
+                return
+            }
+            guard var t = self.store.task(task.id) else { return }
             t.helperDraft = text
             // Autopilot path: park at the review gate in the same write as the
             // draft itself — a quit between the two can't strand a finished
@@ -479,9 +547,86 @@ final class TaskBoardSession: ObservableObject {
             }
             self.store.update(t)
             if thenReview, t.status == .awaitingReview {
-                self.sendNotifyHandler?("Draft ready — \(t.title)", t.id)
+                self.draftReadyNotifyHandler?("Draft ready — \(t.title)", t.id)
             }
         }
+    }
+
+    // MARK: - Morning briefing (A1)
+
+    /// Compose the briefing from local data (one `claude -p` call — no
+    /// Composio needed) and persist it in Preferences so it survives
+    /// relaunch. `notify` = fired by the Autopilot schedule (post the
+    /// notification); manual refresh from the panel skips it.
+    func generateBriefing(notify: Bool = false) {
+        guard !briefingBusy else { return }
+        briefingBusy = true
+        ai.morningBriefing(context: briefingContext()) { [weak self] text in
+            guard let self else { return }
+            self.briefingBusy = false
+            guard let text else {
+                self.noteAIFailure("Morning briefing failed — retry from the ☀️ panel.")
+                return
+            }
+            Preferences.shared.briefingMD = text
+            Preferences.shared.briefingGeneratedAt = Date()
+            if notify {
+                self.briefingNotifyHandler?("Your morning briefing is ready")
+            }
+        }
+    }
+
+    /// Everything the briefing composer needs, from the store alone.
+    private func briefingContext() -> String {
+        let now = Date()
+        let cal = Calendar.current
+        var sections: [String] = []
+
+        let stats = store.momentumStats()
+        sections.append("Momentum: \(stats.doneToday) done today · current streak \(stats.currentStreak) day\(stats.currentStreak == 1 ? "" : "s") (best \(stats.bestStreak)) · \(stats.totalDone) done all-time")
+
+        // "Overnight" = since yesterday evening; 18h covers a normal workday gap.
+        let overnight = store.inboxTasks().filter { $0.createdAt > now.addingTimeInterval(-18 * 3600) }
+        if !overnight.isEmpty {
+            sections.append("Arrived in Inbox overnight:\n" + overnight.prefix(15).map {
+                "- [\($0.source.rawValue)] \($0.title.prefix(90)) — \($0.taskKind.displayName.lowercased())\($0.aiFilledFields.isEmpty ? " (not yet triaged)" : " (auto-triaged)")"
+            }.joined(separator: "\n"))
+        }
+
+        let review = reviewTasks()
+        if !review.isEmpty {
+            sections.append("Waiting in Review:\n" + review.prefix(10).map {
+                let kind = $0.status == .awaitingPlanApproval ? "plan approval"
+                    : ($0.helperDraft != nil ? "draft ready to send" : "run review")
+                return "- \($0.title.prefix(90)) — \(kind)"
+            }.joined(separator: "\n"))
+        }
+
+        let meetings = store.tasks
+            .filter {
+                $0.source == .calendar
+                    && ($0.dueAt.map { cal.isDate($0, inSameDayAs: now) } == true)
+                    && ![.done, .archived, .cancelled].contains($0.status)
+            }
+            .sorted { ($0.dueAt ?? now) < ($1.dueAt ?? now) }
+        if !meetings.isEmpty {
+            sections.append("Today's meetings:\n" + meetings.map {
+                "- \(($0.dueAt ?? now).formatted(date: .omitted, time: .shortened)) \($0.title.prefix(80)) — prep notes \($0.prepNotes?.isEmpty == false ? "ready" : "not written yet")"
+            }.joined(separator: "\n"))
+        }
+
+        let board = store.boardTasks().prefix(15)
+        if !board.isEmpty {
+            sections.append("Board (current order):\n" + board.map { t in
+                var bits = ["\(t.aiPriority.rawValue) \(t.title.prefix(90))"]
+                if let due = t.dueAt { bits.append("due \(due.formatted(.dateTime.month(.abbreviated).day()))") }
+                if let e = t.estimate { bits.append("~\(e.rawValue)") }
+                if t.isPinned { bits.append("PINNED by me") }
+                return "- " + bits.joined(separator: " · ")
+            }.joined(separator: "\n"))
+        }
+
+        return sections.joined(separator: "\n\n")
     }
 
     // MARK: - Auto-triage (post-pull)
@@ -547,6 +692,10 @@ final class TaskBoardSession: ObservableObject {
                 done.status = .done
                 done.completedAt = Date()
                 self.store.update(done)
+                self.store.record(ApprovalRecord(
+                    taskId: task.id, gate: .draft,
+                    decision: editedDraft != nil ? .editedThenApproved : .approved,
+                    detail: "sent"))
                 self.sendNotifyHandler?("Sent — \(task.title)", task.id)
             case .failure(let error):
                 self.sendError[task.id] = error.localizedDescription
@@ -559,14 +708,18 @@ final class TaskBoardSession: ObservableObject {
     /// done. No Composio call.
     func approveDraft(_ task: TaskItem) {
         store.setStatus(task.id, .done)
+        store.record(ApprovalRecord(taskId: task.id, gate: .draft, decision: .approved))
     }
 
     /// Reject a draft in the review queue → back to Ready, draft kept for
-    /// reference. No outbound anything.
-    func rejectDraft(_ task: TaskItem) {
+    /// reference. No outbound anything. The reason lands in the audit trail
+    /// so rejections teach the system (and the user can see why later).
+    func rejectDraft(_ task: TaskItem, reason: String = "") {
         guard var t = store.task(task.id) else { return }
         t.status = .ready
         store.update(t)
+        store.record(ApprovalRecord(taskId: task.id, gate: .draft,
+                                    decision: .rejected, detail: reason))
     }
 
     /// Compact snapshot of the local board for prep-notes grounding: what's
@@ -617,6 +770,12 @@ final class TaskBoardSession: ObservableObject {
             case .boundaryAction: gate = "Boundary action approved: \(a.detail)"
             case .destructiveRefusal: gate = "Destructive step refused"
             case .inboxAccept: gate = "Accepted from Inbox"
+            case .draft:
+                if a.decision == .rejected {
+                    gate = "Draft rejected" + (a.detail.isEmpty ? "" : " — “\(a.detail)”")
+                } else {
+                    gate = a.detail == "sent" ? "Draft approved & sent" : "Draft approved"
+                }
             }
             events.append(.init(at: a.decidedAt,
                                 icon: a.decision == .rejected ? "xmark.circle" : "checkmark.circle",
@@ -631,6 +790,9 @@ final class TaskBoardSession: ObservableObject {
                                     text: "Run \(r.state.rawValue) — \(title(r.taskId))"))
             }
         }
+        // F4: AI helper failures (session-scoped — enough to debug "why did
+        // nothing happen", without persisting transient errors forever).
+        events.append(contentsOf: aiFailures)
         return Array(events.sorted { $0.at > $1.at }.prefix(limit))
     }
 

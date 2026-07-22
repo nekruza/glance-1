@@ -19,6 +19,9 @@ final class Autopilot {
 
     func tick(session: TaskBoardSession, notify: (String, UUID) -> Void) {
         let prefs = Preferences.shared
+        if prefs.briefingEnabled {
+            briefingTick(session: session)
+        }
         if prefs.prepAutopilotEnabled {
             prepTick(session: session, notify: notify)
         }
@@ -27,6 +30,28 @@ final class Autopilot {
         if prefs.draftAutopilotEnabled, !prefs.composioKey.isEmpty {
             draftTick(session: session)
         }
+    }
+
+    // MARK: - Morning briefing (A1, its own pref)
+
+    /// Workday mornings at the configured time: compose the briefing once
+    /// (lastRun gate, same shape as scheduled pulls) and notify when it lands.
+    /// Purely local data — works with no Composio key.
+    private func briefingTick(session: TaskBoardSession) {
+        guard !session.briefingBusy else { return }
+        let prefs = Preferences.shared
+        let now = Date()
+        let cal = Calendar.current
+        let weekday = cal.component(.weekday, from: now)
+        guard weekday != 1, weekday != 7 else { return }
+
+        let todayAt = cal.startOfDay(for: now)
+            .addingTimeInterval(TimeInterval(prefs.briefingMinutes * 60))
+        let last = prefs.briefingLastRun ?? .distantPast
+        guard now >= todayAt, last < todayAt else { return }
+
+        prefs.briefingLastRun = now
+        session.generateBriefing(notify: true)
     }
 
     // MARK: - Meeting prep (its own pref)
@@ -83,7 +108,7 @@ final class Autopilot {
     /// calendar, pull it once so prep doesn't depend on a manual fetch.
     private func morningCalendarPull(session: TaskBoardSession, now: Date) {
         guard !Preferences.shared.composioKey.isEmpty,
-              session.pullingSource == nil else { return }
+              !session.isPulling else { return }
 
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)

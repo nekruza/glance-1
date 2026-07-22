@@ -307,6 +307,32 @@ final class TaskAI {
         runText(prompt: prompt, model: nil, completion: completion)
     }
 
+    // MARK: - Morning briefing (A1)
+
+    /// Compose the daily briefing from a pre-built local-data digest (board,
+    /// inbox, review queue, meetings, momentum). Raw markdown out (no JSON).
+    func morningBriefing(context: String, completion: @escaping (String?) -> Void) {
+        let prompt = """
+        Write my morning briefing — a 60-second skim that opens my workday. \
+        Output ONLY markdown, no preamble, no fences wrapping the whole \
+        output. Sections, each ONLY if it has content: \
+        **Overnight** (what landed in the Inbox and how it was triaged — one \
+        short bullet per item, group similar ones), \
+        **Waiting on you** (what's parked in Review — what one click clears), \
+        **Today's meetings** (time order, note whether prep notes are ready), \
+        **Top 3 today** (the three tasks to do first, with one short clause \
+        of why each — weigh due dates, priority, meetings, and momentum), \
+        **Momentum** (one warm line from the stats — never guilt-trip). \
+        Be specific and compact: bullets, not prose paragraphs. Ground every \
+        line in the data below; never invent items or facts. Address me as \
+        "you".
+
+        Data:
+        \(context)
+        """
+        runText(prompt: prompt, model: nil, completion: completion)
+    }
+
     // MARK: - Meeting action items (transcript pane reader)
 
     /// Extract ONLY the user's own action items from meeting notes.
@@ -365,15 +391,23 @@ final class TaskAI {
             proc.standardOutput = out
             proc.standardError = Pipe()
 
+            // A hung `claude` must not strand spinners forever — kill after a
+            // generous cap (same pattern as ComposioIngest); nil result flows
+            // through the normal "no change" failure path.
+            let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: killer)
+
             var result: String?
             do {
                 try proc.run()
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 proc.waitUntilExit()
+                killer.cancel()
                 if proc.terminationStatus == 0 {
                     result = String(data: data, encoding: .utf8)
                 }
             } catch {
+                killer.cancel()
                 // fall through with nil
             }
             DispatchQueue.main.async { completion(result) }

@@ -20,13 +20,24 @@ final class TaskNotifications: NSObject, UNUserNotificationCenterDelegate {
     var onRejectPlan: ((UUID, String) -> Void)?
     var onApproveReview: ((UUID) -> Void)?
     var onRejectReview: ((UUID, String) -> Void)?
+    /// "Approve & send" on a draft-ready notification, keyed by taskId (drafts
+    /// have no run). The handler re-checks the task is still at the gate.
+    var onApproveSendDraft: ((UUID) -> Void)?
+    /// Click-through on a briefing notification → open the briefing panel.
+    var onOpenBriefing: (() -> Void)?
 
     private var authorized = false
 
     private enum ActionID {
         static let approve = "gate.approve"
         static let reject = "gate.reject"
+        static let send = "draft.send"
+        static let open = "draft.open"
     }
+
+    /// Category id for draft-ready notifications (not a TaskGate — those are
+    /// run-keyed; drafts are task-keyed).
+    private static let draftCategory = "gate.draft"
 
     func setup() {
         let center = UNUserNotificationCenter.current()
@@ -38,12 +49,23 @@ final class TaskNotifications: NSObject, UNUserNotificationCenterDelegate {
                                                    title: "Reject…",
                                                    textInputButtonTitle: "Reject",
                                                    textInputPlaceholder: "Why? (optional)")
+        // B1: the draft gate is the most frequent one — approving a routine
+        // reply must not require opening the app. Sending still only ever
+        // fires from this explicit user action (the trust boundary holds).
+        let send = UNNotificationAction(identifier: ActionID.send,
+                                        title: "Approve & send")
+        let open = UNNotificationAction(identifier: ActionID.open,
+                                        title: "Open",
+                                        options: [.foreground])
         let categories: Set<UNNotificationCategory> = [
             UNNotificationCategory(identifier: TaskGate.plan.rawValue,
                                    actions: [approve, reject],
                                    intentIdentifiers: []),
             UNNotificationCategory(identifier: TaskGate.review.rawValue,
                                    actions: [approve, reject],
+                                   intentIdentifiers: []),
+            UNNotificationCategory(identifier: Self.draftCategory,
+                                   actions: [send, open],
                                    intentIdentifiers: []),
         ]
         center.setNotificationCategories(categories)
@@ -64,6 +86,19 @@ final class TaskNotifications: NSObject, UNUserNotificationCenterDelegate {
                            "runId": runId.uuidString,
                            "gate": gate.rawValue],
                 category: gate.rawValue)
+    }
+
+    /// A draft-ready notification. `canSend` (the task has an outbound target)
+    /// adds the "Approve & send" / "Open" actions; otherwise a plain banner.
+    func postDraft(message: String, taskId: UUID, canSend: Bool) {
+        deliver(message: message,
+                userInfo: ["taskId": taskId.uuidString],
+                category: canSend ? Self.draftCategory : nil)
+    }
+
+    /// Morning briefing landed — click opens the briefing panel.
+    func postBriefing(message: String) {
+        deliver(message: message, userInfo: ["briefing": "1"])
     }
 
     private func deliver(message: String, userInfo: [String: Any], category: String? = nil) {
@@ -105,8 +140,15 @@ final class TaskNotifications: NSObject, UNUserNotificationCenterDelegate {
                 self.onApproveReview?(run)
             case (ActionID.reject, .review, .some(let run)):
                 self.onRejectReview?(run, reason)
+            case (ActionID.send, _, _):
+                if let taskId { self.onApproveSendDraft?(taskId) }
             default:
-                if let taskId { self.onOpenTask?(taskId) }
+                // Includes ActionID.open and plain click-through.
+                if info["briefing"] != nil {
+                    self.onOpenBriefing?()
+                } else if let taskId {
+                    self.onOpenTask?(taskId)
+                }
             }
         }
         completionHandler()

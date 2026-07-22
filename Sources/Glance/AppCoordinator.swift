@@ -158,6 +158,36 @@ final class AppCoordinator {
         overlayCtl.session.sendNotifyHandler = { [weak self] message, taskId in
             self?.taskNotifications.post(message: message, taskId: taskId)
         }
+        // Autopilot draft parked in Review — the notification carries
+        // "Approve & send" when the task has an outbound target, so routine
+        // replies clear without opening the board.
+        overlayCtl.session.draftReadyNotifyHandler = { [weak self] message, taskId in
+            let canSend = self?.taskStore.task(taskId)?.outboundTarget != nil
+            self?.taskNotifications.postDraft(message: message, taskId: taskId,
+                                              canSend: canSend)
+        }
+        // The action is still one explicit user click per item — the same
+        // trust boundary as the in-app button, minus the app-open cost.
+        // Re-check the gate: the user may have edited/sent/rejected meanwhile.
+        taskNotifications.onApproveSendDraft = { [weak self, weak overlayCtl] taskId in
+            guard let task = self?.taskStore.task(taskId),
+                  task.status == .awaitingReview,
+                  task.outboundTarget != nil else { return }
+            overlayCtl?.session.approveSend(task, editedDraft: nil)
+        }
+        // Morning briefing (A1): notify when it lands; click-through opens
+        // the briefing panel on the board.
+        overlayCtl.session.briefingNotifyHandler = { [weak self] message in
+            self?.taskNotifications.postBriefing(message: message)
+        }
+        taskNotifications.onOpenBriefing = { [weak overlayCtl] in
+            guard let overlayCtl else { return }
+            overlayCtl.session.showSettings = false
+            overlayCtl.session.showAgents = false
+            overlayCtl.session.tab = .board
+            overlayCtl.session.showBriefing = true
+            overlayCtl.present()
+        }
         startPullScheduler()
 
         // Transcript-pane reader actions.
@@ -196,7 +226,7 @@ final class AppCoordinator {
 
         let prefs = Preferences.shared
         guard prefs.schedEnabled, !prefs.composioKey.isEmpty,
-              let session = taskOverlay?.session, session.pullingSource == nil else { return }
+              let session = taskOverlay?.session, !session.isPulling else { return }
 
         let now = Date()
         let last = prefs.schedLastRun ?? .distantPast

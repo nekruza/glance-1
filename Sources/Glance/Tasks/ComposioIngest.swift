@@ -116,7 +116,11 @@ final class ComposioIngest {
     }
 
     private let binaryPath: String
-    private let queue = DispatchQueue(label: "com.h57q3wq0c.glance.composio")
+    /// Concurrent: "Pull from all" runs 2–3 sources at once — each pull is its
+    /// own `claude` subprocess, and completions all hop back to the main actor,
+    /// so nothing here needs serialization.
+    private let queue = DispatchQueue(label: "com.h57q3wq0c.glance.composio",
+                                      attributes: .concurrent)
 
     init(binaryPath: String) {
         self.binaryPath = binaryPath

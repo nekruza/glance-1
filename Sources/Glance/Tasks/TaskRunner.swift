@@ -533,16 +533,22 @@ final class TaskRunner: ObservableObject {
             let out = Pipe()
             proc.standardOutput = out
             proc.standardError = Pipe()
+            // A hung `claude` must not strand the plan phase forever — kill
+            // after a generous cap (same pattern as ComposioIngest); nil flows
+            // through the normal plan-failure path.
+            let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: killer)
             var text: String?
             do {
                 try proc.run()
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 proc.waitUntilExit()
+                killer.cancel()
                 if proc.terminationStatus == 0 {
                     text = String(data: data, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                 }
-            } catch { /* nil */ }
+            } catch { killer.cancel() }
             DispatchQueue.main.async { completion(text) }
         }
     }

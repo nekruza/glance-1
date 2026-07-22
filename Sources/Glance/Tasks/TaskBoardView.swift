@@ -7,6 +7,9 @@ import SwiftUI
 struct TaskBoardView: View {
     @ObservedObject var session: TaskBoardSession
     @ObservedObject var store: TaskStore
+    /// Observed so an accent change in Settings recolors the whole window
+    /// live (DS.accent is computed from Preferences on every render).
+    @ObservedObject private var prefs = Preferences.shared
 
     /// Clearance below the floating pill for the list-style tabs.
     static let pillInset: CGFloat = 60
@@ -42,6 +45,18 @@ struct TaskBoardView: View {
                         TabPill(session: session, store: store)
                             .padding(.top, DS.Space.sm)
 
+                        // Morning briefing (A1): floats top-trailing over the
+                        // board; notification click-through opens it.
+                        if session.showBriefing {
+                            HStack {
+                                Spacer()
+                                BriefingPanel(session: session)
+                            }
+                            .padding(.top, Self.pillInset)
+                            .padding(.trailing, DS.Space.lg)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+
                         // Detail drawer: slides in from the right over the tab.
                         if let task = session.selectedTask {
                             detailDrawer(task, width: geo.size.width * 0.5)
@@ -55,6 +70,11 @@ struct TaskBoardView: View {
         .frame(minWidth: 900, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
         .background(DS.bg)
         .foregroundStyle(DS.textPrimary)
+        // Accent lives in static DS computed vars, so child views can't
+        // observe it — rebuild the tree when it changes. Held stable while
+        // the settings page is open so the color-picker drag doesn't reset
+        // that page's state mid-edit; leaving settings applies the recolor.
+        .id(session.showSettings ? "settings" : "accent-\(prefs.accentHex)")
     }
 
     // MARK: - Detail drawer
@@ -190,6 +210,10 @@ struct TaskBoardView: View {
                     session.showAgents = false
                 }
             } else {
+                footerIcon("sun.max", help: "Morning briefing") {
+                    session.tab = .board
+                    session.showBriefing.toggle()
+                }
                 footerIcon("person.2", help: "AI Agents") { session.showAgents = true }
                 footerIcon("gearshape", help: "Settings") { session.showSettings = true }
             }

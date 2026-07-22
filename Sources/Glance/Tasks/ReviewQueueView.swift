@@ -9,6 +9,10 @@ struct ReviewQueueView: View {
     @ObservedObject var session: TaskBoardSession
     @ObservedObject var store: TaskStore
 
+    /// Row currently showing the inline rejection-reason field (one at a time).
+    @State private var rejectingTaskId: UUID?
+    @State private var rejectReason = ""
+
     /// What a queued task is waiting for — drives the chip + which buttons show.
     private enum Gate {
         case plan          // awaiting plan approval (a run is queued to execute)
@@ -122,8 +126,24 @@ struct ReviewQueueView: View {
         // Once a send is in flight the message may already be out — freeze
         // every decision button, not just the send one.
         let sending = session.sendBusyTaskIds.contains(task.id)
+        if rejectingTaskId == task.id {
+            // Inline reason capture: optional, but recorded — rejections with
+            // a "why" are what teach the system (audit trail + future tuning).
+            HStack(spacing: DS.Space.xs) {
+                TextField("Why? (optional)", text: $rejectReason)
+                    .textFieldStyle(.plain)
+                    .font(DS.Typo.body)
+                    .dsField(focused: true)
+                    .onSubmit { confirmReject(task, gate: gate, runId: runId) }
+                Button("Cancel") { rejectingTaskId = nil; rejectReason = "" }
+                    .buttonStyle(DSSecondaryButtonStyle())
+                Button("Reject") { confirmReject(task, gate: gate, runId: runId) }
+                    .buttonStyle(DSSecondaryButtonStyle())
+                    .foregroundStyle(DS.danger)
+            }
+        } else {
         HStack(spacing: DS.Space.xs) {
-            Button("Reject") { reject(task, gate: gate, runId: runId) }
+            Button("Reject") { rejectingTaskId = task.id; rejectReason = "" }
                 .buttonStyle(DSSecondaryButtonStyle())
                 .foregroundStyle(DS.danger)
                 .disabled(sending)
@@ -151,6 +171,7 @@ struct ReviewQueueView: View {
                     .buttonStyle(DSPrimaryButtonStyle())
             }
         }
+        }
     }
 
     private func approve(_ task: TaskItem, gate: Gate, runId: UUID?) {
@@ -164,14 +185,17 @@ struct ReviewQueueView: View {
         }
     }
 
-    private func reject(_ task: TaskItem, gate: Gate, runId: UUID?) {
+    private func confirmReject(_ task: TaskItem, gate: Gate, runId: UUID?) {
+        let reason = rejectReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        rejectingTaskId = nil
+        rejectReason = ""
         switch gate {
         case .plan:
-            if let runId { session.runner.rejectPlan(runId: runId, reason: "") }
+            if let runId { session.runner.rejectPlan(runId: runId, reason: reason) }
         case .runReview:
-            if let runId { session.runner.rejectReview(runId: runId, reason: "") }
+            if let runId { session.runner.rejectReview(runId: runId, reason: reason) }
         case .draft:
-            session.rejectDraft(task)
+            session.rejectDraft(task, reason: reason)
         }
     }
 

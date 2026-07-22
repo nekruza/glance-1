@@ -7,6 +7,9 @@ import SwiftUI
 struct TabPill: View {
     @ObservedObject var session: TaskBoardSession
     @ObservedObject var store: TaskStore
+    /// Observed (not read statically) so the pull menu re-renders live when
+    /// connectors are toggled in Settings ▸ Connections.
+    @ObservedObject private var prefs = Preferences.shared
     @FocusState private var searchFocused: Bool
     @State private var searchOpen = false
 
@@ -196,12 +199,19 @@ struct TabPill: View {
                 Text("Pulling \(target.displayName)…").font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
             }
             .padding(.horizontal, DS.Space.xxs)
+        } else if session.pullAllRemaining > 0 {
+            HStack(spacing: DS.Space.xxs) {
+                ProgressView().controlSize(.mini)
+                Text("Pulling \(session.pullAllRemaining) source\(session.pullAllRemaining == 1 ? "" : "s")…")
+                    .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+            }
+            .padding(.horizontal, DS.Space.xxs)
         } else {
             Hover { hovering in
                 Menu {
                     Button("Pull from all") { session.pullAll() }
                     Divider()
-                    ForEach(Preferences.shared.enabledFetchTargets) { target in
+                    ForEach(prefs.enabledFetchTargets) { target in
                         Button("Pull from \(target.displayName)") { session.pull(target) }
                     }
                 } label: {

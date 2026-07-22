@@ -347,6 +347,8 @@ struct ApprovalRecord: Identifiable, Codable {
 
 enum ApprovalGate: String, Codable {
     case plan, review, boundaryAction = "boundary_action", destructiveRefusal = "destructive_refusal", inboxAccept = "inbox_accept"
+    /// Outbound/helper draft decisions (approve / approve-&-send / reject).
+    case draft
 }
 
 enum ApprovalDecision: String, Codable {

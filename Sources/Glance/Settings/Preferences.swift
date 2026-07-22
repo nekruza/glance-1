@@ -28,6 +28,11 @@ final class Preferences: ObservableObject {
         static let schedLastRun = "sched.lastRun"
         static let prepAutopilot = "prep.autopilotEnabled"
         static let prepLeadMinutes = "prep.leadMinutes"
+        static let briefingEnabled = "briefing.enabled"
+        static let briefingMinutes = "briefing.minutes"
+        static let briefingLastRun = "briefing.lastRun"
+        static let briefingMD = "briefing.md"
+        static let briefingGeneratedAt = "briefing.generatedAt"
         static let autoTriage = "tasks.autoTriageEnabled"
         static let draftAutopilot = "tasks.draftAutopilotEnabled"
         static let completionSound = "tasks.completionSound"
@@ -176,6 +181,28 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(prepLeadMinutes, forKey: Keys.prepLeadMinutes) }
     }
 
+    /// Morning briefing (A1): each workday at `briefingMinutes`, compose a
+    /// one-page briefing from local board data and notify.
+    @Published var briefingEnabled: Bool {
+        didSet { defaults.set(briefingEnabled, forKey: Keys.briefingEnabled) }
+    }
+    /// Minutes since midnight for the briefing time (default 09:00).
+    @Published var briefingMinutes: Int {
+        didSet { defaults.set(briefingMinutes, forKey: Keys.briefingMinutes) }
+    }
+    var briefingLastRun: Date? {
+        get { defaults.object(forKey: Keys.briefingLastRun) as? Date }
+        set { defaults.set(newValue, forKey: Keys.briefingLastRun) }
+    }
+    /// Latest briefing markdown + timestamp — persisted so it survives
+    /// relaunch (the panel shows the last one until the next lands).
+    @Published var briefingMD: String {
+        didSet { defaults.set(briefingMD, forKey: Keys.briefingMD) }
+    }
+    @Published var briefingGeneratedAt: Date? {
+        didSet { defaults.set(briefingGeneratedAt, forKey: Keys.briefingGeneratedAt) }
+    }
+
     /// Auto-triage: after a pull, AI enriches each freshly-landed inbox item,
     /// filling only the fields the pull left empty (user/pull values win).
     @Published var autoTriageEnabled: Bool {
@@ -298,6 +325,12 @@ final class Preferences: ObservableObject {
             ? true : defaults.bool(forKey: Keys.prepAutopilot)
         prepLeadMinutes = defaults.object(forKey: Keys.prepLeadMinutes) == nil
             ? 20 : max(5, defaults.integer(forKey: Keys.prepLeadMinutes))
+        briefingEnabled = defaults.object(forKey: Keys.briefingEnabled) == nil
+            ? true : defaults.bool(forKey: Keys.briefingEnabled)
+        briefingMinutes = defaults.object(forKey: Keys.briefingMinutes) == nil
+            ? 9 * 60 : defaults.integer(forKey: Keys.briefingMinutes)
+        briefingMD = defaults.string(forKey: Keys.briefingMD) ?? ""
+        briefingGeneratedAt = defaults.object(forKey: Keys.briefingGeneratedAt) as? Date
         autoTriageEnabled = defaults.object(forKey: Keys.autoTriage) == nil
             ? true : defaults.bool(forKey: Keys.autoTriage)
         draftAutopilotEnabled = defaults.object(forKey: Keys.draftAutopilot) == nil

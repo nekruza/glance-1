@@ -628,6 +628,19 @@ struct TaskSettingsView: View {
                 }
             }
             Divider().overlay(DS.divider)
+            row("Morning briefing", "Each workday: what arrived overnight, what's in Review, today's meetings, and a suggested top 3") {
+                Toggle("", isOn: $prefs.briefingEnabled)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            if prefs.briefingEnabled {
+                Divider().overlay(DS.divider)
+                row("Briefing time", "") {
+                    DatePicker("", selection: briefingTimeBinding,
+                               displayedComponents: .hourAndMinute)
+                        .labelsHidden().controlSize(.small)
+                }
+            }
+            Divider().overlay(DS.divider)
             row("Meeting prep autopilot", "Write prep notes automatically before each meeting") {
                 Toggle("", isOn: $prefs.prepAutopilotEnabled)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
@@ -732,6 +745,19 @@ struct TaskSettingsView: View {
             set: { date in
                 let c = Calendar.current.dateComponents([.hour, .minute], from: date)
                 prefs.schedDailyMinutes = (c.hour ?? 9) * 60 + (c.minute ?? 0)
+            }
+        )
+    }
+
+    private var briefingTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.startOfDay(for: Date())
+                    .addingTimeInterval(TimeInterval(prefs.briefingMinutes * 60))
+            },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                prefs.briefingMinutes = (c.hour ?? 9) * 60 + (c.minute ?? 0)
             }
         )
     }

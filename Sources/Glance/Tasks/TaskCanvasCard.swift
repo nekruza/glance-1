@@ -6,6 +6,9 @@ import SwiftUI
 /// list rows had (run / pin / snooze / archive) — plus a context menu twin.
 struct TaskCanvasCard: View {
     @ObservedObject var session: TaskBoardSession
+    /// Observed (not read statically) so agent renames/avatar edits refresh
+    /// cards live — TaskDetailView already observes for the same reason.
+    @ObservedObject private var prefs = Preferences.shared
     let task: TaskItem
     /// Card origin in canvas coordinates (persisted or flow-assigned).
     let origin: CGPoint
@@ -218,7 +221,7 @@ struct TaskCanvasCard: View {
                 dsBadge(label, tint: DS.textSecondary, soft: DS.surface)
             }
 
-            if let agent = Preferences.shared.agent(task.agentId) {
+            if let agent = prefs.agent(task.agentId) {
                 HStack(spacing: 3) {
                     AgentAvatarView(agent: agent, size: 14)
                     Text(agent.displayName)
