@@ -23,6 +23,9 @@ final class TaskAI {
         var estimate: String?
         var repoName: String?
         var agent: String?
+        /// F6: uuid of an existing open task that is the SAME work (semantic
+        /// dedup — catches cross-source duplicates exact keys can't).
+        var duplicateOf: String?
     }
 
     /// "name — skills" roster lines for routing prompts.
@@ -32,8 +35,23 @@ final class TaskAI {
             .joined(separator: "\n")
     }
 
+    /// `openTasks` — "uuid — title" lines of live tasks for semantic dedup
+    /// (F6); empty string skips the duplicate check.
     func enrich(title: String, description: String, repoNames: [String],
+                openTasks: String = "",
                 completion: @escaping (Enrichment?) -> Void) {
+        let dupKey = openTasks.isEmpty ? "" : """
+        , "duplicateOf" (the id of the existing task below that is the SAME \
+        underlying work item as this one — the same ticket, thread, meeting \
+        action, or deliverable arriving from another source or phrasing; null \
+        if none. Similar topic alone is NOT a duplicate)
+        """
+        let dupSection = openTasks.isEmpty ? "" : """
+
+
+        Existing open tasks (id — title):
+        \(openTasks)
+        """
         let prompt = """
         You enrich a todo task. Given its raw title/description, produce JSON only \
         (no prose, no fences) with keys: "title" (cleaned, <=200 chars), \
@@ -44,13 +62,13 @@ final class TaskAI {
         follow-ups, replies; research = investigation/reading; other), "estimate" \
         (one of: minutes, hour, halfday, day+), "repoName" (one of \(repoNames) \
         if the task clearly belongs to that repo, else null), "agent" (the \
-        best-fit agent NAME from the roster below, or null if none clearly fits).
+        best-fit agent NAME from the roster below, or null if none clearly fits)\(dupKey).
 
         Agent roster:
         \(Self.agentRoster())
 
         Task title: \(title)
-        Task description: \(description.isEmpty ? "(none)" : description)
+        Task description: \(description.isEmpty ? "(none)" : description)\(dupSection)
         """
         runJSON(prompt: prompt, model: "haiku", completion: completion)
     }

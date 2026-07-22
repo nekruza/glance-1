@@ -413,9 +413,21 @@ final class TaskBoardSession: ObservableObject {
     // MARK: - AI triggers
 
     /// FR36/FR38: async enrichment; user edits win (only fills empty fields).
+    /// The same call doubles as the F6 semantic dedup pass: it sees the open
+    /// board and may name an existing task as the same work.
     private func enrich(_ task: TaskItem) {
         let repoNames = Preferences.shared.repos.map(\.name)
-        ai.enrich(title: task.title, description: task.descriptionMD, repoNames: repoNames) { [weak self] e in
+        // Live tasks only, newest first, capped — enough to catch the Jira
+        // ticket / Slack thread / meeting action for the same work without
+        // bloating a Haiku prompt.
+        let openTasks = store.tasks
+            .filter { ![.done, .archived, .cancelled].contains($0.status) && $0.id != task.id }
+            .sorted { $0.createdAt > $1.createdAt }
+            .prefix(40)
+            .map { "\($0.id.uuidString) — \($0.title.prefix(80))" }
+            .joined(separator: "\n")
+        ai.enrich(title: task.title, description: task.descriptionMD,
+                  repoNames: repoNames, openTasks: openTasks) { [weak self] e in
             guard let self else { return }
             guard let e else {
                 // Background auto-triage: feed-only, no toast (see noteAIFailure).
@@ -443,6 +455,15 @@ final class TaskBoardSession: ObservableObject {
             }
             if t.agentId == nil, let agentId = AgentProfile.idFor(name: e.agent) {
                 t.agentId = agentId; filled.append("agent")
+            }
+            // F6: flag (never merge) — validate the id points at a real live
+            // task so a hallucinated uuid can't wire a dangling dup badge.
+            if t.possibleDuplicateOf == nil,
+               let dupId = e.duplicateOf.flatMap(UUID.init(uuidString:)),
+               dupId != t.id,
+               let candidate = self.store.task(dupId),
+               ![.done, .archived, .cancelled].contains(candidate.status) {
+                t.possibleDuplicateOf = dupId
             }
             t.aiFilledFields = Array(Set(t.aiFilledFields + filled))
             self.store.update(t)

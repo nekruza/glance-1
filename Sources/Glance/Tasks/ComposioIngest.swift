@@ -130,7 +130,16 @@ final class ComposioIngest {
     /// completion with counts (dedup by sourceRef against all existing tasks).
     @MainActor
     func pull(_ target: FetchTarget, store: TaskStore, completion: @escaping (Result) -> Void) {
-        let existingKeys = Set(store.tasks.compactMap { $0.sourceRef?.key })
+        // Dedup identity: keys AND urls, case-folded, in one set. The model
+        // authors sourceKey and sometimes drifts format between pulls (Slack
+        // permalink vs channel+ts, Granola slugs) — an item whose key OR deep
+        // link matches anything we've seen is the same item. Also bridges key
+        // format changes: an old permalink-key still matches a new item's URL.
+        var existingIds = Set<String>()
+        for t in store.tasks {
+            if let key = t.sourceRef?.key, !key.isEmpty { existingIds.insert(key.lowercased()) }
+            if let url = t.sourceRef?.url, !url.isEmpty { existingIds.insert(url.lowercased()) }
+        }
         fetch(target) { fetched, error in
             guard let fetched else {
                 completion(Result(created: 0, skippedDuplicates: 0,
@@ -141,10 +150,17 @@ final class ComposioIngest {
             var skipped = 0
             var createdIds: [UUID] = []
             for f in fetched {
-                if let key = f.sourceKey, existingKeys.contains(key) {
+                let key = f.sourceKey?.lowercased() ?? ""
+                let url = f.sourceURL?.lowercased() ?? ""
+                if (!key.isEmpty && existingIds.contains(key))
+                    || (!url.isEmpty && existingIds.contains(url)) {
                     skipped += 1
                     continue
                 }
+                // Also dedupe within this batch — a model sometimes lists the
+                // same item twice.
+                if !key.isEmpty { existingIds.insert(key) }
+                if !url.isEmpty { existingIds.insert(url) }
                 var t = TaskItem(title: String(f.title.prefix(200)), source: target.taskSource)
                 t.status = .inbox
                 t.descriptionMD = f.description ?? ""
@@ -469,8 +485,13 @@ final class ComposioIngest {
             3 days and extract action items that belong to ME (committed to, \
             assigned, or clearly mine). Read actions only. \(readOnlyRules)
             One task per action item — do not invent tasks. sourceKey = \
-            "<meeting id or title>#<short slug of the action item>". Include \
-            the meeting name and any deadline in the description. \(outputRules)
+            "<meeting id, or exact meeting title if no id>#<slug>" where slug \
+            is the action item's first 6 words, lowercased, every run of \
+            non-alphanumeric characters replaced by a single dash (e.g. \
+            "Follow up with Ben re: SSO" → "follow-up-with-ben-re-sso"). \
+            Deterministic: the SAME action item must produce the SAME key on \
+            every pull. Include the meeting name and any deadline in the \
+            description. \(outputRules)
             """
         case .slack:
             return """
@@ -488,9 +509,11 @@ final class ComposioIngest {
             the specific reply that contains the ask, preserving its bold \
             headings / bullet structure in the description markdown. \
             One task per actionable item — ignore FYIs and threads that are \
-            fully resolved. sourceKey = the actionable message's permalink or \
-            channel+ts (the reply's ts when the ask is in a reply); sourceURL \
-            = that permalink. \(outputRules)
+            fully resolved. sourceKey = "<channel id>:<parent message ts>" — \
+            ALWAYS the thread's PARENT message ts (never a reply's ts), so the \
+            same thread produces the same key on every pull even when the ask \
+            is in a reply. sourceURL = the permalink of the message containing \
+            the ask. \(outputRules)
             """
         case .calendar:
             return """
