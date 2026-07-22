@@ -36,7 +36,10 @@ final class Autopilot {
 
     /// Workday mornings at the configured time: compose the briefing once
     /// (lastRun gate, same shape as scheduled pulls) and notify when it lands.
-    /// Purely local data — works with no Composio key.
+    /// Composition itself is purely local — but if today's calendar hasn't
+    /// been pulled yet (late wake: the 7–12h safety pull hasn't fired), pull
+    /// it first and compose in the completion, so the briefing's "Today's
+    /// meetings" section isn't composed from yesterday's board.
     private func briefingTick(session: TaskBoardSession) {
         guard !session.briefingBusy else { return }
         let prefs = Preferences.shared
@@ -50,8 +53,26 @@ final class Autopilot {
         let last = prefs.briefingLastRun ?? .distantPast
         guard now >= todayAt, last < todayAt else { return }
 
+        let today = cal.startOfDay(for: now)
+        let hasTodayMeeting = session.store.tasks.contains {
+            $0.source == .calendar && $0.dueAt.map { cal.isDate($0, inSameDayAs: now) } == true
+        }
+        let needsCalendarFirst = !hasTodayMeeting
+            && calendarPullDay != today
+            && !session.isPulling
+            && !prefs.composioKey.isEmpty
+            && prefs.isFetchEnabled(ComposioIngest.Source.calendar)
+
         prefs.briefingLastRun = now
-        session.generateBriefing(notify: true)
+        if needsCalendarFirst {
+            // Claim the morning pull so prepTick doesn't fire a second one.
+            calendarPullDay = today
+            session.pull(.calendar) { [weak session] in
+                session?.generateBriefing(notify: true)
+            }
+        } else {
+            session.generateBriefing(notify: true)
+        }
     }
 
     // MARK: - Meeting prep (its own pref)

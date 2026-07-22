@@ -165,12 +165,18 @@ final class TaskBoardSession: ObservableObject {
 
     // MARK: - Composio pulls (manual, read-only)
 
-    func pull(_ source: ComposioIngest.Source) {
-        pull(.builtin(source))
+    /// `completion` fires when the pull settles — including the early-outs
+    /// (already pulling, no Composio key), so callers sequencing work after a
+    /// pull (briefing freshness) are never stranded.
+    func pull(_ source: ComposioIngest.Source, completion: (() -> Void)? = nil) {
+        pull(.builtin(source), completion: completion)
     }
 
-    func pull(_ target: ComposioIngest.FetchTarget) {
-        guard !isPulling, ensureComposioConfigured() else { return }
+    func pull(_ target: ComposioIngest.FetchTarget, completion: (() -> Void)? = nil) {
+        guard !isPulling, ensureComposioConfigured() else {
+            completion?()
+            return
+        }
         pullingSource = target
         pullStatus = nil
         ingest.pull(target, store: store) { [weak self] result in
@@ -182,6 +188,7 @@ final class TaskBoardSession: ObservableObject {
                 self.tab = .inbox
                 self.pullNotifyHandler?("\(target.displayName): \(result.created) new task\(result.created == 1 ? "" : "s") in Inbox")
             }
+            completion?()
         }
     }
 
