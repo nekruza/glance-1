@@ -85,7 +85,10 @@ final class WorkContext {
         ingest.runReadOnly(prompt: Self.prompt(for: source), on: fetchQueue) { [weak self] text, _ in
             guard let self else { return }
             let cleaned = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let usable: String? = (cleaned?.isEmpty == false && cleaned != "NOT_CONNECTED")
+            // FETCH_FAILED is transient: unusable now, but not cached, so the
+            // next request retries.
+            let usable: String? = (cleaned?.isEmpty == false && cleaned != "NOT_CONNECTED"
+                                   && cleaned?.hasPrefix("FETCH_FAILED") != true)
                 ? cleaned : nil
             if let usable {
                 self.cache[source] = Digest(source: source, text: usable, fetchedAt: Date())
@@ -136,14 +139,22 @@ final class WorkContext {
         Output ONLY markdown (no fences wrapping the output, no preamble): \
         5-15 terse bullets, most important first, max ~350 words. Every bullet \
         must be grounded in fetched data — no filler, no speculation. If the \
-        app is NOT connected in Composio, output the single line: NOT_CONNECTED.
+        app is NOT connected in Composio, output the single line: NOT_CONNECTED. \
+        If fetching fails for any other reason (errors, timeouts, blocked \
+        requests), output the single line: FETCH_FAILED — no explanation, no \
+        questions, nothing else. Never answer with meta-commentary about the \
+        fetch itself; the output is consumed as work context by another model.
         """
         switch source {
         case .granola:
             return """
             \(header)
             From Granola: my meetings in that window — for each: name, key \
-            decisions, and action items (mine flagged as **mine**).
+            decisions, and action items. Flag an item **mine** ONLY when the \
+            transcript explicitly assigns it to me by name — never because I \
+            spoke about it or seem the likely owner; when ownership is \
+            ambiguous, name whoever raised it instead. Teammates' updates are \
+            THEIR work: keep the person's name attached to every update.
             \(footer)
             """
         case .slack:

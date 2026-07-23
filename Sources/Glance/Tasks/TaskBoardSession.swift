@@ -791,8 +791,11 @@ final class TaskBoardSession: ObservableObject {
         if !inbox.isEmpty {
             sections.append("Inbox (untriaged):\n" + inbox.map(line).joined(separator: "\n"))
         }
-        // Recently finished — last 3 days covers "since last time" reporting.
-        let cutoff = Date().addingTimeInterval(-3 * 86_400)
+        // Recently finished — since the start of the last working day, the
+        // same window the WorkContext digests cover. A wider window (this was
+        // 3 days) feeds a daily standup items already reported at the previous
+        // one or two standups.
+        let cutoff = Calendar.current.startOfDay(for: WorkContext.lastWorkingDay())
         let done = store.doneTasks()
             .filter { ($0.completedAt ?? .distantPast) > cutoff }
             .prefix(15)

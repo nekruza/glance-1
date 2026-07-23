@@ -264,8 +264,19 @@ final class TaskAI {
         don't repeat every email). \
         Ground every bullet in the meeting details, my task board, or the \
         work context; pick ONLY what's relevant to this meeting's topic and \
-        attendees, drop the rest. Recently-done board tasks feed "Since last \
-        time"; open/inbox board tasks feed "Open threads". Never invent facts.
+        attendees, drop the rest. Never invent facts. \
+        ATTRIBUTION RULES for "Since last time": it is MY report of work I \
+        DID, so a bullet may come from exactly two places — (1) my "Done \
+        recently" board tasks, (2) actions the Slack/GitHub context shows I \
+        already performed (approved, reviewed, replied, pushed). Meeting-notes \
+        context (Granola) reports what was SAID in a meeting — teammates' \
+        updates, decisions, and assignments. It is never evidence that I did \
+        something, so nothing from it goes in "Since last time", even items \
+        flagged as mine. An item assigned to me there is an open action: put \
+        it in "Open threads" if it's also on my board; if it's absent from my \
+        board, either omit it or flag the mismatch neutrally ("meeting notes \
+        attribute X to me — not on my board"). My board is authoritative for \
+        what I own.
 
         Meeting:
         \(meeting.joined(separator: "\n"))
