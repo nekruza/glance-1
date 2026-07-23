@@ -110,7 +110,10 @@ final class Autopilot {
                 }
             } else if !contextWarmRequested.contains(task.id) {
                 contextWarmRequested.insert(task.id)
-                session.workContext.digests { _ in }
+                // Social events get logistics-only notes — no digests needed.
+                if !TaskBoardSession.isSocialEvent(task.title) {
+                    session.workContext.digests { _ in }
+                }
             }
         }
     }

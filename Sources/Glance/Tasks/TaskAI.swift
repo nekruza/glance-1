@@ -253,7 +253,13 @@ final class TaskAI {
         let prompt = """
         Write concise prep notes for the meeting below — for ME, the attendee, \
         to skim in the 5 minutes before it starts. Output ONLY markdown, no \
-        preamble, no fences wrapping the whole output. Structure: \
+        preamble, no fences wrapping the whole output. \
+        FIRST decide the meeting type from its title/agenda. If it is social \
+        or non-work (lunch, dinner, coffee, drinks, birthday, celebration, \
+        team outing…), IGNORE the structure below: output at most 3 short \
+        lines — what/when, who's coming vs declined (from the RSVPs), any \
+        logistics in the details — and NO work content: no progress report, \
+        no open threads, no questions. Otherwise use this structure: \
         **Purpose** (1 line — infer from the title/agenda), \
         **Since last time** (2-5 bullets: MY relevant progress/updates from the \
         work context below — the things I'd report at this meeting), \

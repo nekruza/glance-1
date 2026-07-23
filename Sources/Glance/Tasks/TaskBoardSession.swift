@@ -548,23 +548,47 @@ final class TaskBoardSession: ObservableObject {
     func generatePrepNotes(_ task: TaskItem) {
         guard !prepBusyTaskIds.contains(task.id) else { return }
         prepBusyTaskIds.insert(task.id)
+        // Social events (lunch, drinks, birthday…) get logistics-only notes —
+        // don't spend four source fetches on work context the notes must not
+        // use. The prompt independently guards content for social events the
+        // keyword check misses.
+        if Self.isSocialEvent(task.title) {
+            prepPhase = "Writing notes…"
+            writePrepNotes(task, digests: [:], boardContext: "")
+            return
+        }
         prepPhase = "Gathering context…"
         let boardContext = boardDigest(excluding: task.id)
         workContext.digests { [weak self] digests in
             guard let self else { return }
             self.prepPhase = "Writing notes…"
-            self.ai.prepNotes(for: task, workDigests: digests,
-                              boardContext: boardContext) { [weak self] text in
-                guard let self else { return }
-                self.prepBusyTaskIds.remove(task.id)
-                guard let text else {
-                    self.noteAIFailure("Prep notes failed — \(task.title). Try again.")
-                    return
-                }
-                guard var t = self.store.task(task.id) else { return }
-                t.prepNotes = text
-                self.store.update(t)
+            self.writePrepNotes(task, digests: digests, boardContext: boardContext)
+        }
+    }
+
+    /// Obviously-social calendar events, where prep is logistics, not work.
+    static func isSocialEvent(_ title: String) -> Bool {
+        let t = title.lowercased()
+        let social = ["lunch", "dinner", "breakfast", "coffee", "drinks",
+                      "birthday", "party", "picnic", "bbq", "social", "outing",
+                      "celebration", "happy hour"]
+        return social.contains { t.contains($0) }
+    }
+
+    private func writePrepNotes(_ task: TaskItem,
+                                digests: [WorkContext.Source: String],
+                                boardContext: String) {
+        ai.prepNotes(for: task, workDigests: digests,
+                     boardContext: boardContext) { [weak self] text in
+            guard let self else { return }
+            self.prepBusyTaskIds.remove(task.id)
+            guard let text else {
+                self.noteAIFailure("Prep notes failed — \(task.title). Try again.")
+                return
             }
+            guard var t = self.store.task(task.id) else { return }
+            t.prepNotes = text
+            self.store.update(t)
         }
     }
 
