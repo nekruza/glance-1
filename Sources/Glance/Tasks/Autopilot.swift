@@ -9,6 +9,8 @@ final class Autopilot {
 
     /// Meetings we've kicked prep generation off for (this launch).
     private var prepRequested: Set<UUID> = []
+    /// Meetings we've warmed the WorkContext digest cache for (this launch).
+    private var contextWarmRequested: Set<UUID> = []
     /// Meetings we've already posted a "prep ready" notification for.
     private var prepNotified: Set<UUID> = []
     /// Day we last ran the morning calendar safety pull for.
@@ -82,10 +84,15 @@ final class Autopilot {
         morningCalendarPull(session: session, now: now)
 
         let lead = TimeInterval(Preferences.shared.prepLeadMinutes * 60)
+        // Digests stay fresh for the WorkContext TTL, so fetching them any
+        // time inside that window costs nothing extra — start the gather as
+        // early as the TTL allows and prep generation at lead time (or the
+        // user opening the task) skips the "Gathering context…" wait.
+        let warmHorizon = max(lead, WorkContext.ttl)
         for task in session.store.tasks {
             guard task.source == .calendar,
                   let start = task.dueAt,
-                  start > now, start <= now + lead,
+                  start > now, start <= now + warmHorizon,
                   task.status != .done, task.status != .archived,
                   task.status != .cancelled else { continue }
 
@@ -95,10 +102,15 @@ final class Autopilot {
                     prepNotified.insert(task.id)
                     notify("Prep ready — \(task.title)", task.id)
                 }
-            } else if !prepRequested.contains(task.id),
-                      !session.prepBusyTaskIds.contains(task.id) {
-                prepRequested.insert(task.id)
-                session.generatePrepNotes(task)
+            } else if start <= now + lead {
+                if !prepRequested.contains(task.id),
+                   !session.prepBusyTaskIds.contains(task.id) {
+                    prepRequested.insert(task.id)
+                    session.generatePrepNotes(task)
+                }
+            } else if !contextWarmRequested.contains(task.id) {
+                contextWarmRequested.insert(task.id)
+                session.workContext.digests { _ in }
             }
         }
     }

@@ -68,10 +68,12 @@ final class WorkContext {
         group.notify(queue: .main) { completion(results) }
     }
 
-    /// One source: cache hit within TTL, else fetch and store.
+    /// One source: cache hit within TTL, else fetch and store. An empty cached
+    /// text is a negative hit (source answered NOT_CONNECTED) — report "no
+    /// digest" without paying for another fetch.
     func digest(_ source: Source, completion: @escaping (String?) -> Void) {
         if let hit = cache[source], Date().timeIntervalSince(hit.fetchedAt) < Self.ttl {
-            completion(hit.text)
+            completion(hit.text.isEmpty ? nil : hit.text)
             return
         }
         // Someone is already fetching this source — piggyback.
@@ -88,6 +90,13 @@ final class WorkContext {
             if let usable {
                 self.cache[source] = Digest(source: source, text: usable, fetchedAt: Date())
                 self.saveCache()
+            } else if cleaned == "NOT_CONNECTED" {
+                // Negative-cache the explicit not-connected answer (empty text)
+                // so a dead source doesn't cost a fresh subprocess on every
+                // prep within the TTL. Transient failures (nil/error) are NOT
+                // cached — they should retry on the next request.
+                self.cache[source] = Digest(source: source, text: "", fetchedAt: Date())
+                self.saveCache()
             }
             let waiters = self.inFlight.removeValue(forKey: source) ?? []
             for waiter in waiters { waiter(usable) }
@@ -97,7 +106,7 @@ final class WorkContext {
     /// Freshness line for UI ("Slack 12m ago · Jira 12m ago").
     func freshness() -> String? {
         let parts = Source.allCases.compactMap { s -> String? in
-            guard let d = cache[s] else { return nil }
+            guard let d = cache[s], !d.text.isEmpty else { return nil }
             let mins = max(0, Int(Date().timeIntervalSince(d.fetchedAt) / 60))
             return "\(s.displayName) \(mins)m"
         }

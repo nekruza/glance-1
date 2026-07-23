@@ -114,17 +114,21 @@ final class OverlayController {
     }
 
     private func positionPanel() {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         // Once the user has dragged the panel somewhere, respect that spot on
-        // every summon; only re-apply the anchors for the current size.
-        if panel.userMoved {
+        // every summon — but only while it's on the display being summoned on.
+        // A dragged anchor is an absolute point that encodes a display; without
+        // this check ⌥Space keeps reopening on whichever screen the drag
+        // happened, not the one the user is working on.
+        if panel.userMoved, let left = panel.anchoredLeft, let top = panel.anchoredTop,
+           screen.map({ NSMouseInRect(NSPoint(x: left, y: top - 1), $0.frame, false) }) == true {
             panel.reanchor()
             return
         }
         // Center horizontally, top edge in the upper third of the display under
         // the cursor. The panel auto-grows downward from this fixed top as the
         // answer streams (see OverlayPanel anchoring).
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
         panel.layoutIfNeeded()
         let width = panel.frame.width
