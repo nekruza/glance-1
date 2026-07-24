@@ -254,20 +254,34 @@ final class TaskAI {
         Write concise prep notes for the meeting below — for ME, the attendee, \
         to skim in the 5 minutes before it starts. Output ONLY markdown, no \
         preamble, no fences wrapping the whole output. \
-        FIRST decide the meeting type from its title/agenda. If it is social \
-        or non-work (lunch, dinner, coffee, drinks, birthday, celebration, \
-        team outing…), IGNORE the structure below: output at most 3 short \
-        lines — what/when, who's coming vs declined (from the RSVPs), any \
-        logistics in the details — and NO work content: no progress report, \
-        no open threads, no questions. Otherwise use this structure: \
-        **Purpose** (1 line — infer from the title/agenda), \
-        **Since last time** (2-5 bullets: MY relevant progress/updates from the \
-        work context below — the things I'd report at this meeting), \
-        **Open threads** (bullets: unresolved items from the context that this \
-        meeting's people/topics touch — blockers, waiting-ons, review requests), \
-        **Questions to ask** (1-3 bullets), \
-        and **Who's in the room** (only if attendees are listed — group them, \
-        don't repeat every email). \
+        FIRST classify the meeting from its title/agenda/attendees, then \
+        write ONLY the sections that fit that type — never force a section \
+        the meeting wouldn't use:
+        - SOCIAL / non-work (lunch, dinner, coffee, drinks, birthday, \
+        celebration, team outing…): at most 3 short lines — what/when, who's \
+        coming vs declined (from the RSVPs), any logistics in the details — \
+        and NO work content: no progress report, no open threads, no questions.
+        - INTRODUCTORY / first meeting (introductory 1:1, meet-and-greet, \
+        welcome chat, onboarding, interview): **Purpose** (1 line), \
+        **About them** (1-3 bullets — only what the context below actually \
+        says about this person or their team; omit the section if nothing), \
+        **Questions to ask** (2-4 get-to-know-you bullets: their role, how \
+        our work might intersect). NO status report, NO ticket/PR/CI \
+        content — nobody reports progress at an introduction.
+        - STATUS / sync (standup, weekly sync, recurring check-in or 1:1 \
+        about ongoing work): **Purpose** (1 line), **Since last time** \
+        (2-5 bullets: MY relevant progress/updates from the work context \
+        below — the things I'd report at this meeting), **Open threads** \
+        (bullets: unresolved items from the context that this meeting's \
+        people/topics touch — blockers, waiting-ons, review requests), \
+        **Questions to ask** (1-3 bullets).
+        - TOPIC / decision (planning, review, retro, design or incident \
+        discussion): **Purpose** (1 line), **Where it stands** (2-5 bullets \
+        on THIS meeting's topic only, from the context), **Questions to \
+        ask / decisions needed** (1-3 bullets). No general progress \
+        report — only material about the meeting's topic.
+        For any non-social type, end with **Who's in the room** (only if \
+        attendees are listed — group them, don't repeat every email). \
         Ground every bullet in the meeting details, my task board, or the \
         work context; pick ONLY what's relevant to this meeting's topic and \
         attendees, drop the rest. Never invent facts. \
