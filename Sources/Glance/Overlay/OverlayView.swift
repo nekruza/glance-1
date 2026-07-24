@@ -9,6 +9,11 @@ struct OverlayView: View {
     @ObservedObject private var liveTranscript = TranscriptPanelModel.shared
     @FocusState private var inputFocused: Bool
     @State private var showHistory = false
+    // "Viewport is at the bottom" — streaming auto-scroll runs only while
+    // true. User scrolling up disengages it (ScrollPinTracker); scrolling
+    // back to the bottom, tapping the ↓ pill, or asking a new question
+    // re-engages.
+    @State private var pinAtBottom = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -112,11 +117,45 @@ struct OverlayView: View {
             ScrollView {
                 transcriptContent
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ScrollPinTracker(pinned: $pinAtBottom))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .onChange(of: session.turns.last?.answer) { _, _ in scrollToEnd(proxy) }
-            .onChange(of: session.turns.count) { _, _ in scrollToEnd(proxy) }
+            // Streamed chunks follow the bottom only while pinned. Instant
+            // scroll: chunks arrive faster than any animation, so animating
+            // each one queues up and feels rubbery.
+            .onChange(of: session.turns.last?.answer) { _, _ in
+                if pinAtBottom { scrollToEnd(proxy) }
+            }
+            // New turn = the user just asked something: snap down and re-pin
+            // regardless of where they had scrolled.
+            .onChange(of: session.turns.count) { _, _ in
+                pinAtBottom = true
+                scrollToEnd(proxy, animated: true)
+            }
+            .overlay(alignment: .bottom) {
+                if !pinAtBottom {
+                    jumpToBottomPill(proxy).padding(.bottom, 10)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: pinAtBottom)
         }
+    }
+
+    /// Escape hatch back to live-follow after scrolling up mid-stream.
+    private func jumpToBottomPill(_ proxy: ScrollViewProxy) -> some View {
+        Button {
+            pinAtBottom = true
+            scrollToEnd(proxy, animated: true)
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.fg)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Theme.field))
+                .overlay(Circle().strokeBorder(Theme.glassBorderHi, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .scale(scale: 0.9)))
     }
 
     private var transcriptContent: some View {
@@ -415,10 +454,58 @@ struct OverlayView: View {
         return session.attachImage ? "Ask about what's on screen…" : "Ask anything (no screenshot)…"
     }
 
-    private func scrollToEnd(_ proxy: ScrollViewProxy) {
-        if let last = session.turns.last?.id {
+    private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = false) {
+        guard let last = session.turns.last?.id else { return }
+        if animated {
             withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last, anchor: .bottom) }
+        } else {
+            proxy.scrollTo(last, anchor: .bottom)
         }
+    }
+}
+
+/// Tracks whether the user has the transcript scrolled to the bottom.
+/// NSScrollView live-scroll notifications fire ONLY for user-initiated
+/// scrolling (trackpad, wheel, scroller drag) — programmatic scrollTo()
+/// never posts them — so user intent needs no ignore-my-own-scroll flag.
+/// Sits invisibly in the ScrollView's content to reach enclosingScrollView.
+private struct ScrollPinTracker: NSViewRepresentable {
+    @Binding var pinned: Bool
+
+    func makeNSView(context: Context) -> TrackerView { TrackerView() }
+
+    func updateNSView(_ view: TrackerView, context: Context) {
+        view.onUserScroll = { distanceFromBottom in
+            let nowPinned = distanceFromBottom < 50
+            if nowPinned != pinned { pinned = nowPinned }
+        }
+    }
+
+    final class TrackerView: NSView {
+        var onUserScroll: ((CGFloat) -> Void)?
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard observers.isEmpty, let scroll = enclosingScrollView else { return }
+            // didLiveScroll fires throughout the gesture and momentum;
+            // didEndLiveScroll catches the settled position.
+            for name in [NSScrollView.didLiveScrollNotification,
+                         NSScrollView.didEndLiveScrollNotification] {
+                observers.append(NotificationCenter.default.addObserver(
+                    forName: name, object: scroll, queue: .main
+                ) { [weak self, weak scroll] _ in
+                    guard let scroll, let doc = scroll.documentView else { return }
+                    let clip = scroll.contentView
+                    let distance = doc.isFlipped
+                        ? doc.frame.height - clip.bounds.maxY
+                        : clip.bounds.minY
+                    self?.onUserScroll?(distance)
+                })
+            }
+        }
+
+        deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
     }
 }
 
