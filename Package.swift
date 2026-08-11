@@ -19,6 +19,10 @@ let package = Package(
                 .linkedFramework("Speech"),           // on-device meeting transcription
                 .linkedFramework("AVFoundation")      // mic capture for transcription
             ]
+        ),
+        .testTarget(
+            name: "GlanceTests",
+            dependencies: ["Glance"]
         )
     ]
 )

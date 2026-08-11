@@ -39,6 +39,7 @@ final class Preferences: ObservableObject {
         static let completionSound = "tasks.completionSound"
         static let completionSoundName = "tasks.completionSoundName"
         static let confetti = "tasks.confetti"
+        static let askBackend = "ask.backend"
     }
 
     enum ScheduleMode: String, CaseIterable {
@@ -243,6 +244,11 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(confettiEnabled, forKey: Keys.confetti) }
     }
 
+    /// Preferred local CLI backend for ask-overlay requests.
+    @Published var askBackend: AskBackendKind {
+        didSet { defaults.set(askBackend.rawValue, forKey: Keys.askBackend) }
+    }
+
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
     @Published var overlayOpacity: Double {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
@@ -355,6 +361,8 @@ final class Preferences: ObservableObject {
         completionSoundName = defaults.string(forKey: Keys.completionSoundName) ?? "Glass"
         confettiEnabled = defaults.object(forKey: Keys.confetti) == nil
             ? true : defaults.bool(forKey: Keys.confetti)
+        askBackend = AskBackendKind(rawValue: defaults.string(forKey: Keys.askBackend) ?? "")
+            ?? .claude
     }
 }
 
