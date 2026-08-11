@@ -8,6 +8,30 @@ enum CodexStreamEvent: Equatable {
     case failed(String)
     case ignored
 
+    var automationEvent: AutomationEvent? {
+        switch self {
+        case .threadStarted(let id):
+            return .sessionID(id)
+        case .token(let text):
+            return .text(text)
+        case .completed:
+            return .completed
+        case .failed(let message):
+            return .failed(message)
+        case .ignored:
+            return nil
+        }
+    }
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .failed:
+            return true
+        case .threadStarted, .token, .ignored:
+            return false
+        }
+    }
+
     static func decode(_ line: String) throws -> CodexStreamEvent {
         let data = Data(line.utf8)
         let payload = try JSONDecoder().decode(Payload.self, from: data)

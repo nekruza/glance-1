@@ -15,6 +15,27 @@ final class CodexStreamEventTests: XCTestCase {
         XCTAssertEqual(try CodexStreamEvent.decode(line), .ignored)
     }
 
+    func testExposesReusableAutomationEvents() throws {
+        XCTAssertEqual(
+            try CodexStreamEvent.decode(#"{"type":"thread.started","thread_id":"abc"}"#).automationEvent,
+            .sessionID("abc")
+        )
+        XCTAssertEqual(
+            try CodexStreamEvent.decode(#"{"type":"item.completed","item":{"type":"agent_message","text":"Hello"}}"#).automationEvent,
+            .text("Hello")
+        )
+        XCTAssertEqual(
+            try CodexStreamEvent.decode(#"{"type":"turn.completed"}"#).automationEvent,
+            .completed
+        )
+    }
+
+    func testIdentifiesOnlyFinalCodexEventsAsTerminal() throws {
+        XCTAssertTrue(try CodexStreamEvent.decode(#"{"type":"turn.completed"}"#).isTerminal)
+        XCTAssertTrue(try CodexStreamEvent.decode(#"{"type":"turn.failed","error":{"message":"Nope"}}"#).isTerminal)
+        XCTAssertFalse(try CodexStreamEvent.decode(#"{"type":"item.completed","item":{"type":"error","message":"Warning"}}"#).isTerminal)
+    }
+
     func testBackendKeepsImageAvailableUntilShutdownThenRemovesIt() throws {
         let fixtureDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-image-cleanup-test-\(UUID().uuidString)", isDirectory: true)

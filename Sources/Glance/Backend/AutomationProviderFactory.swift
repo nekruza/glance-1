@@ -11,7 +11,8 @@ struct AutomationProviderFactory {
     private let claudeStatus: () -> ClaudeLocator.Status
     private let codexStatus: () -> CodexLocator.Status
 
-    init(makeClaude: @escaping ProviderBuilder, makeCodex: @escaping ProviderBuilder,
+    init(makeClaude: @escaping ProviderBuilder = { ClaudeAutomationProvider(binaryPath: $0, version: $1) },
+         makeCodex: @escaping ProviderBuilder = { CodexAutomationProvider(binaryPath: $0, version: $1) },
          claudeStatus: @escaping () -> ClaudeLocator.Status = ClaudeLocator.check,
          codexStatus: @escaping () -> CodexLocator.Status = CodexLocator.check) {
         self.makeClaude = makeClaude
