@@ -426,23 +426,36 @@ final class TaskAI {
 
     private func runRaw(prompt: String, model: String?,
                         completion: @escaping (String?) -> Void) {
+        let lock = NSLock()
         var output = ""
         var settled = false
         let choice = model.flatMap(AutomationModelChoice.init(rawValue:))
         provider.runText(AutomationRequest(prompt: prompt,
                                            model: provider.descriptor.model(for: choice))) { event in
-            guard !settled else { return }
+            var shouldComplete = false
+            var result: String?
+            lock.lock()
+            guard !settled else {
+                lock.unlock()
+                return
+            }
             switch event {
             case .text(let text):
                 output += text
             case .completed:
                 settled = true
-                Self.completeOnMain(output.isEmpty ? nil : output, completion: completion)
+                shouldComplete = true
+                result = output.isEmpty ? nil : output
             case .failed:
                 settled = true
-                Self.completeOnMain(nil, completion: completion)
+                shouldComplete = true
             case .sessionID:
                 break
+            }
+            lock.unlock()
+
+            if shouldComplete {
+                Self.completeOnMain(result, completion: completion)
             }
         }
     }

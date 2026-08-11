@@ -30,6 +30,32 @@ final class AutomationProviderTests: XCTestCase {
         XCTAssertEqual(result?.first?.title, "Ship")
     }
 
+    func testTaskAISerializesConcurrentTextAndIgnoresLateTerminalEvents() {
+        let provider = ConcurrentTaskAIProviderSpy(textEventCount: 128)
+        let ai = TaskAI(provider: provider)
+        let completionDelivered = expectation(description: "TaskAI completes exactly once")
+        completionDelivered.assertForOverFulfill = true
+        let providerFinished = expectation(description: "provider finishes concurrent delivery")
+        provider.onFinished = { providerFinished.fulfill() }
+        var completionCount = 0
+        var completedOnMain = false
+        var result: String?
+
+        ai.morningBriefing(context: "Concurrent callbacks") { text in
+            completionCount += 1
+            completedOnMain = Thread.isMainThread
+            result = text
+            completionDelivered.fulfill()
+        }
+
+        wait(for: [providerFinished, completionDelivered], timeout: 5)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(completionCount, 1)
+        XCTAssertTrue(completedOnMain)
+        XCTAssertEqual(result?.count, 128)
+        XCTAssertEqual(result, String(repeating: "x", count: 128))
+    }
+
     func testSuggestionServiceUsesCodexDefaultAndParsesOnlyValidTerminalOutput() {
         let provider = ManualAutomationProviderSpy(kind: .codex)
         let service = SuggestionService(provider: provider)
@@ -536,5 +562,76 @@ final class ManualAutomationProviderSpy: AutomationProvider {
 
     func emit(_ event: AutomationEvent, forRequestAt index: Int) {
         handlers[index](event)
+    }
+}
+
+final class ConcurrentTaskAIProviderSpy: AutomationProvider {
+    let descriptor = AutomationProviderDescriptor(kind: .codex, version: "test")
+    var onFinished: (() -> Void)?
+
+    private let textEventCount: Int
+    private let queue = DispatchQueue(label: "task-ai-concurrent-provider",
+                                      attributes: .concurrent)
+
+    init(textEventCount: Int) {
+        self.textEventCount = textEventCount
+    }
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        let eventSink = ConcurrentEventSink(onEvent)
+        let textEvents = DispatchGroup()
+        let textStart = DispatchSemaphore(value: 0)
+        for _ in 0..<textEventCount {
+            textEvents.enter()
+            queue.async {
+                textStart.wait()
+                eventSink.send(.text("x"))
+                textEvents.leave()
+            }
+        }
+        for _ in 0..<textEventCount { textStart.signal() }
+
+        textEvents.notify(queue: queue) { [weak self] in
+            guard let self else { return }
+            // Complete only after every concurrent text callback returns, so the
+            // expected aggregate is deterministic. The late terminal events
+            // still race each other after completion and must be ignored.
+            eventSink.send(.completed)
+            let lateTerminals = DispatchGroup()
+            for event in [AutomationEvent.failed("late failure"), .completed] {
+                lateTerminals.enter()
+                self.queue.async {
+                    eventSink.send(event)
+                    lateTerminals.leave()
+                }
+            }
+            lateTerminals.notify(queue: self.queue) { [weak self] in self?.onFinished?() }
+        }
+        return AutomationCancellation()
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        runText(AutomationRequest(prompt: request.prompt, model: request.model), onEvent: onEvent)
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
+    }
+
+    func cancelAll() {}
+}
+
+private final class ConcurrentEventSink: @unchecked Sendable {
+    private let onEvent: (AutomationEvent) -> Void
+
+    init(_ onEvent: @escaping (AutomationEvent) -> Void) {
+        self.onEvent = onEvent
+    }
+
+    func send(_ event: AutomationEvent) {
+        onEvent(event)
     }
 }
