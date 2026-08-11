@@ -16,7 +16,7 @@ final class CodexAutomationProvider: AutomationProvider {
     func runText(_ request: AutomationRequest,
                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
         var arguments = ["exec", "--json", "--skip-git-repo-check"]
-        if let model = request.model {
+        if let model = Self.codexModel(request.model) {
             arguments += ["--model", model]
         }
         arguments.append("-")
@@ -48,6 +48,13 @@ final class CodexAutomationProvider: AutomationProvider {
 
     func cancelAll() {
         runner.cancelAll()
+    }
+
+    private static func codexModel(_ model: String?) -> String? {
+        guard let model else { return nil }
+        let claudeAliases: Set<String> = ["haiku", "sonnet", "opus"]
+        let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return claudeAliases.contains(normalized) ? nil : model
     }
 
     private static func decode(_ output: Data, _ errors: Data, _ status: Int32) -> [AutomationEvent] {

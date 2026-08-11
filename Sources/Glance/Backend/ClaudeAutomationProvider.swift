@@ -102,7 +102,10 @@ final class AutomationOneShotRunner {
         var errors: Data?
         var terminationStatus: Int32?
         var timeoutWork: DispatchWorkItem?
-        var finished = false
+        var forceKillWork: DispatchWorkItem?
+        var terminalSettled = false
+        var callbackDeliveryQueued = false
+        var stopRequested = false
 
         init(id: UUID, gate: CallbackGate, decode: @escaping Decoder,
              onEvent: @escaping (AutomationEvent) -> Void) {
@@ -240,22 +243,29 @@ final class AutomationOneShotRunner {
 
     private func recordTermination(of id: UUID, status: Int32) {
         guard let state = runs[id] else { return }
+        state.forceKillWork?.cancel()
+        state.forceKillWork = nil
         state.terminationStatus = status
         finishIfReady(state)
     }
 
     private func finishIfReady(_ state: RunState) {
-        guard !state.finished, let output = state.output, let errors = state.errors,
+        guard let output = state.output, let errors = state.errors,
               let status = state.terminationStatus else { return }
-        finish(state, events: state.decode(output, errors, status))
+        if state.terminalSettled {
+            cleanup(state)
+        } else {
+            finish(state, events: state.decode(output, errors, status))
+        }
     }
 
     private func timeout(id: UUID, after timeout: TimeInterval) {
-        guard let state = runs[id], !state.finished else { return }
-        finish(state, events: [.failed("AI provider didn't respond within \(Int(timeout))s.")])
-        if let process = state.process, process.isRunning {
-            process.terminate()
-        }
+        guard let state = runs[id], !state.terminalSettled else { return }
+        state.terminalSettled = true
+        state.timeoutWork?.cancel()
+        state.timeoutWork = nil
+        deliver([.failed("AI provider didn't respond within \(Int(timeout))s.")], for: state)
+        requestStop(state)
     }
 
     private func cancel(id: UUID) {
@@ -263,27 +273,54 @@ final class AutomationOneShotRunner {
             removeGate(id)
             return
         }
-        state.finished = true
+        state.terminalSettled = true
         state.timeoutWork?.cancel()
         state.timeoutWork = nil
-        if let process = state.process, process.isRunning {
-            process.terminate()
-        }
-        runs[id] = nil
-        removeGate(id)
+        requestStop(state)
+        finishIfReady(state)
     }
 
     private func finish(_ state: RunState, events: [AutomationEvent]) {
-        guard !state.finished else { return }
-        state.finished = true
+        guard !state.terminalSettled else { return }
+        state.terminalSettled = true
         state.timeoutWork?.cancel()
         state.timeoutWork = nil
-        runs[state.id] = nil
+        deliver(events, for: state)
+        cleanup(state)
+    }
 
+    private func requestStop(_ state: RunState) {
+        guard !state.stopRequested else { return }
+        state.stopRequested = true
+        guard let process = state.process, process.isRunning else { return }
+
+        process.terminate()
+        let work = DispatchWorkItem { [weak self, weak state, weak process] in
+            guard let self, let state, let process,
+                  self.runs[state.id] === state, process.isRunning else { return }
+            Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        state.forceKillWork = work
+        queue.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func cleanup(_ state: RunState) {
+        guard runs[state.id] === state else { return }
+        state.forceKillWork?.cancel()
+        state.forceKillWork = nil
+        runs[state.id] = nil
+        if !state.callbackDeliveryQueued {
+            removeGate(state.id)
+        }
+    }
+
+    private func deliver(_ events: [AutomationEvent], for state: RunState) {
+        state.callbackDeliveryQueued = true
         let gate = state.gate
         let onEvent = state.onEvent
+        let id = state.id
         DispatchQueue.main.async { [weak self] in
-            defer { self?.removeGate(state.id) }
+            defer { self?.removeGate(id) }
             for event in events {
                 guard gate.isValid else { return }
                 onEvent(event)

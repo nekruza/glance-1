@@ -25,6 +25,16 @@ final class AutomationProviderTests: XCTestCase {
                        ["exec", "--json", "--skip-git-repo-check", "--model", "gpt-test", "-"])
     }
 
+    func testCodexOneShotOmitsClaudeAliasesPassedDirectly() throws {
+        for alias in ["haiku", "sonnet", "opus"] {
+            let result = try runFakeProvider(kind: .codex, prompt: "Return JSON", model: alias)
+
+            XCTAssertEqual(result.arguments,
+                           ["exec", "--json", "--skip-git-repo-check", "-"],
+                           "Codex must not receive the Claude alias \(alias)")
+        }
+    }
+
     func testClaudeOneShotPlacesModelFlagBeforePrompt() throws {
         let result = try runFakeProvider(kind: .claude, prompt: "Return JSON", model: "sonnet")
 
@@ -49,6 +59,55 @@ final class AutomationProviderTests: XCTestCase {
         cancellation.cancel()
 
         wait(for: [staleEvent], timeout: 0.3)
+        provider.cancelAll()
+    }
+
+    func testCancellationForceKillsChildThatIgnoresSIGTERMWithoutCallbacks() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeIgnoringTermExecutable(in: fixtureDirectory)
+        let pidURL = fixtureDirectory.appendingPathComponent("pid")
+        let staleEvent = expectation(description: "cancelled child emits no event")
+        staleEvent.isInverted = true
+        let provider = ClaudeAutomationProvider(binaryPath: executable.path, version: "test")
+        let cancellation = provider.runText(AutomationRequest(prompt: "Wait", timeout: 5)) { _ in
+            staleEvent.fulfill()
+        }
+        waitForFile(pidURL)
+        let processID = try processID(from: pidURL)
+        defer { Darwin.kill(processID, SIGKILL) }
+
+        cancellation.cancel()
+
+        waitForProcessExit(processID, timeout: 1.5)
+        wait(for: [staleEvent], timeout: 0.2)
+        provider.cancelAll()
+    }
+
+    func testTimeoutForceKillsChildThatIgnoresSIGTERMAndFailsOnce() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeIgnoringTermExecutable(in: fixtureDirectory)
+        let pidURL = fixtureDirectory.appendingPathComponent("pid")
+        let failureDelivered = expectation(description: "timeout failure is delivered")
+        let provider = ClaudeAutomationProvider(binaryPath: executable.path, version: "test")
+        var events: [AutomationEvent] = []
+        provider.runText(AutomationRequest(prompt: "Wait", timeout: 0.5)) { event in
+            events.append(event)
+            if case .failed = event { failureDelivered.fulfill() }
+        }
+        waitForFile(pidURL)
+        let processID = try processID(from: pidURL)
+        defer { Darwin.kill(processID, SIGKILL) }
+
+        wait(for: [failureDelivered], timeout: 1)
+        waitForProcessExit(processID, timeout: 1.5)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertEqual(events.count, 1)
+        guard case .failed = events.first else {
+            return XCTFail("Expected exactly one timeout failure")
+        }
         provider.cancelAll()
     }
 
@@ -269,6 +328,51 @@ final class AutomationProviderTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o700],
                                               ofItemAtPath: executable.path)
         return executable
+    }
+
+    private func makeIgnoringTermExecutable(in directory: URL) throws -> URL {
+        try makeExecutable(in: directory, script: #"""
+        #!/bin/sh
+        fixture_dir="$(dirname "$0")"
+        trap '' TERM
+        printf '%s' "$$" > "$fixture_dir/pid"
+        exec /bin/sleep 60
+        """#)
+    }
+
+    private func waitForFile(_ url: URL, timeout: TimeInterval = 2) {
+        let appeared = expectation(description: "\(url.lastPathComponent) appears")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    appeared.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [appeared], timeout: timeout + 0.5)
+    }
+
+    private func processID(from url: URL) throws -> pid_t {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        return try XCTUnwrap(pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)))
+    }
+
+    private func waitForProcessExit(_ processID: pid_t, timeout: TimeInterval) {
+        let exited = expectation(description: "process \(processID) exits")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if Darwin.kill(processID, 0) == -1, errno == ESRCH {
+                    exited.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [exited], timeout: timeout + 0.5)
     }
 }
 
