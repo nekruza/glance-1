@@ -58,11 +58,7 @@ final class AppCoordinator {
             .sink { [weak self] kind in
                 guard let self else { return }
                 self.teardownBackend()
-                self.overlay.session.clearTranscript()
-                self.overlay.session.showsHistory = kind == .claude
-                self.overlay.session.historySessions = []
-                self.overlay.session.backendConnected = false
-                self.overlay.session.backendLabel = "Checking \(kind.displayName)…"
+                self.overlay.session.resetForBackendChange(to: kind)
             }
             .store(in: &cancellables)
 
@@ -540,11 +536,13 @@ final class AppCoordinator {
         self.backend = backend
 
         let url = summary.fileURL
+        let generation = overlay.session.transcriptGeneration
         Task { [weak self] in
             let turns = await Task.detached(priority: .userInitiated) {
                 SessionHistoryStore.loadTurns(from: url)
             }.value
-            self?.overlay.session.loadTranscript(turns)
+            guard let self, self.prefs.askBackend == .claude else { return }
+            self.overlay.session.loadTranscript(turns, ifGeneration: generation)
         }
     }
 
