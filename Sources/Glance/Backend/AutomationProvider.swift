@@ -99,8 +99,9 @@ final class AutomationCancellation {
     }
 
     func cancel() {
-        onCancel?()
+        let action = onCancel
         onCancel = nil
+        action?()
     }
 }
 

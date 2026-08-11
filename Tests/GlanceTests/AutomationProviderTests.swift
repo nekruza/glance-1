@@ -32,6 +32,23 @@ final class AutomationProviderTests: XCTestCase {
         XCTAssertEqual(cancelCount, 1)
     }
 
+    func testCancellationDoesNotReenterItsAction() {
+        var cancelCount = 0
+        var shouldReenter = true
+        var cancellation: AutomationCancellation?
+        cancellation = AutomationCancellation {
+            cancelCount += 1
+            if shouldReenter {
+                shouldReenter = false
+                cancellation?.cancel()
+            }
+        }
+
+        cancellation?.cancel()
+
+        XCTAssertEqual(cancelCount, 1)
+    }
+
     func testFactoryBuildsOnlyTheSelectedProvider() {
         var claudeBuildCount = 0
         var codexBuildCount = 0
@@ -44,7 +61,10 @@ final class AutomationProviderTests: XCTestCase {
                 codexBuildCount += 1
                 return AutomationProviderSpy(kind: .codex)
             },
-            claudeStatus: { .ok(path: "/fake/claude", version: "2.0") },
+            claudeStatus: {
+                XCTFail("Claude locator must not run while Codex is selected")
+                return .notFound
+            },
             codexStatus: { .ok(path: "/fake/codex", version: "0.147.0") }
         )
 
