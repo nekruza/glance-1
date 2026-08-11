@@ -2,9 +2,10 @@
 
 A macOS menu-bar assistant that answers questions about whatever is on your
 screen — without breaking flow. Press a global hotkey, a translucent overlay
-appears, type a question, and the answer streams back inline. The LLM backend
-is your **locally installed Claude Code CLI**, reusing its existing sign-in — no
-API keys, no accounts, no subscription backend.
+appears, type a question, and the answer streams back inline. Choose your
+**locally installed and signed-in Claude Code CLI or Codex CLI** in Settings;
+Glance reuses that CLI's existing sign-in — no API keys, no Glance account, or
+subscription backend.
 
 Implements `prd.md` (Screen-Aware Desktop Assistant). Personal tool.
 
@@ -12,28 +13,31 @@ Implements `prd.md` (Screen-Aware Desktop Assistant). Personal tool.
 
 1. Hotkey (default **⌥Space**) → the active display is captured and a
    non-activating overlay appears, input focused.
-2. Type a question, press ↩. The screenshot + question go to `claude` and the
-   answer streams into the overlay as Markdown.
+2. Type a question, press ↩. The screenshot + question go to the Ask backend
+   selected in Settings (Claude Code or Codex), and the answer streams into the
+   overlay as Markdown.
 3. Ask follow-ups in the same overlay (context is kept). Press **Esc**, the
    hotkey again, or click away to dismiss — the session ends and the next
    invocation starts fresh.
 
-Under the hood it runs one persistent
+Claude Code runs one persistent
 
 ```
 claude -p --input-format stream-json --output-format stream-json \
        --include-partial-messages --verbose
 ```
 
-process per overlay session. The first question ships the screenshot inline as
-a base64 image block, so Claude answers in a single turn with no permission
-prompt. The process is spawned on invocation (not kept warm all day) to keep
-the idle footprint negligible.
+process per overlay session. Codex runs a local `codex exec` process per turn
+and resumes the CLI session for follow-ups. The first question includes the
+screenshot, so either provider can answer in a single turn with no permission
+prompt. Processes are started only when an overlay is invoked to keep the idle
+footprint negligible.
 
 ## Requirements
 
 - macOS 14 (Sonoma) or later.
-- Claude Code CLI installed and signed in (`claude` working in your terminal).
+- Claude Code CLI or Codex CLI installed and signed in (`claude` or `codex`
+  working in your terminal). Select the installed provider in Settings.
 - **Screen Recording** permission (System Settings → Privacy & Security →
   Screen Recording). Glance guides you there on first use.
 
@@ -52,6 +56,8 @@ bar (Settings, Quit). During development you can also `swift run`, but the
 
 - Rebind the global hotkey.
 - Launch at login.
+- Choose the **Ask backend**: Claude Code or Codex. The status row, Rescan, and
+  Test actions apply to the selected local CLI.
 
 That's the whole surface (v1, by design).
 
@@ -59,15 +65,15 @@ That's the whole surface (v1, by design).
 
 This is a personal tool with deliberate, documented trade-offs (PRD NFR6):
 
-- **Screenshots may contain sensitive content**, and because the backend is
-  Claude Code, each query is a real Claude Code session. Claude Code persists
-  its own transcript — **including the screenshot** — under
-  `~/.claude/projects/…` on your own disk. Glance itself keeps the screenshot
-  in memory only and drops it when the session ends, but it cannot control
-  Claude Code's transcript. If that matters, prune those transcripts yourself.
-- **Queries draw from your Claude Pro/Max usage quota.**
-- Glance makes **no network calls of its own** — all traffic goes through the
-  Claude CLI's own connection (NFR5).
+- **Screenshots may contain sensitive content.** Each query is a real local
+  Claude Code or Codex session, and either provider may retain its own local
+  transcript or session data, including screenshots. Glance keeps screenshots
+  in memory only and drops them when the overlay session ends; it cannot
+  control provider-owned local storage. Review and prune that CLI's local data
+  if needed.
+- **Queries draw from the selected provider account's usage quota.**
+- Glance makes **no network calls of its own** — traffic, if any, goes through
+  the selected CLI's own connection (NFR5).
 
 ## Not included (v1)
 

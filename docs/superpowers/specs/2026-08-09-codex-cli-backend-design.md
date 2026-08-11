@@ -67,7 +67,8 @@ bypass flags.
 Settings presents an **Ask backend** picker with Claude Code and Codex. The
 status row labels the selected CLI and its detected version; Test and Rescan
 operate on that selection. The privacy note names the selected local CLI and
-states that its own transcript/session storage may retain screenshots.
+states that Claude Code or Codex may retain provider-owned local
+transcript/session data, including screenshots.
 
 If Codex is absent, Glance directs the user to install and sign in through the
 local `codex` command. Authentication, quota, and timeout failures name Codex
@@ -82,6 +83,9 @@ explicitly. Claude's wording and behavior remain as-is.
 - Manually test both selected backends: first screenshot question, streamed
   response, follow-up, dismissal during generation, missing-binary status,
   and Settings Test.
+- Confirm the documentation tells users to select a locally signed-in Claude
+  Code or Codex CLI in Settings and explains that either CLI may keep its own
+  local session data.
 
 ## Decision
 
