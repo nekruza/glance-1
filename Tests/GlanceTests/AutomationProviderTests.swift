@@ -2,6 +2,88 @@ import XCTest
 @testable import Glance
 
 final class AutomationProviderTests: XCTestCase {
+    func testTaskAIUsesTheInjectedCodexProviderForJSON() {
+        let provider = AutomationProviderSpy(kind: .codex,
+                                             finalText: "[{\"title\":\"Ship\"}]")
+        let ai = TaskAI(provider: provider)
+        var result: [TaskAI.DecomposedTask]?
+
+        ai.decompose(prompt: "Ship it") { result = $0 }
+
+        XCTAssertEqual(provider.requests.count, 1)
+        XCTAssertEqual(provider.requests.first?.prompt.contains("Decompose"), true)
+        XCTAssertNil(provider.requests.first?.model)
+        XCTAssertEqual(result?.first?.title, "Ship")
+    }
+
+    func testTaskAIKeepsClaudeAliasAndLenientJSONDecoding() {
+        let provider = AutomationProviderSpy(
+            kind: .claude,
+            finalText: "Here you go:\n```json\n[{\"title\":\"Ship\"}]\n```"
+        )
+        let ai = TaskAI(provider: provider)
+        var result: [TaskAI.DecomposedTask]?
+
+        ai.decompose(prompt: "Ship it") { result = $0 }
+
+        XCTAssertEqual(provider.requests.first?.model, "sonnet")
+        XCTAssertEqual(result?.first?.title, "Ship")
+    }
+
+    func testSuggestionServiceUsesCodexDefaultAndParsesOnlyValidTerminalOutput() {
+        let provider = ManualAutomationProviderSpy(kind: .codex)
+        let service = SuggestionService(provider: provider)
+        var results: [[String]] = []
+
+        service.suggest(question: "What next?", answer: "A") { results.append($0) }
+        provider.emit(.text("First\n\nSecond\nThird\nFourth"), forRequestAt: 0)
+        provider.emit(.completed, forRequestAt: 0)
+
+        XCTAssertEqual(provider.requests.first?.prompt.contains("Based on this Q&A"), true)
+        XCTAssertNil(provider.requests.first?.model)
+        XCTAssertEqual(results, [["First", "Second", "Third"]])
+    }
+
+    func testSuggestionServiceCancelsSupersededRequestAndIgnoresItsTerminalEvent() {
+        let provider = ManualAutomationProviderSpy(kind: .claude)
+        let service = SuggestionService(provider: provider)
+        var firstResults: [[String]] = []
+        var secondResults: [[String]] = []
+
+        service.suggest(question: "First?", answer: "A") { firstResults.append($0) }
+        service.suggest(question: "Second?", answer: "B") { secondResults.append($0) }
+        provider.emit(.text("Stale"), forRequestAt: 0)
+        provider.emit(.completed, forRequestAt: 0)
+        provider.emit(.text("Current"), forRequestAt: 1)
+        provider.emit(.completed, forRequestAt: 1)
+
+        XCTAssertEqual(provider.cancellationCounts, [1, 0])
+        XCTAssertEqual(provider.requests.map(\.model), ["haiku", "haiku"])
+        XCTAssertTrue(firstResults.isEmpty)
+        XCTAssertEqual(secondResults, [["Current"]])
+    }
+
+    func testSuggestionServiceFailureSettlesOnce() {
+        let provider = ManualAutomationProviderSpy(kind: .claude)
+        let service = SuggestionService(provider: provider)
+        var results: [[String]] = []
+
+        service.suggest(question: "What next?", answer: "A") { results.append($0) }
+        provider.emit(.failed("offline"), forRequestAt: 0)
+        provider.emit(.completed, forRequestAt: 0)
+
+        XCTAssertEqual(results, [[]])
+    }
+
+    @MainActor
+    func testModelCatalogUsesProviderSpecificChoicesAndLabels() {
+        XCTAssertEqual(ModelCatalog.choices(for: .claude),
+                       [.automatic, .haiku, .sonnet, .opus])
+        XCTAssertEqual(ModelCatalog.choices(for: .codex), [.automatic])
+        XCTAssertEqual(ModelCatalog.label(for: .automatic, provider: .codex),
+                       "Auto — Codex CLI default")
+    }
+
     func testCodexOneShotWritesPromptToStdinAndParsesAgentMessage() throws {
         let result = try runFakeProvider(kind: .codex, prompt: "Return JSON")
 
@@ -417,4 +499,42 @@ final class AutomationProviderSpy: AutomationProvider {
     }
 
     func cancelAll() { cancelAllCount += 1 }
+}
+
+final class ManualAutomationProviderSpy: AutomationProvider {
+    let descriptor: AutomationProviderDescriptor
+    private(set) var requests: [AutomationRequest] = []
+    private(set) var cancellationCounts: [Int] = []
+    private var handlers: [(AutomationEvent) -> Void] = []
+
+    init(kind: AskBackendKind) {
+        descriptor = AutomationProviderDescriptor(kind: kind, version: "test")
+    }
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        let index = requests.count
+        requests.append(request)
+        cancellationCounts.append(0)
+        handlers.append(onEvent)
+        return AutomationCancellation { [weak self] in
+            self?.cancellationCounts[index] += 1
+        }
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        runText(AutomationRequest(prompt: request.prompt, model: request.model), onEvent: onEvent)
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
+    }
+
+    func cancelAll() {}
+
+    func emit(_ event: AutomationEvent, forRequestAt index: Int) {
+        handlers[index](event)
+    }
 }

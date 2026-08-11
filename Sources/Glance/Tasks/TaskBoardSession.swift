@@ -127,6 +127,8 @@ final class TaskBoardSession: ObservableObject {
     /// FR42: at most one automatic reflow per 10 minutes.
     private let reflowInterval: TimeInterval = 10 * 60
 
+    var providerKind: AskBackendKind { ai.providerKind }
+
     init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest) {
         self.store = store
         self.runner = runner

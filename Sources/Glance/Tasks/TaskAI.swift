@@ -2,19 +2,27 @@ import Foundation
 
 /// AI services for the task board: enrichment (FR36–38), prioritization
 /// (FR39–42), prompt→tasks decomposition (FR27). Each is a one-shot
-/// `claude -p` call requesting strict JSON, parsed defensively — a malformed
+/// provider request asking for strict JSON, parsed defensively — a malformed
 /// response degrades to "no change", never corrupts the board.
 ///
-/// Model policy (F5): mechanical JSON work pins Haiku, drafts/notes/briefing/
-/// extraction pin Sonnet, agent-profile design pins Opus. Nothing here runs
-/// on the CLI default — that silently means "the biggest model you have".
+/// Model policy (F5): mechanical JSON work requests Haiku, drafts/notes/
+/// briefing/extraction request Sonnet, and agent-profile design requests Opus.
+/// Providers without those aliases (currently Codex) use their CLI default.
 final class TaskAI {
 
-    private let binaryPath: String
-    private let queue = DispatchQueue(label: "com.h57q3wq0c.glance.taskai", attributes: .concurrent)
+    private let provider: AutomationProvider
 
-    init(binaryPath: String) {
-        self.binaryPath = binaryPath
+    var providerKind: AskBackendKind { provider.descriptor.kind }
+
+    init(provider: AutomationProvider) {
+        self.provider = provider
+    }
+
+    /// Compatibility bridge until AppCoordinator owns the selected provider
+    /// as part of the Task 6 service-bundle migration.
+    convenience init(binaryPath: String) {
+        self.init(provider: ClaudeAutomationProvider(binaryPath: binaryPath,
+                                                     version: "compatibility"))
     }
 
     // MARK: - Enrichment (FR36)
@@ -399,7 +407,7 @@ final class TaskAI {
 
     // MARK: - Plumbing
 
-    /// Run one `claude -p` call and decode its stdout as T. Completion on main.
+    /// Run one provider request and decode its text as T. Completion on main.
     private func runJSON<T: Decodable>(prompt: String, model: String?,
                                        completion: @escaping (T?) -> Void) {
         runRaw(prompt: prompt, model: model) { text in
@@ -407,7 +415,7 @@ final class TaskAI {
         }
     }
 
-    /// Run one `claude -p` call and return trimmed stdout as-is (markdown/prose).
+    /// Run one provider request and return trimmed text as-is (markdown/prose).
     private func runText(prompt: String, model: String?,
                          completion: @escaping (String?) -> Void) {
         runRaw(prompt: prompt, model: model) { text in
@@ -418,39 +426,32 @@ final class TaskAI {
 
     private func runRaw(prompt: String, model: String?,
                         completion: @escaping (String?) -> Void) {
-        queue.async { [binaryPath] in
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: binaryPath)
-            var args = ["-p"]
-            if let model { args += ["--model", model] }
-            args.append(prompt)
-            proc.arguments = args
-            proc.currentDirectoryURL = FileManager.default.temporaryDirectory
-
-            let out = Pipe()
-            proc.standardOutput = out
-            proc.standardError = Pipe()
-
-            // A hung `claude` must not strand spinners forever — kill after a
-            // generous cap (same pattern as ComposioIngest); nil result flows
-            // through the normal "no change" failure path.
-            let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: killer)
-
-            var result: String?
-            do {
-                try proc.run()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                proc.waitUntilExit()
-                killer.cancel()
-                if proc.terminationStatus == 0 {
-                    result = String(data: data, encoding: .utf8)
-                }
-            } catch {
-                killer.cancel()
-                // fall through with nil
+        var output = ""
+        var settled = false
+        let choice = model.flatMap(AutomationModelChoice.init(rawValue:))
+        provider.runText(AutomationRequest(prompt: prompt,
+                                           model: provider.descriptor.model(for: choice))) { event in
+            guard !settled else { return }
+            switch event {
+            case .text(let text):
+                output += text
+            case .completed:
+                settled = true
+                Self.completeOnMain(output.isEmpty ? nil : output, completion: completion)
+            case .failed:
+                settled = true
+                Self.completeOnMain(nil, completion: completion)
+            case .sessionID:
+                break
             }
-            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    private static func completeOnMain<T>(_ value: T, completion: @escaping (T) -> Void) {
+        if Thread.isMainThread {
+            completion(value)
+        } else {
+            DispatchQueue.main.async { completion(value) }
         }
     }
 

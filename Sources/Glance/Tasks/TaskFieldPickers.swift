@@ -47,19 +47,25 @@ struct AgentPickerChip: View {
     }
 }
 
-/// Model override — "auto" plus haiku/sonnet/opus.
+/// Model override — provider default plus any named choices it supports.
 struct ModelPickerChip: View {
     @Binding var runModel: String?
+    @ObservedObject private var prefs = Preferences.shared
 
     var body: some View {
+        let provider = prefs.askBackend
+        let current = ModelCatalog.presentedChoice(for: runModel, provider: provider)
         Menu {
-            Button("auto — agent's choice, else opus") { runModel = nil }
-            ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in
-                Button(label(m)) { runModel = m }
+            ForEach(ModelCatalog.choices(for: provider), id: \.rawValue) { choice in
+                Button(label(choice, provider: provider)) {
+                    runModel = ModelCatalog.storedModel(afterSelecting: choice,
+                                                        current: runModel,
+                                                        provider: provider)
+                }
             }
         } label: {
-            TaskFieldPicker.chip(isSet: runModel != nil) {
-                Label(runModel ?? "auto", systemImage: "cpu")
+            TaskFieldPicker.chip(isSet: current != .automatic) {
+                Label(label(current, provider: provider), systemImage: "cpu")
             }
         }
         .menuStyle(.borderlessButton)
@@ -67,11 +73,12 @@ struct ModelPickerChip: View {
         .help("Model for AI runs on this task")
     }
 
-    private func label(_ alias: String) -> String {
-        if let resolved = ModelCatalog.shared.displayName(for: alias) {
-            return "\(alias) — \(resolved)"
+    private func label(_ choice: AutomationModelChoice, provider: AskBackendKind) -> String {
+        guard choice != .automatic else { return ModelCatalog.label(for: choice, provider: provider) }
+        if let resolved = ModelCatalog.shared.displayName(for: choice.rawValue) {
+            return "\(choice.rawValue) — \(resolved)"
         }
-        return alias
+        return choice.rawValue
     }
 }
 

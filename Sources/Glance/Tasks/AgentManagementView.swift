@@ -134,7 +134,7 @@ struct AgentManagementView: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    Text(agent.preferredModel ?? "auto")
+                    Text(rosterModelLabel(agent.preferredModel))
                         .font(DS.Typo.overline).foregroundStyle(DS.textTertiary)
                 }
                 .padding(.horizontal, DS.Space.xs + 2).padding(.vertical, DS.Space.xs)
@@ -147,6 +147,12 @@ struct AgentManagementView: View {
             .buttonStyle(.plain)
             .pointerCursor()
         }
+    }
+
+    private func rosterModelLabel(_ storedModel: String?) -> String {
+        let choice = ModelCatalog.presentedChoice(for: storedModel,
+                                                  provider: session.providerKind)
+        return choice == .automatic ? "auto" : choice.rawValue
     }
 
     // MARK: Detail (editor)
@@ -271,8 +277,12 @@ private struct AgentEditorPane: View {
     }
 
     private var modelLabel: String {
-        guard let m = agent.preferredModel else { return "auto model" }
-        return catalog.displayName(for: m) ?? m
+        let choice = ModelCatalog.presentedChoice(for: agent.preferredModel,
+                                                  provider: session.providerKind)
+        guard choice != .automatic else {
+            return ModelCatalog.label(for: choice, provider: session.providerKind)
+        }
+        return catalog.displayName(for: choice.rawValue) ?? choice.rawValue
     }
 
     // MARK: Fields
@@ -302,15 +312,38 @@ private struct AgentEditorPane: View {
                 }
             }
             labeledField("Preferred model", hint: "the model its runs use", width: 220) {
-                Picker("", selection: bind(\.preferredModel)) {
-                    Text("Auto (task default)").tag(String?.none)
-                    ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in
-                        Text(catalog.displayName(for: m) ?? m).tag(String?.some(m))
+                Picker("", selection: preferredModelChoice) {
+                    ForEach(ModelCatalog.choices(for: session.providerKind), id: \.rawValue) { choice in
+                        Text(modelChoiceLabel(choice)).tag(choice)
                     }
                 }
                 .labelsHidden().pickerStyle(.menu)
             }
         }
+    }
+
+    private var preferredModelChoice: Binding<AutomationModelChoice> {
+        Binding(
+            get: {
+                ModelCatalog.presentedChoice(for: agent.preferredModel,
+                                             provider: session.providerKind)
+            },
+            set: { choice in
+                guard let i = idx else { return }
+                prefs.agents[i].preferredModel = ModelCatalog.storedModel(
+                    afterSelecting: choice,
+                    current: prefs.agents[i].preferredModel,
+                    provider: session.providerKind
+                )
+            }
+        )
+    }
+
+    private func modelChoiceLabel(_ choice: AutomationModelChoice) -> String {
+        guard choice != .automatic else {
+            return ModelCatalog.label(for: choice, provider: session.providerKind)
+        }
+        return catalog.displayName(for: choice.rawValue) ?? choice.rawValue
     }
 
     private var skillsField: some View {

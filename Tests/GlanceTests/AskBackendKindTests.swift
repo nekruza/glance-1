@@ -15,4 +15,17 @@ final class AskBackendKindTests: XCTestCase {
     func testTaskSettingsExposeAskBackendControl() {
         XCTAssertEqual(TaskSettingsView.askBackendRowTitle, "Ask backend")
     }
+
+    @MainActor
+    func testCodexModelPresentationKeepsStoredClaudeAliasOutOfTheMenu() {
+        let storedModel = "sonnet"
+
+        XCTAssertEqual(ModelCatalog.choices(for: .codex), [.automatic])
+        XCTAssertEqual(ModelCatalog.presentedChoice(for: storedModel, provider: .codex),
+                       .automatic)
+        XCTAssertEqual(ModelCatalog.storedModel(afterSelecting: .automatic,
+                                                current: storedModel,
+                                                provider: .codex),
+                       "sonnet")
+    }
 }

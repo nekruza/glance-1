@@ -20,7 +20,45 @@ final class ModelCatalog: ObservableObject {
         names[alias ?? "default"]
     }
 
-    /// Load cache; kick a background probe when the CLI version changed.
+    static func choices(for provider: AskBackendKind) -> [AutomationModelChoice] {
+        AutomationProviderDescriptor(kind: provider, version: "").modelChoices
+    }
+
+    static func label(for choice: AutomationModelChoice, provider: AskBackendKind) -> String {
+        switch choice {
+        case .automatic:
+            return "Auto — \(provider.displayName) default"
+        case .haiku, .sonnet, .opus:
+            return choice.rawValue
+        }
+    }
+
+    /// UI selection for a persisted model. Unsupported aliases are presented
+    /// as automatic without mutating the persisted value.
+    static func presentedChoice(for storedModel: String?, provider: AskBackendKind)
+        -> AutomationModelChoice {
+        guard let storedModel,
+              let choice = AutomationModelChoice(rawValue: storedModel),
+              choices(for: provider).contains(choice)
+        else { return .automatic }
+        return choice
+    }
+
+    /// Codex currently has no named model menu, so selecting its only visible
+    /// choice must retain a Claude alias for a later provider switch.
+    static func storedModel(afterSelecting choice: AutomationModelChoice,
+                            current: String?, provider: AskBackendKind) -> String? {
+        guard provider == .claude else { return current }
+        return choice == .automatic ? nil : choice.rawValue
+    }
+
+    /// Provider-aware entry point used once AppCoordinator migrates in Task 6.
+    func refresh(for provider: AskBackendKind, binaryPath: String, cliVersion: String) {
+        guard provider == .claude else { return }
+        refresh(binaryPath: binaryPath, cliVersion: cliVersion)
+    }
+
+    /// Claude compatibility entry point until AppCoordinator migrates in Task 6.
     func refresh(binaryPath: String, cliVersion: String) {
         let defaults = UserDefaults.standard
         if defaults.string(forKey: Self.versionKey) == cliVersion,
