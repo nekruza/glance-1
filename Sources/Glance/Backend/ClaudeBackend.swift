@@ -10,13 +10,7 @@ import Foundation
 ///
 /// Warm path (FR15): `startWarm()` pre-spawns on hotkey-down so process start
 /// and auth overlap with the user typing the question.
-final class ClaudeBackend {
-
-    enum Event {
-        case token(String)          // FR11 incremental text
-        case completed              // turn finished
-        case failed(String)         // FR13/FR16 user-facing message
-    }
+final class ClaudeBackend: AskBackend {
 
     /// FR13 backend timeout ([ASSUMPTION] 30 s to first token).
     var firstTokenTimeout: TimeInterval = 30
@@ -40,7 +34,7 @@ final class ClaudeBackend {
     private var stdoutBuffer = Data()
     private var didSendFirstMessage = false
 
-    private var currentHandler: ((Event) -> Void)?
+    private var currentHandler: ((AskBackendEvent) -> Void)?
     private var sawTokenThisTurn = false
     private var timeoutWork: DispatchWorkItem?
 
@@ -131,7 +125,7 @@ final class ClaudeBackend {
 
     /// Ask a question. First call includes the screenshot; later calls are
     /// follow-ups on the same session (FR10, FR12).
-    func ask(question: String, imagePNG: Data?, onEvent: @escaping (Event) -> Void) {
+    func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void) {
         ioQueue.async { [weak self] in
             guard let self else { return }
             self.spawnIfNeeded()
@@ -195,21 +189,22 @@ final class ClaudeBackend {
 
         if let sid = line.sessionId { resumeSessionId = sid }
 
-        if let text = line.streamedText, !text.isEmpty {
-            if !sawTokenThisTurn {
-                sawTokenThisTurn = true
-                timeoutWork?.cancel() // first token arrived (FR13)
+        if let event = line.askBackendEvent {
+            switch event {
+            case .token:
+                if !sawTokenThisTurn {
+                    sawTokenThisTurn = true
+                    timeoutWork?.cancel() // first token arrived (FR13)
+                }
+            case .completed, .failed:
+                break
             }
-            emit(.token(text))
+            emit(event)
             return
         }
 
-        if line.isResult {
-            if line.isError == true {
-                emit(.failed(Self.friendlyError(from: line.result)))
-            } else {
-                emit(.completed)
-            }
+        if line.isResult, line.isError == true {
+            emit(.failed(Self.friendlyError(from: line.result)))
         }
     }
 
@@ -237,7 +232,7 @@ final class ClaudeBackend {
         ioQueue.asyncAfter(deadline: .now() + firstTokenTimeout, execute: work)
     }
 
-    private func emit(_ event: Event) {
+    private func emit(_ event: AskBackendEvent) {
         let handler = currentHandler
         // On completion/failure the turn is over; keep handler for follow-ups
         // only after `completed`.
