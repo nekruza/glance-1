@@ -12,6 +12,10 @@ final class ClaudeAutomationProvider: AutomationProvider {
         descriptor = AutomationProviderDescriptor(kind: .claude, version: version)
     }
 
+    deinit {
+        runner.cancelAll()
+    }
+
     @discardableResult
     func runText(_ request: AutomationRequest,
                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
@@ -74,6 +78,9 @@ final class ClaudeAutomationProvider: AutomationProvider {
                 return events
             },
             onCleanup: { try? FileManager.default.removeItem(at: configURL) },
+            timeoutFailure: { timeout in
+                "Composio call timed out (Claude CLI didn't respond within \(max(1, Int(timeout.rounded(.up))))s)."
+            },
             onEvent: onEvent
         )
     }
@@ -153,12 +160,14 @@ final class AutomationOneShotRunner {
         let gate: CallbackGate
         let onEvent: (AutomationEvent) -> Void
         let decode: Decoder
+        let timeoutFailure: (TimeInterval) -> String
         var process: Process?
         var output: Data?
         var errors: Data?
         var terminationStatus: Int32?
         var timeoutWork: DispatchWorkItem?
         var forceKillWork: DispatchWorkItem?
+        var keepAlive: AutomationOneShotRunner?
         let onCleanup: (() -> Void)?
         var terminalSettled = false
         var callbackDeliveryQueued = false
@@ -166,11 +175,13 @@ final class AutomationOneShotRunner {
 
         init(id: UUID, gate: CallbackGate, decode: @escaping Decoder,
              onCleanup: (() -> Void)?,
+             timeoutFailure: @escaping (TimeInterval) -> String,
              onEvent: @escaping (AutomationEvent) -> Void) {
             self.id = id
             self.gate = gate
             self.decode = decode
             self.onCleanup = onCleanup
+            self.timeoutFailure = timeoutFailure
             self.onEvent = onEvent
         }
     }
@@ -191,6 +202,9 @@ final class AutomationOneShotRunner {
              workingDirectory: URL?, timeout: TimeInterval,
              launchFailurePrefix: String, decode: @escaping Decoder,
              environment: [String: String] = [:], onCleanup: (() -> Void)? = nil,
+             timeoutFailure: @escaping (TimeInterval) -> String = { timeout in
+                 "AI provider didn't respond within \(Int(timeout))s."
+             },
              onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
         let id = UUID()
         let gate = CallbackGate()
@@ -198,18 +212,18 @@ final class AutomationOneShotRunner {
         gates[id] = gate
         gateLock.unlock()
 
-        queue.async { [weak self] in
-            self?.launch(id: id, gate: gate, executablePath: executablePath,
-                         arguments: arguments, standardInput: standardInput,
-                         workingDirectory: workingDirectory, timeout: timeout,
-                         launchFailurePrefix: launchFailurePrefix, decode: decode, environment: environment,
-                         onCleanup: onCleanup,
-                         onEvent: onEvent)
+        queue.async {
+            self.launch(id: id, gate: gate, executablePath: executablePath,
+                        arguments: arguments, standardInput: standardInput,
+                        workingDirectory: workingDirectory, timeout: timeout,
+                        launchFailurePrefix: launchFailurePrefix, decode: decode, environment: environment,
+                        onCleanup: onCleanup, timeoutFailure: timeoutFailure,
+                        onEvent: onEvent)
         }
 
-        return AutomationCancellation { [weak self, gate] in
+        return AutomationCancellation { [self, gate] in
             gate.invalidate()
-            self?.queue.async { [weak self] in self?.cancel(id: id) }
+            queue.async { self.cancel(id: id) }
         }
     }
 
@@ -219,8 +233,7 @@ final class AutomationOneShotRunner {
         gateLock.unlock()
         currentGates.forEach { $0.invalidate() }
 
-        queue.async { [weak self] in
-            guard let self else { return }
+        queue.async {
             for id in Array(self.runs.keys) {
                 self.cancel(id: id)
             }
@@ -232,6 +245,7 @@ final class AutomationOneShotRunner {
                         timeout: TimeInterval, launchFailurePrefix: String,
                         decode: @escaping Decoder, environment: [String: String],
                         onCleanup: (() -> Void)?,
+                        timeoutFailure: @escaping (TimeInterval) -> String,
                         onEvent: @escaping (AutomationEvent) -> Void) {
         guard gate.isValid else {
             onCleanup?()
@@ -253,7 +267,9 @@ final class AutomationOneShotRunner {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
-        let state = RunState(id: id, gate: gate, decode: decode, onCleanup: onCleanup, onEvent: onEvent)
+        let state = RunState(id: id, gate: gate, decode: decode, onCleanup: onCleanup,
+                             timeoutFailure: timeoutFailure, onEvent: onEvent)
+        state.keepAlive = self
         state.process = process
         runs[id] = state
 
@@ -330,7 +346,7 @@ final class AutomationOneShotRunner {
         state.terminalSettled = true
         state.timeoutWork?.cancel()
         state.timeoutWork = nil
-        deliver([.failed("AI provider didn't respond within \(Int(timeout))s.")], for: state)
+        deliver([.failed(state.timeoutFailure(timeout))], for: state)
         requestStop(state)
     }
 
@@ -375,6 +391,7 @@ final class AutomationOneShotRunner {
         state.forceKillWork?.cancel()
         state.forceKillWork = nil
         state.onCleanup?()
+        state.keepAlive = nil
         runs[state.id] = nil
         if !state.callbackDeliveryQueued {
             removeGate(state.id)

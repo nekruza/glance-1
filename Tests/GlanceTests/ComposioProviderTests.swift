@@ -14,6 +14,7 @@ final class ComposioProviderTests: XCTestCase {
         XCTAssertEqual(invocation.environment["GLANCE_COMPOSIO_TOKEN"], "secret")
         XCTAssertEqual(invocation.standardInput, "Read my tasks")
         XCTAssertFalse(invocation.arguments.joined(separator: " ").contains("secret"))
+        XCTAssertEqual(invocation.events, [.text("["), .text("]"), .completed])
     }
 
     func testClaudeComposioRetainsPrivateConfigAndToolAllowlist() throws {
@@ -36,6 +37,8 @@ final class ComposioProviderTests: XCTestCase {
             "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
             "mcp__composio__COMPOSIO_MANAGE_CONNECTIONS"
         ])
+        XCTAssertEqual(invocation.events, [.text("[]"), .completed])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: invocation.configurationPath))
     }
 
     func testSelectedProviderNamesComposioFailure() throws {
@@ -73,6 +76,121 @@ final class ComposioProviderTests: XCTestCase {
         provider.cancelAll()
     }
 
+    func testCodexComposioPreservesTerminalFailureMessage() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeExecutable(in: fixtureDirectory, script: #"""
+        #!/bin/sh
+        cat >/dev/null
+        printf '%s\n' '{"type":"turn.failed","error":{"message":"Composio rejected the request."}}'
+        """#)
+        let provider = CodexAutomationProvider(binaryPath: executable.path, version: "test")
+
+        XCTAssertEqual(try runComposio(provider: provider),
+                       [.failed("Codex CLI: Composio rejected the request.")])
+    }
+
+    func testComposioTimeoutNamesSelectedProvider() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeExecutable(in: fixtureDirectory, script: #"""
+        #!/bin/sh
+        cat >/dev/null
+        exec /bin/sleep 60
+        """#)
+        let provider = CodexAutomationProvider(binaryPath: executable.path, version: "test")
+
+        XCTAssertEqual(try runComposio(provider: provider, timeout: 0.1),
+                       [.failed("Composio call timed out (Codex CLI didn't respond within 1s).")])
+    }
+
+    func testClaudeComposioCancellationRemovesConfigAndStopsChild() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeComposioSleepingExecutable(in: fixtureDirectory)
+        let provider = ClaudeAutomationProvider(binaryPath: executable.path, version: "test")
+        let staleEvent = expectation(description: "cancelled Claude Composio run emits no event")
+        staleEvent.isInverted = true
+
+        let cancellation = provider.runComposio(
+            ComposioAutomationRequest(prompt: "Read my tasks", endpoint: "https://connect.composio.dev/mcp"),
+            token: "secret"
+        ) { _ in
+            staleEvent.fulfill()
+        }
+        let configPath = try waitForConfigPath(in: fixtureDirectory)
+        let processID = try processID(from: fixtureDirectory.appendingPathComponent("pid"))
+        cancellation.cancel()
+
+        waitForProcessExit(processID)
+        waitForFileRemoval(URL(fileURLWithPath: configPath))
+        wait(for: [staleEvent], timeout: 0.3)
+    }
+
+    func testClaudeComposioOwnerDeallocationRemovesConfigAndStopsChild() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeComposioSleepingExecutable(in: fixtureDirectory)
+        var provider: ClaudeAutomationProvider? = ClaudeAutomationProvider(binaryPath: executable.path, version: "test")
+        weak var weakProvider = provider
+
+        provider?.runComposio(
+            ComposioAutomationRequest(prompt: "Read my tasks", endpoint: "https://connect.composio.dev/mcp"),
+            token: "secret"
+        ) { _ in }
+        let configPath = try waitForConfigPath(in: fixtureDirectory)
+        let processID = try processID(from: fixtureDirectory.appendingPathComponent("pid"))
+        provider = nil
+
+        XCTAssertNil(weakProvider)
+        waitForProcessExit(processID)
+        waitForFileRemoval(URL(fileURLWithPath: configPath))
+    }
+
+    func testClaudeComposioLaunchFailureRemovesTransientConfig() throws {
+        let before = Self.glanceMCPConfigPaths()
+        let provider = ClaudeAutomationProvider(binaryPath: "/nonexistent/glance-claude", version: "test")
+        let events = try runComposio(provider: provider)
+
+        guard case .failed(let message) = try XCTUnwrap(events.first) else {
+            return XCTFail("Expected launch failure")
+        }
+        XCTAssertTrue(message.hasPrefix("Couldn't launch Claude CLI:"))
+        waitForMCPConfigPaths(before)
+    }
+
+    func testComposioIngestAggregatesMultipleProviderTextEvents() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeExecutable(in: fixtureDirectory, script: #"""
+        #!/bin/sh
+        cat >/dev/null
+        printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"["}}'
+        printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"]"}}'
+        printf '%s\n' '{"type":"turn.completed"}'
+        """#)
+        let provider = CodexAutomationProvider(binaryPath: executable.path, version: "test")
+        let ingest = ComposioIngest(provider: provider)
+        let completed = expectation(description: "ingest aggregates provider text")
+        let prefs = Preferences.shared
+        let oldURL = prefs.composioURL
+        let oldKey = prefs.composioKey
+        defer {
+            prefs.composioURL = oldURL
+            prefs.composioKey = oldKey
+        }
+        prefs.composioURL = "https://connect.composio.dev/mcp"
+        prefs.composioKey = "secret"
+
+        ingest.runReadOnly(prompt: "Read my tasks", on: DispatchQueue(label: "composio-ingest-test")) { text, error in
+            XCTAssertEqual(text, "[]")
+            XCTAssertNil(error)
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 2)
+    }
+
     private func fakeCodexComposioInvocation() throws -> ComposioInvocation {
         let fixtureDirectory = try makeFixtureDirectory()
         defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
@@ -82,7 +200,8 @@ final class ComposioProviderTests: XCTestCase {
         printf '%s\n' "$@" > "$fixture_dir/arguments"
         printf '%s' "$GLANCE_COMPOSIO_TOKEN" > "$fixture_dir/token"
         cat > "$fixture_dir/stdin"
-        printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"[]"}}'
+        printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"["}}'
+        printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"]"}}'
         printf '%s\n' '{"type":"turn.completed"}'
         """#)
         let provider = CodexAutomationProvider(binaryPath: executable.path, version: "test")
@@ -143,11 +262,11 @@ final class ComposioProviderTests: XCTestCase {
         return try runComposio(provider: provider)
     }
 
-    private func runComposio(provider: AutomationProvider) throws -> [AutomationEvent] {
+    private func runComposio(provider: AutomationProvider, timeout: TimeInterval = 240) throws -> [AutomationEvent] {
         let terminal = expectation(description: "Composio provider reaches terminal event")
         var events: [AutomationEvent] = []
         provider.runComposio(
-            ComposioAutomationRequest(prompt: "Read my tasks", endpoint: "https://connect.composio.dev/mcp"),
+            ComposioAutomationRequest(prompt: "Read my tasks", endpoint: "https://connect.composio.dev/mcp", timeout: timeout),
             token: "secret"
         ) { event in
             events.append(event)
@@ -173,6 +292,24 @@ final class ComposioProviderTests: XCTestCase {
         return executable
     }
 
+    private func makeComposioSleepingExecutable(in directory: URL) throws -> URL {
+        try makeExecutable(in: directory, script: #"""
+        #!/bin/sh
+        fixture_dir="$(dirname "$0")"
+        previous=''
+        config=''
+        for argument in "$@"; do
+            if [ "$previous" = '--mcp-config' ]; then config="$argument"; break; fi
+            previous="$argument"
+        done
+        printf '%s' "$config" > "$fixture_dir/config-path"
+        printf '%s' "$$" > "$fixture_dir/pid"
+        cat >/dev/null
+        trap '' TERM
+        exec /bin/sleep 60
+        """#)
+    }
+
     private func lines(in url: URL) throws -> [String] {
         try String(contentsOf: url, encoding: .utf8)
             .split(separator: "\n")
@@ -192,6 +329,68 @@ final class ComposioProviderTests: XCTestCase {
             }
         }
         wait(for: [appeared], timeout: timeout + 0.5)
+    }
+
+    private func waitForConfigPath(in directory: URL) throws -> String {
+        let url = directory.appendingPathComponent("config-path")
+        waitForFile(url)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func processID(from url: URL) throws -> pid_t {
+        try XCTUnwrap(pid_t(String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+    }
+
+    private func waitForProcessExit(_ processID: pid_t, timeout: TimeInterval = 1.5) {
+        let exited = expectation(description: "process \(processID) exits")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if Darwin.kill(processID, 0) == -1, errno == ESRCH {
+                    exited.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [exited], timeout: timeout + 0.5)
+    }
+
+    private func waitForFileRemoval(_ url: URL, timeout: TimeInterval = 1.5) {
+        let removed = expectation(description: "\(url.lastPathComponent) is removed")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    removed.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [removed], timeout: timeout + 0.5)
+    }
+
+    private static func glanceMCPConfigPaths() -> Set<String> {
+        let directory = FileManager.default.temporaryDirectory
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return Set(names.filter { $0.hasPrefix("glance-mcp-") && $0.hasSuffix(".json") })
+    }
+
+    private func waitForMCPConfigPaths(_ expected: Set<String>, timeout: TimeInterval = 1) {
+        let matched = expectation(description: "transient MCP config is removed")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if Self.glanceMCPConfigPaths() == expected {
+                    matched.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [matched], timeout: timeout + 0.5)
     }
 }
 

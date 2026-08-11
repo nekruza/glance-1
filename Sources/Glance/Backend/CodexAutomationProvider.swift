@@ -12,6 +12,10 @@ final class CodexAutomationProvider: AutomationProvider {
         descriptor = AutomationProviderDescriptor(kind: .codex, version: version)
     }
 
+    deinit {
+        runner.cancelAll()
+    }
+
     @discardableResult
     func runText(_ request: AutomationRequest,
                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
@@ -58,6 +62,9 @@ final class CodexAutomationProvider: AutomationProvider {
             launchFailurePrefix: "Couldn't launch Codex CLI",
             decode: Self.decodeComposio,
             environment: ["GLANCE_COMPOSIO_TOKEN": token],
+            timeoutFailure: { timeout in
+                "Composio call timed out (Codex CLI didn't respond within \(max(1, Int(timeout.rounded(.up))))s)."
+            },
             onEvent: onEvent
         )
     }
@@ -125,6 +132,10 @@ final class CodexAutomationProvider: AutomationProvider {
             }
         }
 
+        if case .failed(let message)? = terminal?.automationEvent {
+            events.append(.failed("Codex CLI: \(message)"))
+            return events
+        }
         guard status == 0, terminal?.automationEvent == .completed else {
             events.append(.failed(ComposioIngest.failureMessage(kind: .codex, status: status)))
             return events
