@@ -1,6 +1,6 @@
 import AppKit
 
-/// FR7 (Screen Recording TCC) and FR16 (Claude CLI health) onboarding dialogs.
+/// FR7 (Screen Recording TCC) and FR16 (local CLI health) onboarding dialogs.
 /// These are rare error paths, so a standard NSAlert is the clearest UX. Never
 /// fail silently.
 @MainActor
@@ -54,6 +54,34 @@ enum PermissionOnboarding {
             Found Claude at \(path) but couldn't run it (\(reason)).
 
             Open a terminal and confirm `claude --version` works, then try again.
+            """
+        }
+        alert.addButton(withTitle: "OK")
+        activateForDialog()
+        alert.runModal()
+    }
+
+    /// Selected-provider diagnostics for Codex CLI missing / unusable.
+    static func reportCodexStatus(_ status: CodexLocator.Status) {
+        let alert = NSAlert()
+        switch status {
+        case .ok:
+            return
+        case .notFound:
+            alert.messageText = "Codex CLI not found"
+            alert.informativeText = """
+            Glance uses your local Codex CLI as its backend. It isn't on this \
+            Mac (or not in a standard location).
+
+            Install Codex CLI, run `codex` in a terminal, and sign in with \
+            ChatGPT, then try again.
+            """
+        case .unusable(let path, let reason):
+            alert.messageText = "Codex CLI isn't usable"
+            alert.informativeText = """
+            Found Codex at \(path) but couldn't run it (\(reason)).
+
+            Open a terminal and confirm `codex --version` works, then try again.
             """
         }
         alert.addButton(withTitle: "OK")

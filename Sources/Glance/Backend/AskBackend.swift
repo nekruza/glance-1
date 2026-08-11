@@ -1,10 +1,17 @@
 import Foundation
 
-enum AskBackendKind: String, CaseIterable {
+enum AskBackendKind: String, CaseIterable, Hashable {
     case claude
     case codex
 
     static let defaultValue: AskBackendKind = .claude
+
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude CLI"
+        case .codex: return "Codex CLI"
+        }
+    }
 }
 
 enum AskBackendEvent {

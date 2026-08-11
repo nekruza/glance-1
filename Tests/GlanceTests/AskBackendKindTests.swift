@@ -6,4 +6,8 @@ final class AskBackendKindTests: XCTestCase {
         XCTAssertEqual(AskBackendKind.defaultValue, .claude)
         XCTAssertEqual(AskBackendKind(rawValue: "codex"), .codex)
     }
+
+    func testCodexUsesCLIDisplayName() {
+        XCTAssertEqual(AskBackendKind.codex.displayName, "Codex CLI")
+    }
 }

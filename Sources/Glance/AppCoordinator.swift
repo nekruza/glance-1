@@ -31,7 +31,7 @@ final class AppCoordinator {
         overlay.session.isTranscribing = recording
     }
 
-    private var backend: ClaudeBackend?
+    private var backend: AskBackend?
     private var suggestions: SuggestionService?
     private var pendingImagePNG: Data?
     private var pendingCaptureLabel: String = ""
@@ -48,6 +48,22 @@ final class AppCoordinator {
         prefs.$hotkey
             .dropFirst()
             .sink { [weak self] combo in self?.hotkey.register(combo) }
+            .store(in: &cancellables)
+
+        // A conversation belongs to one provider. Switching providers drops
+        // the live process and transcript instead of mixing their context.
+        prefs.$askBackend
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] kind in
+                guard let self else { return }
+                self.teardownBackend()
+                self.overlay.session.clearTranscript()
+                self.overlay.session.showsHistory = kind == .claude
+                self.overlay.session.historySessions = []
+                self.overlay.session.backendConnected = false
+                self.overlay.session.backendLabel = "Checking \(kind.displayName)…"
+            }
             .store(in: &cancellables)
 
         // A hotkey grab lost at launch (combo held by an app that later quit)
@@ -355,11 +371,18 @@ final class AppCoordinator {
 
     /// Current backend status for the menu's status line.
     func backendStatusLine() -> (connected: Bool, label: String) {
-        let s = ClaudeLocator.check()
-        if case .ok(_, let v) = s {
-            return (true, "Claude CLI connected · " + shortVersion(v))
+        let kind = prefs.askBackend
+        switch kind {
+        case .claude:
+            if case .ok(_, let version) = ClaudeLocator.check() {
+                return (true, connectionLabel(for: kind, version: version))
+            }
+        case .codex:
+            if case .ok(_, let version) = CodexLocator.check() {
+                return (true, connectionLabel(for: kind, version: version))
+            }
         }
-        return (false, "Claude CLI not connected")
+        return (false, "\(kind.displayName) not connected")
     }
 
     // MARK: - Invocation
@@ -373,22 +396,14 @@ final class AppCoordinator {
     }
 
     private func present() {
-        // FR16: refuse clearly if the CLI can't serve as a backend.
-        claudeStatus = ClaudeLocator.check()
-        guard case .ok(let path, _) = claudeStatus else {
-            PermissionOnboarding.reportClaudeStatus(claudeStatus)
-            return
-        }
-
         // FR15 warm path: spawn the backend now so start/auth overlaps with the
         // user reading the overlay and typing. Reuse the live backend when
         // re-summoning — the conversation persists across dismissals.
         if backend == nil {
-            let backend = ClaudeBackend(binaryPath: path)
-            backend.firstTokenTimeout = 30 // FR13
-            backend.appendSystemPrompt = TaskCapture.systemPrompt
-            backend.startWarm()
-            self.backend = backend
+            guard let made = makeSelectedBackend() else { return }
+            backend = made.backend
+            overlay.session.backendConnected = true
+            overlay.session.backendLabel = made.statusLabel
         }
 
         // Attachment defaults off, so don't block on Screen Recording — capture
@@ -406,13 +421,58 @@ final class AppCoordinator {
         }
     }
 
-    /// "2.1.197 (Claude Code)" → "claude 2.1.197".
-    private func shortVersion(_ raw: String) -> String {
+    /// Provider version output → a compact footer label.
+    private func shortVersion(_ raw: String, kind: AskBackendKind) -> String {
         let num = raw.split(separator: " ").first.map(String.init) ?? raw
-        return "claude \(num)"
+        switch kind {
+        case .claude:
+            return "claude \(num)"
+        case .codex:
+            return raw.lowercased().hasPrefix("codex") ? raw : "codex \(num)"
+        }
+    }
+
+    private func connectionLabel(for kind: AskBackendKind, version: String) -> String {
+        "\(kind.displayName) connected · \(shortVersion(version, kind: kind))"
+    }
+
+    /// Construct only the selected ask provider and return the status text that
+    /// describes that exact binary. Task automation intentionally bypasses this
+    /// factory and remains wired to ClaudeLocator in setupTasks().
+    private func makeSelectedBackend() -> (backend: AskBackend, statusLabel: String)? {
+        let kind = prefs.askBackend
+        let backend: AskBackend
+        let version: String
+
+        switch kind {
+        case .claude:
+            claudeStatus = ClaudeLocator.check()
+            guard case .ok(let path, let detectedVersion) = claudeStatus else {
+                PermissionOnboarding.reportClaudeStatus(claudeStatus)
+                return nil
+            }
+            let claude = ClaudeBackend(binaryPath: path)
+            claude.appendSystemPrompt = TaskCapture.systemPrompt
+            backend = claude
+            version = detectedVersion
+        case .codex:
+            let status = CodexLocator.check()
+            guard case .ok(let path, let detectedVersion) = status else {
+                PermissionOnboarding.reportCodexStatus(status)
+                return nil
+            }
+            backend = CodexBackend(binaryPath: path)
+            version = detectedVersion
+        }
+
+        backend.firstTokenTimeout = 30 // FR13
+        backend.startWarm()
+        return (backend, connectionLabel(for: kind, version: version))
     }
 
     private func showOverlay() {
+        let showsHistory = prefs.askBackend == .claude
+        overlay.session.showsHistory = showsHistory
         overlay.present()
         // Reflect CLI connection in the footer (present() only reaches here when
         // the CLI is OK, so show the connected version).
@@ -421,28 +481,29 @@ final class AppCoordinator {
             self.overlay.dismiss()
             self.summonTaskSettings()
         }
-        overlay.session.historyHandler = { [weak self] summary in
-            self?.resumeHistorySession(summary)
+        if showsHistory {
+            overlay.session.historyHandler = { [weak self] summary in
+                self?.resumeHistorySession(summary)
+            }
+        } else {
+            overlay.session.historyHandler = nil
+            overlay.session.historySessions = []
         }
         overlay.session.clearHandler = { [weak self] in
             self?.clearSession()
         }
-        // Populate the History dropdown off the main thread (directory scan +
-        // head parse of each candidate file).
-        Task { [weak self] in
-            let sessions = await Task.detached(priority: .utility) {
-                SessionHistoryStore.recentSessions()
-            }.value
-            self?.overlay.session.historySessions = sessions
+        if showsHistory {
+            // Populate the Claude History dropdown off the main thread
+            // (directory scan + head parse of each candidate file).
+            Task { [weak self] in
+                let sessions = await Task.detached(priority: .utility) {
+                    SessionHistoryStore.recentSessions()
+                }.value
+                guard self?.prefs.askBackend == .claude else { return }
+                self?.overlay.session.historySessions = sessions
+            }
         }
         overlay.session.captureLabel = pendingCaptureLabel
-        if case .ok(_, let version) = claudeStatus {
-            overlay.session.backendConnected = true
-            overlay.session.backendLabel = "Claude CLI connected · \(shortVersion(version))"
-        } else {
-            overlay.session.backendConnected = false
-            overlay.session.backendLabel = "Claude CLI not connected"
-        }
         overlay.onSubmit { [weak self] question in
             self?.handleSubmit(question)
         }
@@ -453,12 +514,10 @@ final class AppCoordinator {
     private func clearSession() {
         teardownBackend()
         overlay.session.clearTranscript()
-        guard case .ok(let path, _) = claudeStatus else { return }
-        let backend = ClaudeBackend(binaryPath: path)
-        backend.firstTokenTimeout = 30
-        backend.appendSystemPrompt = TaskCapture.systemPrompt
-        backend.startWarm()
-        self.backend = backend
+        guard let made = makeSelectedBackend() else { return }
+        backend = made.backend
+        overlay.session.backendConnected = true
+        overlay.session.backendLabel = made.statusLabel
     }
 
     // MARK: - History resume
@@ -466,6 +525,8 @@ final class AppCoordinator {
     /// Swap the backend for one that resumes the picked Claude CLI session and
     /// show its past transcript; follow-ups continue that conversation.
     private func resumeHistorySession(_ summary: SessionSummary) {
+        guard prefs.askBackend == .claude else { return }
+        claudeStatus = ClaudeLocator.check()
         guard case .ok(let path, _) = claudeStatus else { return }
         teardownBackend()
 
@@ -540,7 +601,7 @@ final class AppCoordinator {
         return png
     }
 
-    private func send(_ question: String, image: Data?, via backend: ClaudeBackend) {
+    private func send(_ question: String, image: Data?, via backend: AskBackend) {
         // Real-time ask-about-the-call: while transcribing, the recent
         // transcript rides along invisibly (the overlay shows only the
         // question the user typed).
@@ -590,7 +651,8 @@ final class AppCoordinator {
     /// Fill the suggestion chips from the just-finished turn (cheap one-shot
     /// haiku call, separate from the conversation).
     private func generateSuggestions() {
-        guard case .ok(let path, _) = claudeStatus,
+        guard prefs.askBackend == .claude,
+              case .ok(let path, _) = claudeStatus,
               let turn = overlay.session.turns.last, !turn.failed, !turn.answer.isEmpty
         else { return }
 

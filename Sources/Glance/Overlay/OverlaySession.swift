@@ -25,9 +25,9 @@ final class OverlaySession: ObservableObject {
     /// Live meeting-transcription state (footer record button).
     @Published var isTranscribing: Bool = false
 
-    /// Claude CLI connection state, shown in the overlay footer.
+    /// Selected ask-backend connection state, shown in the overlay footer.
     @Published var backendConnected: Bool = false
-    @Published var backendLabel: String = "Checking Claude CLI…"
+    @Published var backendLabel: String = "Checking \(AskBackendKind.defaultValue.displayName)…"
 
     /// Captured-display label for the context strip, e.g. "Display 1 · 2560×1440".
     @Published var captureLabel: String = ""
@@ -39,6 +39,7 @@ final class OverlaySession: ObservableObject {
 
     /// Past Claude CLI sessions for the footer History dropdown.
     @Published var historySessions: [SessionSummary] = []
+    @Published var showsHistory: Bool = true
 
     /// Context-based follow-up prompts, shown as clickable chips after an
     /// answer completes. Clicking one submits it as the next message.

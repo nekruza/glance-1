@@ -1,18 +1,19 @@
 import SwiftUI
 
 /// Settings built to 04-settings.html: General (hotkey, launch-at-login) and
-/// Status (Screen Recording, Claude CLI backend) cards + privacy footnote.
+/// Status (Screen Recording, selected local CLI backend) cards + privacy footnote.
 /// No model picker / BYOK / MCP — out of scope (FR14/FR19).
 struct SettingsView: View {
     @ObservedObject private var prefs = Preferences.shared
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
-    @State private var status: ClaudeLocator.Status = ClaudeLocator.check()
+    @State private var status: BackendStatus = .notConnected
     @State private var hasScreenPermission = ScreenCaptureService.hasPermission
     @State private var testing = false
     @State private var testResult: TestResult?
 
     private enum TestResult { case ok(String), fail(String) }
+    private enum BackendStatus { case ok(String), notConnected }
 
     var body: some View {
         Form {
@@ -31,6 +32,17 @@ struct SettingsView: View {
                         .onChange(of: launchAtLogin) { _, v in LaunchAtLogin.set(v) }
                 } label: {
                     settingLabel("Launch at login", "Start in the menu bar when you sign in")
+                }
+                LabeledContent {
+                    Picker("", selection: $prefs.askBackend) {
+                        ForEach(AskBackendKind.allCases, id: \.self) { kind in
+                            Text(kind.displayName).tag(kind)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                } label: {
+                    settingLabel("Ask backend", "Local CLI used by the screen-aware overlay")
                 }
                 LabeledContent {
                     HStack(spacing: 8) {
@@ -157,7 +169,7 @@ struct SettingsView: View {
 
                 LabeledContent {
                     HStack(spacing: 10) {
-                        if case .ok(_, let v) = status {
+                        if case .ok(let v) = status {
                             Text(shortVersion(v)).font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.secondary)
                             pill("Connected", DS.success)
@@ -166,7 +178,7 @@ struct SettingsView: View {
                         }
                     }
                 } label: {
-                    settingLabel("Claude CLI backend", "Local Claude Code — reuses its own auth")
+                    settingLabel("\(prefs.askBackend.displayName) backend", backendSubtitle)
                 }
 
                 if let r = testResult { resultRow(r) }
@@ -181,7 +193,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("No API keys stored. All model traffic goes through your local Claude CLI. Screenshots may persist in Claude Code session transcripts under ~/.claude/projects/ — see README.")
+                Text(privacyNote)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -190,8 +202,10 @@ struct SettingsView: View {
         .frame(width: 460, height: 400)
         .navigationTitle("Glance Settings")
         .onAppear {
-            status = ClaudeLocator.check()
-            hasScreenPermission = ScreenCaptureService.hasPermission
+            rescan()
+        }
+        .onChange(of: prefs.askBackend) { _, _ in
+            rescan()
         }
     }
 
@@ -223,13 +237,37 @@ struct SettingsView: View {
         }
     }
 
+    private var backendSubtitle: String {
+        switch prefs.askBackend {
+        case .claude: return "Local Claude Code — reuses its own auth"
+        case .codex: return "Local Codex — reuses its own auth"
+        }
+    }
+
+    private var privacyNote: String {
+        switch prefs.askBackend {
+        case .claude:
+            return "No API keys stored. Ask-overlay model traffic goes through your local Claude CLI. Screenshots may persist in Claude Code session transcripts under ~/.claude/projects/ — see README."
+        case .codex:
+            return "No API keys stored. Ask-overlay model traffic goes through your local Codex CLI. Screenshots may persist in Codex session storage — see README."
+        }
+    }
+
     private func shortVersion(_ raw: String) -> String {
-        "claude " + (raw.split(separator: " ").first.map(String.init) ?? raw)
+        let first = raw.split(separator: " ").first.map(String.init) ?? raw
+        switch prefs.askBackend {
+        case .claude:
+            return "claude " + first
+        case .codex:
+            return raw.lowercased().hasPrefix("codex") ? raw : "codex " + first
+        }
     }
 
     private func runTest() {
         testing = true; testResult = nil
-        BackendTester.test { outcome in
+        let kind = prefs.askBackend
+        BackendTester.test(kind: kind) { outcome in
+            guard prefs.askBackend == kind else { return }
             testing = false
             switch outcome {
             case .success(let s):
@@ -268,8 +306,22 @@ struct SettingsView: View {
     }
 
     private func rescan() {
-        status = ClaudeLocator.check()
+        switch prefs.askBackend {
+        case .claude:
+            if case .ok(_, let version) = ClaudeLocator.check() {
+                status = .ok(version)
+            } else {
+                status = .notConnected
+            }
+        case .codex:
+            if case .ok(_, let version) = CodexLocator.check() {
+                status = .ok(version)
+            } else {
+                status = .notConnected
+            }
+        }
         hasScreenPermission = ScreenCaptureService.hasPermission
+        testing = false
         testResult = nil
     }
 }
