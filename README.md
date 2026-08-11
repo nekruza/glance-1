@@ -5,7 +5,7 @@ screen — without breaking flow. Press a global hotkey, a translucent overlay
 appears, type a question, and the answer streams back inline. Choose your
 **locally installed and signed-in Claude Code CLI or Codex CLI** in Settings;
 Glance reuses that CLI's existing sign-in — no API keys, no Glance account, or
-subscription backend.
+Glance-hosted subscription backend.
 
 Implements `prd.md` (Screen-Aware Desktop Assistant). Personal tool.
 
@@ -67,11 +67,15 @@ This is a personal tool with deliberate, documented trade-offs (PRD NFR6):
 
 - **Screenshots may contain sensitive content.** Each query is a real local
   Claude Code or Codex session, and either provider may retain its own local
-  transcript or session data, including screenshots. Glance keeps screenshots
-  in memory only and drops them when the overlay session ends; it cannot
-  control provider-owned local storage. Review and prune that CLI's local data
-  if needed.
-- **Queries draw from the selected provider account's usage quota.**
+  transcript or session data, including screenshots. Claude attachments remain
+  in Glance memory while they are submitted. For Codex attachments, Glance
+  creates a per-backend private temporary directory with mode `0700` and a PNG
+  with mode `0600`; the PNG is deleted when the Codex turn reaches terminal
+  success/error, the process exits or times out, or the session/app shuts down.
+  Glance cannot control provider-owned local storage, so review and prune that
+  CLI's local data if needed.
+- **Queries use the selected provider account** and may count against its plan
+  usage or provider-managed billing, depending on how that CLI is signed in.
 - Glance makes **no network calls of its own** — traffic, if any, goes through
   the selected CLI's own connection (NFR5).
 

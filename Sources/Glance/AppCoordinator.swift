@@ -31,12 +31,21 @@ final class AppCoordinator {
         overlay.session.isTranscribing = recording
     }
 
-    private var backend: AskBackend?
+    private let backendLifecycle: AskBackendLifecycle
+    private var backend: AskBackend? { backendLifecycle.backend }
     private var suggestions: SuggestionService?
     private var pendingImagePNG: Data?
     private var pendingCaptureLabel: String = ""
     private var claudeStatus: ClaudeLocator.Status = .notFound
     private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        self.backendLifecycle = AskBackendLifecycle()
+    }
+
+    init(backendLifecycle: AskBackendLifecycle) {
+        self.backendLifecycle = backendLifecycle
+    }
 
     func start() {
         claudeStatus = ClaudeLocator.check()
@@ -393,14 +402,15 @@ final class AppCoordinator {
 
     private func present() {
         // FR15 warm path: spawn the backend now so start/auth overlaps with the
-        // user reading the overlay and typing. Reuse the live backend when
-        // re-summoning — the conversation persists across dismissals.
+        // user reading the overlay and typing.
         if backend == nil {
             guard let made = makeSelectedBackend() else { return }
-            backend = made.backend
+            backendLifecycle.install(made.backend)
             overlay.session.backendConnected = true
             overlay.session.backendLabel = made.statusLabel
         }
+        guard let backend,
+              let lease = backendLifecycle.lease(for: backend) else { return }
 
         // Attachment defaults off, so don't block on Screen Recording — capture
         // opportunistically (FR8: before the overlay is shown) and open the
@@ -408,10 +418,14 @@ final class AppCoordinator {
         Task { [weak self] in
             guard let self else { return }
             if ScreenCaptureService.hasPermission {
-                if let shot = try? await ScreenCaptureService.captureActiveDisplay() {
+                let shot = try? await ScreenCaptureService.captureActiveDisplay()
+                guard self.backendLifecycle.isCurrent(lease) else { return }
+                if let shot {
                     self.pendingImagePNG = shot.pngData
                     self.pendingCaptureLabel = shot.displayLabel
                 }
+            } else {
+                guard self.backendLifecycle.isCurrent(lease) else { return }
             }
             self.showOverlay()
         }
@@ -511,7 +525,7 @@ final class AppCoordinator {
         teardownBackend()
         overlay.session.clearTranscript()
         guard let made = makeSelectedBackend() else { return }
-        backend = made.backend
+        backendLifecycle.install(made.backend)
         overlay.session.backendConnected = true
         overlay.session.backendLabel = made.statusLabel
     }
@@ -533,15 +547,17 @@ final class AppCoordinator {
         // far longer to first token than a fresh one.
         backend.firstTokenTimeout = 120
         backend.startWarm()
-        self.backend = backend
+        backendLifecycle.install(backend)
 
         let url = summary.fileURL
         let generation = overlay.session.transcriptGeneration
+        guard let lease = backendLifecycle.lease(for: backend) else { return }
         Task { [weak self] in
             let turns = await Task.detached(priority: .userInitiated) {
                 SessionHistoryStore.loadTurns(from: url)
             }.value
-            guard let self, self.prefs.askBackend == .claude else { return }
+            guard let self, self.prefs.askBackend == .claude,
+                  self.backendLifecycle.isCurrent(lease) else { return }
             self.overlay.session.loadTranscript(turns, ifGeneration: generation)
         }
     }
@@ -579,9 +595,11 @@ final class AppCoordinator {
 
         // Follow-up: grab a FRESH shot of the current screen, hiding the overlay
         // so it isn't in the image (FR8).
+        guard let lease = backendLifecycle.lease(for: backend) else { return }
         Task { [weak self] in
             guard let self else { return }
             let png = await self.captureExcludingOverlay()
+            guard self.backendLifecycle.isCurrent(lease) else { return }
             if let png {
                 self.overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: png))
             }
@@ -600,6 +618,8 @@ final class AppCoordinator {
     }
 
     private func send(_ question: String, image: Data?, via backend: AskBackend) {
+        guard let lease = backendLifecycle.lease(for: backend),
+              backendLifecycle.isCurrent(lease) else { return }
         // Real-time ask-about-the-call: while transcribing, the recent
         // transcript rides along invisibly (the overlay shows only the
         // question the user typed).
@@ -620,7 +640,7 @@ final class AppCoordinator {
             """
         }
         backend.ask(question: composed, imagePNG: image) { [weak self] event in
-            guard let self else { return }
+            guard let self, self.backendLifecycle.isCurrent(lease) else { return }
             switch event {
             case .token(let text): self.overlay.session.appendToken(text)
             case .completed:
@@ -668,13 +688,14 @@ final class AppCoordinator {
 
     // MARK: - Teardown
 
-    /// Overlay dismissed. Keep the backend and transcript — the conversation
-    /// survives until the user clears it (trash) — but drop the screenshot
-    /// bytes (FR9); the next summon captures a fresh one.
-    private func endSession() {
+    /// Overlay dismissed. Stop the selected CLI immediately and invalidate any
+    /// capture/backend callbacks that were suspended or queued for this session.
+    func endSession() {
+        teardownBackend()
         pendingImagePNG = nil
         // Attaching is an explicit, per-summon opt-in — never carry it over.
         overlay.session.attachImage = false
+        overlay.session.isWorking = false
     }
 
     /// App is quitting: don't leave orphaned claude processes behind, and
@@ -687,8 +708,7 @@ final class AppCoordinator {
     }
 
     private func teardownBackend() {
-        backend?.shutdown()
-        backend = nil
+        backendLifecycle.shutdown()
         suggestions?.cancel()
     }
 }

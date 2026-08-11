@@ -47,20 +47,24 @@ sessions. It continues to initialize the task system exclusively from
 ## Codex Turn Flow
 
 1. On the first prompt, Glance writes the in-memory PNG to a private temporary
-   file and launches `codex exec --json --skip-git-repo-check --image <file>`
-   with the question as the prompt.
-2. The temporary image file is removed once the child has received it, and is
-   also removed during error/shutdown cleanup.
+   file and launches `codex exec --json --skip-git-repo-check - --image <file>`.
+   The `-` prompt placeholder precedes the variadic image option, and Glance
+   writes the question to the process's stdin before closing the pipe. This
+   keeps the question from being parsed as another image pathname.
+2. The temporary image remains available while Codex consumes the attachment.
+   It is removed on terminal success/error, process exit, first-token timeout,
+   dismissal/shutdown, or backend deinitialization.
 3. The backend consumes Codex JSONL events, forwarding assistant text deltas
    to the overlay and recording the thread/session ID.
 4. Follow-ups run `codex exec resume <session-id> --json` with the next
-   question. A fresh image, when supplied, is attached with `--image`.
+   question. A fresh image, when supplied, uses the same explicit stdin prompt
+   placeholder and private-file lifecycle.
 5. Dismissal terminates an in-flight process and drops the retained session ID
    and image file references.
 
 Codex is launched in Glance's private temporary working directory and with
 `--skip-git-repo-check`. It does not receive broad filesystem or approval
-bypass flags.
+bypass flags. The directory is mode `0700`; attachment PNGs are mode `0600`.
 
 ## UI and Errors
 
@@ -79,6 +83,10 @@ explicitly. Claude's wording and behavior remain as-is.
 - Unit-test backend-kind preference defaults and persistence.
 - Unit-test Codex JSONL parsing against representative thread-start, text
   delta, completed, and error events.
+- Integration-test the exact image argv/stdin boundary and verify that private
+  attachment files exist while Codex runs and disappear on terminal cleanup.
+- Unit-test backend leases so provider changes and dismissal invalidate work
+  suspended across capture and shut down the old backend.
 - Build the release app with `Scripts/build-app.sh`.
 - Manually test both selected backends: first screenshot question, streamed
   response, follow-up, dismissal during generation, missing-binary status,

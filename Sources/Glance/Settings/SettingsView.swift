@@ -249,7 +249,7 @@ struct SettingsView: View {
         case .claude:
             return "No API keys stored. Ask-overlay model traffic goes through your local Claude CLI. Screenshots may persist in Claude Code session transcripts under ~/.claude/projects/ — see README."
         case .codex:
-            return "No API keys stored. Ask-overlay model traffic goes through your local Codex CLI. Screenshots may persist in Codex session storage — see README."
+            return "No API keys stored by Glance. Attached screenshots use a private temporary PNG during the Codex turn and are deleted on completion or cancellation. Codex may retain its own session data — see README."
         }
     }
 

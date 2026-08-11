@@ -15,7 +15,7 @@ final class CodexStreamEventTests: XCTestCase {
         XCTAssertEqual(try CodexStreamEvent.decode(line), .ignored)
     }
 
-    func testBackendRemovesImageAfterLaunchBeforeTurnCompletes() throws {
+    func testBackendKeepsImageAvailableUntilShutdownThenRemovesIt() throws {
         let fixtureDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-image-cleanup-test-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
@@ -40,7 +40,14 @@ final class CodexStreamEventTests: XCTestCase {
         let arguments = try String(contentsOf: fixtureDirectory.appendingPathComponent("args"), encoding: .utf8)
             .split(separator: "\n").map(String.init)
         let imageFlag = try XCTUnwrap(arguments.firstIndex(of: "--image"))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: arguments[imageFlag + 1]))
+        let imagePath = arguments[imageFlag + 1]
+        XCTAssertTrue(FileManager.default.fileExists(atPath: imagePath))
+        XCTAssertEqual(try permissions(atPath: imagePath), 0o600)
+        XCTAssertEqual(try permissions(atPath: URL(fileURLWithPath: imagePath).deletingLastPathComponent().path), 0o700)
+
+        backend.shutdown()
+
+        waitForFileRemoval(URL(fileURLWithPath: imagePath))
     }
 
     func testBackendDispatchesFollowUpWhenCompletedProcessStalls() throws {
@@ -123,7 +130,7 @@ final class CodexStreamEventTests: XCTestCase {
         wait(for: [tokenHandled, staleCompletion], timeout: 0.5)
     }
 
-    func testBackendLaunchesFirstTurnThenResumesAndCleansImage() throws {
+    func testBackendSendsFirstImagePromptThroughStdinThenResumesAndCleansImage() throws {
         let fixtureDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-backend-test-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
@@ -139,6 +146,24 @@ final class CodexStreamEventTests: XCTestCase {
         count=$((count + 1))
         printf '%s' "$count" > "$count_file"
         printf '%s\n' "$@" > "$fixture_dir/args.$count"
+        cat > "$fixture_dir/stdin.$count"
+        image_path=''
+        expect_image_path=0
+        for argument in "$@"; do
+            if [ "$expect_image_path" -eq 1 ]; then
+                image_path="$argument"
+                break
+            fi
+            if [ "$argument" = '--image' ]; then expect_image_path=1; fi
+        done
+        if [ -n "$image_path" ]; then
+            sleep 0.1
+            if [ -f "$image_path" ]; then
+                printf 'available' > "$fixture_dir/image-state.$count"
+            else
+                printf 'missing' > "$fixture_dir/image-state.$count"
+            fi
+        fi
         printf '{"type":"thread.'
         sleep 0.05
         printf 'started","thread_id":"abc"}\n'
@@ -162,12 +187,13 @@ final class CodexStreamEventTests: XCTestCase {
 
         let firstArguments = try String(contentsOf: fixtureDirectory.appendingPathComponent("args.1"), encoding: .utf8)
             .split(separator: "\n").map(String.init)
-        XCTAssertEqual(Array(firstArguments.prefix(3)), ["exec", "--json", "--skip-git-repo-check"])
-        XCTAssertEqual(firstArguments.suffix(1), ["First"])
-        XCTAssertEqual(firstEvents, [.token("Hello"), .completed])
         let imageFlag = try XCTUnwrap(firstArguments.firstIndex(of: "--image"))
         let imagePath = firstArguments[imageFlag + 1]
-        XCTAssertFalse(FileManager.default.fileExists(atPath: imagePath))
+        XCTAssertEqual(firstArguments, ["exec", "--json", "--skip-git-repo-check", "-", "--image", imagePath])
+        XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("stdin.1"), encoding: .utf8), "First")
+        XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("image-state.1"), encoding: .utf8), "available")
+        XCTAssertEqual(firstEvents, [.token("Hello"), .completed])
+        waitForFileRemoval(URL(fileURLWithPath: imagePath))
 
         let secondCompleted = expectation(description: "follow-up completes")
         backend.ask(question: "Second", imagePNG: nil) { event in
@@ -178,6 +204,7 @@ final class CodexStreamEventTests: XCTestCase {
         let secondArguments = try String(contentsOf: fixtureDirectory.appendingPathComponent("args.2"), encoding: .utf8)
             .split(separator: "\n").map(String.init)
         XCTAssertEqual(secondArguments, ["exec", "resume", "abc", "--json", "--skip-git-repo-check", "Second"])
+        XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("stdin.2"), encoding: .utf8), "")
     }
 
     private func waitForFile(_ url: URL, timeout: TimeInterval = 2) {
@@ -193,5 +220,25 @@ final class CodexStreamEventTests: XCTestCase {
             }
         }
         wait(for: [appeared], timeout: timeout + 0.5)
+    }
+
+    private func waitForFileRemoval(_ url: URL, timeout: TimeInterval = 2) {
+        let removed = expectation(description: "\(url.lastPathComponent) is removed")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    removed.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [removed], timeout: timeout + 0.5)
+    }
+
+    private func permissions(atPath path: String) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        return try XCTUnwrap(attributes[.posixPermissions] as? NSNumber).intValue
     }
 }

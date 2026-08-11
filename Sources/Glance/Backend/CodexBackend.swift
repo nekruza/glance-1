@@ -73,7 +73,6 @@ final class CodexBackend: AskBackend {
         do {
             activeImageURL = try writeImage(imagePNG)
             try launch(question: question)
-            removeActiveImage()
             startTimeout()
         } catch {
             removeActiveImage()
@@ -127,16 +126,24 @@ final class CodexBackend: AskBackend {
             arguments += ["resume", threadID]
         }
         arguments += ["--json", "--skip-git-repo-check"]
+        let promptInput: Pipe?
         if let activeImageURL {
+            // `--image <FILE>...` is variadic on the first-turn command. Put
+            // the explicit stdin prompt placeholder before it so the question
+            // cannot be consumed as another image pathname.
+            arguments.append("-")
             arguments += ["--image", activeImageURL.path]
+            promptInput = Pipe()
+        } else {
+            arguments.append(question)
+            promptInput = nil
         }
-        arguments.append(question)
         proc.arguments = arguments
         proc.currentDirectoryURL = workingDirectory
 
         let output = Pipe()
         let errors = Pipe()
-        proc.standardInput = FileHandle.nullDevice
+        proc.standardInput = promptInput ?? FileHandle.nullDevice
         proc.standardOutput = output
         proc.standardError = errors
 
@@ -164,9 +171,14 @@ final class CodexBackend: AskBackend {
         stderrPipe = errors
         do {
             try proc.run()
+            if let promptInput {
+                try promptInput.fileHandleForWriting.write(contentsOf: Data(question.utf8))
+                try promptInput.fileHandleForWriting.close()
+            }
         } catch {
             output.fileHandleForReading.readabilityHandler = nil
             errors.fileHandleForReading.readabilityHandler = nil
+            if proc.isRunning { proc.terminate() }
             resetProcessState()
             throw error
         }
