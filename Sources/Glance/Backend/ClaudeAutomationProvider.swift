@@ -43,7 +43,39 @@ final class ClaudeAutomationProvider: AutomationProvider {
     @discardableResult
     func runComposio(_ request: ComposioAutomationRequest, token: String,
                      onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        runText(AutomationRequest(prompt: request.prompt, timeout: request.timeout), onEvent: onEvent)
+        guard let configURL = Self.writeComposioConfig(endpoint: request.endpoint, token: token) else {
+            onEvent(.failed("Couldn't create temporary Claude CLI Composio configuration."))
+            return AutomationCancellation()
+        }
+
+        return runner.run(
+            executablePath: binaryPath,
+            arguments: [
+                "-p", "--model", "sonnet", "--mcp-config", configURL.path,
+                "--strict-mcp-config", "--allowedTools",
+                "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+                "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
+                "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+                "mcp__composio__COMPOSIO_MANAGE_CONNECTIONS"
+            ],
+            standardInput: Data(request.prompt.utf8),
+            workingDirectory: FileManager.default.temporaryDirectory,
+            timeout: request.timeout,
+            launchFailurePrefix: "Couldn't launch Claude CLI",
+            decode: { output, _, status in
+                guard status == 0 else {
+                    return [.failed(ComposioIngest.failureMessage(kind: .claude, status: status))]
+                }
+                var events: [AutomationEvent] = []
+                if let text = String(data: output, encoding: .utf8), !text.isEmpty {
+                    events.append(.text(text))
+                }
+                events.append(.completed)
+                return events
+            },
+            onCleanup: { try? FileManager.default.removeItem(at: configURL) },
+            onEvent: onEvent
+        )
     }
 
     func cancelAll() {
@@ -67,6 +99,30 @@ final class ClaudeAutomationProvider: AutomationProvider {
         let message = String(data: errors, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return message.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+    }
+
+    private static func writeComposioConfig(endpoint: String?, token: String) -> URL? {
+        let url = endpoint ?? "https://connect.composio.dev/mcp"
+        let config: [String: Any] = [
+            "mcpServers": [
+                "composio": [
+                    "type": "http",
+                    "url": url,
+                    "headers": ["Authorization": "Bearer \(token)"]
+                ]
+            ]
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: config) else { return nil }
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glance-mcp-\(UUID().uuidString.prefix(8)).json")
+        do {
+            try data.write(to: configURL)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+            return configURL
+        } catch {
+            try? FileManager.default.removeItem(at: configURL)
+            return nil
+        }
     }
 }
 
@@ -103,15 +159,18 @@ final class AutomationOneShotRunner {
         var terminationStatus: Int32?
         var timeoutWork: DispatchWorkItem?
         var forceKillWork: DispatchWorkItem?
+        let onCleanup: (() -> Void)?
         var terminalSettled = false
         var callbackDeliveryQueued = false
         var stopRequested = false
 
         init(id: UUID, gate: CallbackGate, decode: @escaping Decoder,
+             onCleanup: (() -> Void)?,
              onEvent: @escaping (AutomationEvent) -> Void) {
             self.id = id
             self.gate = gate
             self.decode = decode
+            self.onCleanup = onCleanup
             self.onEvent = onEvent
         }
     }
@@ -131,6 +190,7 @@ final class AutomationOneShotRunner {
     func run(executablePath: String, arguments: [String], standardInput: Data?,
              workingDirectory: URL?, timeout: TimeInterval,
              launchFailurePrefix: String, decode: @escaping Decoder,
+             environment: [String: String] = [:], onCleanup: (() -> Void)? = nil,
              onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
         let id = UUID()
         let gate = CallbackGate()
@@ -142,7 +202,8 @@ final class AutomationOneShotRunner {
             self?.launch(id: id, gate: gate, executablePath: executablePath,
                          arguments: arguments, standardInput: standardInput,
                          workingDirectory: workingDirectory, timeout: timeout,
-                         launchFailurePrefix: launchFailurePrefix, decode: decode,
+                         launchFailurePrefix: launchFailurePrefix, decode: decode, environment: environment,
+                         onCleanup: onCleanup,
                          onEvent: onEvent)
         }
 
@@ -169,9 +230,11 @@ final class AutomationOneShotRunner {
     private func launch(id: UUID, gate: CallbackGate, executablePath: String,
                         arguments: [String], standardInput: Data?, workingDirectory: URL?,
                         timeout: TimeInterval, launchFailurePrefix: String,
-                        decode: @escaping Decoder,
+                        decode: @escaping Decoder, environment: [String: String],
+                        onCleanup: (() -> Void)?,
                         onEvent: @escaping (AutomationEvent) -> Void) {
         guard gate.isValid else {
+            onCleanup?()
             removeGate(id)
             return
         }
@@ -183,11 +246,14 @@ final class AutomationOneShotRunner {
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
         process.currentDirectoryURL = workingDirectory
+        var childEnvironment = ProcessInfo.processInfo.environment
+        childEnvironment.merge(environment) { _, replacement in replacement }
+        process.environment = childEnvironment
         process.standardInput = inputPipe ?? FileHandle.nullDevice
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
-        let state = RunState(id: id, gate: gate, decode: decode, onEvent: onEvent)
+        let state = RunState(id: id, gate: gate, decode: decode, onCleanup: onCleanup, onEvent: onEvent)
         state.process = process
         runs[id] = state
 
@@ -308,6 +374,7 @@ final class AutomationOneShotRunner {
         guard runs[state.id] === state else { return }
         state.forceKillWork?.cancel()
         state.forceKillWork = nil
+        state.onCleanup?()
         runs[state.id] = nil
         if !state.callbackDeliveryQueued {
             removeGate(state.id)

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Manual ingestion from Jira / Slack / Granola through the user's Composio
-/// MCP account, driven by one `claude -p --mcp-config` call per pull.
+/// MCP account, driven by the selected automation provider per pull.
 ///
 /// READ-ONLY BY POLICY: Composio's router exposes one execute meta-tool for
 /// reads and writes alike, so the permission layer can't split them — the
@@ -115,15 +115,34 @@ final class ComposioIngest {
         var createdIds: [UUID] = []
     }
 
-    private let binaryPath: String
+    private final class ActiveRequest {
+        var cancellation: AutomationCancellation?
+        var text = ""
+        var finished = false
+    }
+
+    private let provider: AutomationProvider
+    private let activeLock = NSLock()
+    private var activeRequests: [UUID: ActiveRequest] = [:]
     /// Concurrent: "Pull from all" runs 2–3 sources at once — each pull is its
-    /// own `claude` subprocess, and completions all hop back to the main actor,
+    /// own provider subprocess, and completions all hop back to the main actor,
     /// so nothing here needs serialization.
     private let queue = DispatchQueue(label: "com.h57q3wq0c.glance.composio",
                                       attributes: .concurrent)
 
-    init(binaryPath: String) {
-        self.binaryPath = binaryPath
+    init(provider: AutomationProvider) {
+        self.provider = provider
+    }
+
+    /// Compatibility bridge until AppCoordinator owns the selected provider
+    /// as part of the Task 6 service-bundle migration.
+    convenience init(binaryPath: String) {
+        self.init(provider: ClaudeAutomationProvider(binaryPath: binaryPath,
+                                                     version: "compatibility"))
+    }
+
+    deinit {
+        cancelActiveRequests()
     }
 
     /// Fetch one target and land new items in the store's Inbox. Main-thread
@@ -209,7 +228,7 @@ final class ComposioIngest {
         The one action to perform:
         \(instruction)
         """
-        Self.run(binaryPath: binaryPath, prompt: prompt, on: queue) { text, error in
+        runComposio(prompt: prompt, on: queue) { text, error in
             guard let text else {
                 completion(.failure(Self.writeError(error ?? "No response from Composio.")))
                 return
@@ -284,158 +303,107 @@ final class ComposioIngest {
     /// this instance's pull queue.
     func runReadOnly(prompt: String, on queue: DispatchQueue,
                      completion: @escaping (String?, String?) -> Void) {
-        Self.run(binaryPath: binaryPath, prompt: prompt, on: queue, completion: completion)
+        runComposio(prompt: prompt, on: queue, completion: completion)
     }
 
     /// Run one read-only Composio prompt; main-thread completion with stdout.
     private func runPrompt(_ prompt: String, completion: @escaping (String?, String?) -> Void) {
-        Self.run(binaryPath: binaryPath, prompt: prompt, on: queue, completion: completion)
+        runComposio(prompt: prompt, on: queue, completion: completion)
     }
 
-    private static func run(binaryPath: String, prompt: String, on queue: DispatchQueue,
-                            completion: @escaping (String?, String?) -> Void) {
-        queue.async {
-            guard let configURL = Self.writeMCPConfig() else {
-                DispatchQueue.main.async { completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.") }
+    private func runComposio(prompt: String, on queue: DispatchQueue,
+                             completion: @escaping (String?, String?) -> Void) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let prefs = Preferences.shared
+            guard !prefs.composioKey.isEmpty, !prefs.composioURL.isEmpty else {
+                DispatchQueue.main.async {
+                    completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.")
+                }
                 return
             }
-            defer { try? FileManager.default.removeItem(at: configURL) }
 
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: binaryPath)
-            proc.arguments = [
-                "-p",
-                // F5: pulls/writes are the app's most frequent agentic
-                // sessions — Sonnet handles "call tools, emit JSON" fine;
-                // the CLI default silently means the biggest model.
-                "--model", "sonnet",
-                "--mcp-config", configURL.path,
-                "--strict-mcp-config",
-                "--allowedTools", "mcp__composio__COMPOSIO_SEARCH_TOOLS",
-                "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
-                "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
-                "mcp__composio__COMPOSIO_MANAGE_CONNECTIONS"
-            ]
-            proc.currentDirectoryURL = FileManager.default.temporaryDirectory
-            let inPipe = Pipe()
-            let out = Pipe()
-            proc.standardInput = inPipe
-            proc.standardOutput = out
-            proc.standardError = Pipe()
-            let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: killer)
-            do {
-                try proc.run()
-                if let data = prompt.data(using: .utf8) {
-                    try? inPipe.fileHandleForWriting.write(contentsOf: data)
-                }
-                try? inPipe.fileHandleForWriting.close()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                proc.waitUntilExit()
-                killer.cancel()
-                let text = proc.terminationStatus == 0 ? String(data: data, encoding: .utf8) : nil
-                DispatchQueue.main.async {
-                    completion(text, text == nil ? "Composio call failed (claude exited \(proc.terminationStatus))." : nil)
-                }
-            } catch {
-                killer.cancel()
-                DispatchQueue.main.async { completion(nil, error.localizedDescription) }
+            let id = UUID()
+            let active = ActiveRequest()
+            self.activeLock.lock()
+            self.activeRequests[id] = active
+            self.activeLock.unlock()
+
+            let cancellation = self.provider.runComposio(
+                ComposioAutomationRequest(prompt: prompt, endpoint: prefs.composioURL),
+                token: prefs.composioKey
+            ) { [weak self, weak active] event in
+                self?.handle(event, id: id, active: active, completion: completion)
+            }
+
+            self.activeLock.lock()
+            if active.finished {
+                self.activeLock.unlock()
+                cancellation.cancel()
+            } else {
+                active.cancellation = cancellation
+                self.activeLock.unlock()
             }
         }
+    }
+
+    private func handle(_ event: AutomationEvent, id: UUID, active: ActiveRequest?,
+                        completion: @escaping (String?, String?) -> Void) {
+        guard let active else { return }
+        var result: (String?, String?)?
+        activeLock.lock()
+        guard !active.finished else {
+            activeLock.unlock()
+            return
+        }
+        switch event {
+        case .text(let text):
+            active.text += text
+        case .completed:
+            active.finished = true
+            activeRequests[id] = nil
+            result = (active.text, nil)
+        case .failed(let message):
+            active.finished = true
+            activeRequests[id] = nil
+            result = (nil, message)
+        case .sessionID:
+            break
+        }
+        activeLock.unlock()
+
+        if let result {
+            DispatchQueue.main.async { completion(result.0, result.1) }
+        }
+    }
+
+    private func cancelActiveRequests() {
+        activeLock.lock()
+        let cancellations = activeRequests.values.compactMap(\.cancellation)
+        activeRequests.removeAll()
+        activeLock.unlock()
+        cancellations.forEach { $0.cancel() }
+    }
+
+    static func failureMessage(kind: AskBackendKind, status: Int32) -> String {
+        "Composio call failed (\(kind.displayName) exited \(status))."
     }
 
     // MARK: - Fetch (background)
 
     private func fetch(_ target: FetchTarget, since: Date? = nil,
                        completion: @escaping ([FetchedTask]?, String?) -> Void) {
-        queue.async { [binaryPath] in
-            guard let configURL = Self.writeMCPConfig() else {
-                DispatchQueue.main.async { completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.") }
+        runComposio(prompt: Self.prompt(for: target, since: since), on: queue) { text, error in
+            guard let text else {
+                completion(nil, error)
                 return
             }
-            defer { try? FileManager.default.removeItem(at: configURL) }
-
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: binaryPath)
-            // Prompt goes via STDIN — --allowedTools is variadic and would
-            // swallow a trailing positional prompt argument.
-            proc.arguments = [
-                "-p",
-                "--model", "sonnet", // F5 — see run()
-                "--mcp-config", configURL.path,
-                "--strict-mcp-config",
-                "--allowedTools", "mcp__composio__COMPOSIO_SEARCH_TOOLS",
-                "mcp__composio__COMPOSIO_GET_TOOL_SCHEMAS",
-                "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
-                "mcp__composio__COMPOSIO_MANAGE_CONNECTIONS"
-            ]
-            proc.currentDirectoryURL = FileManager.default.temporaryDirectory
-
-            let inPipe = Pipe()
-            let out = Pipe()
-            proc.standardInput = inPipe
-            proc.standardOutput = out
-            proc.standardError = Pipe()
-
-            // Generous cap — tool discovery + a few API reads.
-            let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: killer)
-
-            do {
-                try proc.run()
-                if let data = Self.prompt(for: target, since: since).data(using: .utf8) {
-                    try? inPipe.fileHandleForWriting.write(contentsOf: data)
-                }
-                try? inPipe.fileHandleForWriting.close()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                proc.waitUntilExit()
-                killer.cancel()
-                guard proc.terminationStatus == 0,
-                      let text = String(data: data, encoding: .utf8) else {
-                    DispatchQueue.main.async {
-                        completion(nil, "Pull failed (claude exited \(proc.terminationStatus)).")
-                    }
-                    return
-                }
-                let parsed = TaskAI.decodeLenient([FetchedTask].self, from: text)
-                DispatchQueue.main.async {
-                    if let parsed {
-                        completion(parsed, nil)
-                    } else {
-                        // Model replied with prose (e.g. "app not connected").
-                        completion(nil, String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200)))
-                    }
-                }
-            } catch {
-                killer.cancel()
-                DispatchQueue.main.async { completion(nil, error.localizedDescription) }
+            if let parsed = TaskAI.decodeLenient([FetchedTask].self, from: text) {
+                completion(parsed, nil)
+            } else {
+                // Model replied with prose (e.g. "app not connected").
+                completion(nil, String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200)))
             }
-        }
-    }
-
-    /// MCP config written fresh per pull from Preferences (URL + key editable
-    /// in Settings). 0600 perms — it carries the API key.
-    private static func writeMCPConfig() -> URL? {
-        let prefs = Preferences.shared
-        guard !prefs.composioKey.isEmpty, !prefs.composioURL.isEmpty else { return nil }
-        let config: [String: Any] = [
-            "mcpServers": [
-                "composio": [
-                    "type": "http",
-                    "url": prefs.composioURL,
-                    "headers": ["Authorization": "Bearer \(prefs.composioKey)"]
-                ]
-            ]
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: config) else { return nil }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("glance-mcp-\(UUID().uuidString.prefix(8)).json")
-        do {
-            try data.write(to: url)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            return url
-        } catch {
-            return nil
         }
     }
 

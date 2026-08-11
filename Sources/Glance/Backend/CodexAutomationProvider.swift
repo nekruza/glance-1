@@ -43,7 +43,23 @@ final class CodexAutomationProvider: AutomationProvider {
     @discardableResult
     func runComposio(_ request: ComposioAutomationRequest, token: String,
                      onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        runText(AutomationRequest(prompt: request.prompt, timeout: request.timeout), onEvent: onEvent)
+        let endpoint = request.endpoint ?? "https://connect.composio.dev/mcp"
+        return runner.run(
+            executablePath: binaryPath,
+            arguments: [
+                "exec", "--json", "--skip-git-repo-check",
+                "-c", "mcp_servers.composio.url=\"\(endpoint)\"",
+                "-c", "mcp_servers.composio.bearer_token_env_var=\"GLANCE_COMPOSIO_TOKEN\"",
+                "-"
+            ],
+            standardInput: Data(request.prompt.utf8),
+            workingDirectory: FileManager.default.temporaryDirectory,
+            timeout: request.timeout,
+            launchFailurePrefix: "Couldn't launch Codex CLI",
+            decode: Self.decodeComposio,
+            environment: ["GLANCE_COMPOSIO_TOKEN": token],
+            onEvent: onEvent
+        )
     }
 
     func cancelAll() {
@@ -89,6 +105,28 @@ final class CodexAutomationProvider: AutomationProvider {
         guard terminal == .completed else {
             events.append(.failed(failureMessage(errors,
                 fallback: "Codex CLI exited without a terminal event.")))
+            return events
+        }
+        events.append(.completed)
+        return events
+    }
+
+    private static func decodeComposio(_ output: Data, _ errors: Data, _ status: Int32) -> [AutomationEvent] {
+        var events: [AutomationEvent] = []
+        var terminal: CodexStreamEvent?
+        let lines = String(data: output, encoding: .utf8)?.split(whereSeparator: \Character.isNewline) ?? []
+
+        for line in lines {
+            guard terminal == nil, let event = try? CodexStreamEvent.decode(String(line)) else { continue }
+            if event.isTerminal {
+                terminal = event
+            } else if let automationEvent = event.automationEvent {
+                events.append(automationEvent)
+            }
+        }
+
+        guard status == 0, terminal?.automationEvent == .completed else {
+            events.append(.failed(ComposioIngest.failureMessage(kind: .codex, status: status)))
             return events
         }
         events.append(.completed)
