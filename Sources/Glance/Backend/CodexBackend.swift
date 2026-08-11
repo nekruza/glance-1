@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Runs one `codex exec --json` process per question and resumes the thread for
 /// follow-ups. All process and stream state is confined to `ioQueue`.
@@ -8,6 +9,7 @@ final class CodexBackend: AskBackend {
     private let binaryPath: String
     private let workingDirectory: URL
     private let ioQueue = DispatchQueue(label: "com.h57q3wq0c.glance.codex-backend")
+    private let callbackGenerationLock = NSLock()
 
     private var process: Process?
     private var stdoutPipe: Pipe?
@@ -18,9 +20,11 @@ final class CodexBackend: AskBackend {
     private var activeImageURL: URL?
     private var currentHandler: ((AskBackendEvent) -> Void)?
     private var pendingTurn: PendingTurn?
+    private var callbackGeneration: UInt = 0
     private var sawTokenThisTurn = false
     private var receivedTerminalEvent = false
     private var timeoutWork: DispatchWorkItem?
+    private var terminalExitWork: DispatchWorkItem?
 
     init(binaryPath: String) {
         self.binaryPath = binaryPath
@@ -45,7 +49,9 @@ final class CodexBackend: AskBackend {
                 return
             }
             guard self.process == nil, self.currentHandler == nil, self.pendingTurn == nil else {
+                let generation = self.currentCallbackGeneration()
                 DispatchQueue.main.async {
+                    guard self.isCurrentCallbackGeneration(generation) else { return }
                     onEvent(.failed("Codex is still answering the previous question."))
                 }
                 return
@@ -56,6 +62,7 @@ final class CodexBackend: AskBackend {
     }
 
     private func beginTurn(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void) {
+        advanceCallbackGeneration()
         Self.createPrivateDirectory(at: workingDirectory)
         currentHandler = onEvent
         sawTokenThisTurn = false
@@ -66,6 +73,7 @@ final class CodexBackend: AskBackend {
         do {
             activeImageURL = try writeImage(imagePNG)
             try launch(question: question)
+            removeActiveImage()
             startTimeout()
         } catch {
             removeActiveImage()
@@ -75,10 +83,16 @@ final class CodexBackend: AskBackend {
     }
 
     func shutdown() {
+        // Invalidate callbacks already queued on main before scheduling the
+        // slower process/file cleanup on ioQueue.
+        advanceCallbackGeneration()
         ioQueue.async { [weak self] in
             guard let self else { return }
             self.timeoutWork?.cancel()
             self.timeoutWork = nil
+            self.terminalExitWork?.cancel()
+            self.terminalExitWork = nil
+            self.advanceCallbackGeneration()
             self.currentHandler = nil
             self.pendingTurn = nil
             self.removeActiveImage()
@@ -94,6 +108,7 @@ final class CodexBackend: AskBackend {
 
     deinit {
         timeoutWork?.cancel()
+        terminalExitWork?.cancel()
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
         if let process, process.isRunning { process.terminate() }
@@ -126,23 +141,22 @@ final class CodexBackend: AskBackend {
         proc.standardError = errors
 
         output.fileHandleForReading.readabilityHandler = { [weak self, weak proc] handle in
-            guard let proc else { return }
-            self?.ioQueue.async { [weak self] in
-                guard let self, proc === self.process else { return }
-                let data = handle.availableData
-                if !data.isEmpty { self.ingest(data, from: proc) }
-            }
+            let data = handle.availableData
+            guard !data.isEmpty, let proc else { return }
+            self?.ioQueue.async { [weak self] in self?.ingest(data, from: proc) }
         }
         errors.fileHandleForReading.readabilityHandler = { [weak self, weak proc] handle in
-            guard let proc else { return }
+            let data = handle.availableData
+            guard !data.isEmpty, let proc else { return }
             self?.ioQueue.async { [weak self] in
                 guard let self, proc === self.process else { return }
-                let data = handle.availableData
-                if !data.isEmpty { self.stderrBuffer.append(data) }
+                self.stderrBuffer.append(data)
             }
         }
         proc.terminationHandler = { [weak self] terminatedProcess in
-            self?.ioQueue.async { [weak self] in self?.handleExit(terminatedProcess) }
+            self?.ioQueue.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+                self?.handleExit(terminatedProcess)
+            }
         }
 
         process = proc
@@ -187,6 +201,7 @@ final class CodexBackend: AskBackend {
             timeoutWork = nil
             removeActiveImage()
             emit(.completed)
+            terminateCompletedProcess()
         case let .failed(message):
             receivedTerminalEvent = true
             timeoutWork?.cancel()
@@ -204,24 +219,28 @@ final class CodexBackend: AskBackend {
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
 
-        if let trailingOutput = stdoutPipe?.fileHandleForReading.readDataToEndOfFile(),
-           !trailingOutput.isEmpty {
-            ingest(trailingOutput, from: terminatedProcess)
-        }
-        if let trailingErrors = stderrPipe?.fileHandleForReading.readDataToEndOfFile(),
-           !trailingErrors.isEmpty {
-            stderrBuffer.append(trailingErrors)
-        }
+        if !receivedTerminalEvent {
+            if let trailingOutput = stdoutPipe?.fileHandleForReading.readDataToEndOfFile(),
+               !trailingOutput.isEmpty {
+                ingest(trailingOutput, from: terminatedProcess)
+            }
+            if let trailingErrors = stderrPipe?.fileHandleForReading.readDataToEndOfFile(),
+               !trailingErrors.isEmpty {
+                stderrBuffer.append(trailingErrors)
+            }
 
-        if !stdoutBuffer.isEmpty,
-           let trailingLine = String(data: stdoutBuffer, encoding: .utf8),
-           !trailingLine.isEmpty {
-            stdoutBuffer.removeAll()
-            handle(trailingLine)
+            if !stdoutBuffer.isEmpty,
+               let trailingLine = String(data: stdoutBuffer, encoding: .utf8),
+               !trailingLine.isEmpty {
+                stdoutBuffer.removeAll()
+                handle(trailingLine)
+            }
         }
 
         timeoutWork?.cancel()
         timeoutWork = nil
+        terminalExitWork?.cancel()
+        terminalExitWork = nil
         removeActiveImage()
         if !receivedTerminalEvent, currentHandler != nil {
             let stderr = String(data: stderrBuffer, encoding: .utf8)?
@@ -251,6 +270,20 @@ final class CodexBackend: AskBackend {
 
     // MARK: - Timeout and events
 
+    private func terminateCompletedProcess() {
+        guard let completedProcess = process, completedProcess.isRunning else { return }
+        completedProcess.terminate()
+
+        terminalExitWork?.cancel()
+        let work = DispatchWorkItem { [weak self, weak completedProcess] in
+            guard let self, let completedProcess, completedProcess === self.process,
+                  completedProcess.isRunning else { return }
+            Darwin.kill(completedProcess.processIdentifier, SIGKILL)
+        }
+        terminalExitWork = work
+        ioQueue.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
     private func startTimeout() {
         timeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -265,13 +298,33 @@ final class CodexBackend: AskBackend {
 
     private func emit(_ event: AskBackendEvent) {
         let handler = currentHandler
+        let generation = currentCallbackGeneration()
         switch event {
         case .completed, .failed:
             currentHandler = nil
         case .token:
             break
         }
-        DispatchQueue.main.async { handler?(event) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isCurrentCallbackGeneration(generation) else { return }
+            handler?(event)
+        }
+    }
+
+    private func advanceCallbackGeneration() {
+        callbackGenerationLock.lock()
+        callbackGeneration &+= 1
+        callbackGenerationLock.unlock()
+    }
+
+    private func currentCallbackGeneration() -> UInt {
+        callbackGenerationLock.lock()
+        defer { callbackGenerationLock.unlock() }
+        return callbackGeneration
+    }
+
+    private func isCurrentCallbackGeneration(_ generation: UInt) -> Bool {
+        currentCallbackGeneration() == generation
     }
 
     // MARK: - Private files
