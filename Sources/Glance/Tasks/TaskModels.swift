@@ -298,6 +298,12 @@ struct TaskRun: Identifiable, Codable, Equatable {
     var plan: String = ""
     var planApprovedAt: Date?
     var transcriptPath: String?
+    /// The CLI that produced this run. Optional so older task history decodes.
+    var provider: AskBackendKind?
+    /// Provider-neutral session/thread identifier. Optional so older task
+    /// history decodes and remains visible after a provider switch.
+    var cliSessionID: String?
+    /// Legacy Claude session field retained for existing persisted history.
     var claudeSessionId: String?
     var workspacePath: String = ""
     var branchName: String?           // code runs: the worktree branch

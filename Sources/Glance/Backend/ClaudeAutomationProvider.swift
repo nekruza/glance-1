@@ -6,6 +6,7 @@ final class ClaudeAutomationProvider: AutomationProvider {
 
     private let binaryPath: String
     private let runner = AutomationOneShotRunner(label: "com.glance.automation.claude")
+    private let streamingRunner = AutomationStreamingRunner(label: "com.glance.automation.claude.stream")
 
     init(binaryPath: String, version: String) {
         self.binaryPath = binaryPath
@@ -14,6 +15,7 @@ final class ClaudeAutomationProvider: AutomationProvider {
 
     deinit {
         runner.cancelAll()
+        streamingRunner.cancelAll()
     }
 
     @discardableResult
@@ -22,6 +24,9 @@ final class ClaudeAutomationProvider: AutomationProvider {
         var arguments = ["-p"]
         if let model = request.model {
             arguments += ["--model", model]
+        }
+        if let systemPrompt = request.systemPrompt, !systemPrompt.isEmpty {
+            arguments += ["--append-system-prompt", systemPrompt]
         }
         arguments.append(request.prompt)
 
@@ -40,8 +45,31 @@ final class ClaudeAutomationProvider: AutomationProvider {
     @discardableResult
     func startRun(_ request: AutomationRunRequest,
                   onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        runText(AutomationRequest(prompt: request.prompt, model: request.model,
-                                  workingDirectory: request.workingDirectory), onEvent: onEvent)
+        var arguments = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+        if !request.allowedTools.isEmpty {
+            arguments += ["--allowedTools"] + request.allowedTools
+        }
+        if !request.disallowedTools.isEmpty {
+            arguments += ["--disallowedTools"] + request.disallowedTools
+        }
+        if let systemPrompt = request.systemPrompt, !systemPrompt.isEmpty {
+            arguments += ["--append-system-prompt", systemPrompt]
+        }
+        if let model = request.model {
+            arguments += ["--model", model]
+        }
+
+        return streamingRunner.run(
+            executablePath: binaryPath,
+            arguments: arguments,
+            standardInput: Data(request.prompt.utf8),
+            workingDirectory: request.workingDirectory,
+            timeout: request.timeout,
+            launchFailurePrefix: "Couldn't launch Claude CLI",
+            decodeLine: Self.decodeRunLine,
+            finish: Self.finishRun,
+            onEvent: onEvent
+        )
     }
 
     @discardableResult
@@ -102,6 +130,32 @@ final class ClaudeAutomationProvider: AutomationProvider {
         return events
     }
 
+    /// The task-run command emits Claude stream-json lines. Keep Claude's
+    /// session and partial-token behaviour while exposing provider-neutral
+    /// events to TaskRunner.
+    private static func decodeRunLine(_ line: String) -> [AutomationEvent] {
+        guard let stream = try? JSONDecoder().decode(StreamLine.self, from: Data(line.utf8)) else { return [] }
+        var events: [AutomationEvent] = []
+        if let sessionID = stream.sessionId { events.append(.sessionID(sessionID)) }
+        if let text = stream.streamedText, !text.isEmpty { events.append(.text(text)) }
+        if stream.isResult {
+            events.append(stream.isError == true
+                          ? .failed(stream.result ?? "Claude CLI task run failed.")
+                          : .completed)
+        }
+        return events
+    }
+
+    private static func finishRun(_ errors: Data, _ status: Int32) -> AutomationEvent {
+        guard status == 0 else {
+            return .failed(failureMessage(errors,
+                fallback: "Claude CLI exited unexpectedly (status \(status))."))
+        }
+        // Legacy TaskRunner treated a clean Claude process as success even if
+        // the stream did not include a result line; retain that compatibility.
+        return .completed
+    }
+
     private static func failureMessage(_ errors: Data, fallback: String) -> String {
         let message = String(data: errors, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -130,6 +184,335 @@ final class ClaudeAutomationProvider: AutomationProvider {
             try? FileManager.default.removeItem(at: configURL)
             return nil
         }
+    }
+}
+
+/// Streams provider task-run JSONL while retaining provider-owned process
+/// cancellation. One-shot text work continues to use `AutomationOneShotRunner`.
+final class AutomationStreamingRunner {
+    typealias LineDecoder = (String) -> [AutomationEvent]
+    typealias FinishDecoder = (Data, Int32) -> AutomationEvent
+
+    private final class CallbackGate {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        func invalidate() {
+            lock.lock()
+            cancelled = true
+            lock.unlock()
+        }
+
+        var isValid: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return !cancelled
+        }
+    }
+
+    private final class RunState {
+        let id: UUID
+        let gate: CallbackGate
+        let decodeLine: LineDecoder
+        let finish: FinishDecoder
+        let onEvent: (AutomationEvent) -> Void
+        let onCleanup: (() -> Void)?
+        let timeoutFailure: (TimeInterval) -> String
+        var process: Process?
+        var stdoutBuffer = Data()
+        var errors = Data()
+        var stdoutClosed = false
+        var stderrClosed = false
+        var terminationStatus: Int32?
+        var timeoutWork: DispatchWorkItem?
+        var forceKillWork: DispatchWorkItem?
+        var terminalQueued = false
+        var stopRequested = false
+
+        init(id: UUID, gate: CallbackGate, decodeLine: @escaping LineDecoder,
+             finish: @escaping FinishDecoder, onCleanup: (() -> Void)?,
+             timeoutFailure: @escaping (TimeInterval) -> String,
+             onEvent: @escaping (AutomationEvent) -> Void) {
+            self.id = id
+            self.gate = gate
+            self.decodeLine = decodeLine
+            self.finish = finish
+            self.onCleanup = onCleanup
+            self.timeoutFailure = timeoutFailure
+            self.onEvent = onEvent
+        }
+    }
+
+    private let queue: DispatchQueue
+    private let ioQueue = DispatchQueue(label: "com.glance.automation.stream-io",
+                                        qos: .utility, attributes: .concurrent)
+    private let gateLock = NSLock()
+    private var gates: [UUID: CallbackGate] = [:]
+    private var runs: [UUID: RunState] = [:]
+
+    init(label: String) {
+        queue = DispatchQueue(label: label)
+    }
+
+    @discardableResult
+    func run(executablePath: String, arguments: [String], standardInput: Data?,
+             workingDirectory: URL?, timeout: TimeInterval,
+             launchFailurePrefix: String, decodeLine: @escaping LineDecoder,
+             finish: @escaping FinishDecoder, environment: [String: String] = [:],
+             onCleanup: (() -> Void)? = nil,
+             timeoutFailure: @escaping (TimeInterval) -> String = { timeout in
+                 "AI provider didn't respond within \(Int(timeout))s."
+             },
+             onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        let id = UUID()
+        let gate = CallbackGate()
+        gateLock.lock()
+        gates[id] = gate
+        gateLock.unlock()
+
+        queue.async {
+            self.launch(id: id, gate: gate, executablePath: executablePath, arguments: arguments,
+                        standardInput: standardInput, workingDirectory: workingDirectory,
+                        timeout: timeout, launchFailurePrefix: launchFailurePrefix,
+                        decodeLine: decodeLine, finish: finish, environment: environment,
+                        onCleanup: onCleanup, timeoutFailure: timeoutFailure, onEvent: onEvent)
+        }
+        return AutomationCancellation { [self, gate] in
+            gate.invalidate()
+            queue.async { self.cancel(id: id) }
+        }
+    }
+
+    func cancelAll() {
+        gateLock.lock()
+        let currentGates = Array(gates.values)
+        gateLock.unlock()
+        currentGates.forEach { $0.invalidate() }
+        queue.async {
+            for id in Array(self.runs.keys) { self.cancel(id: id) }
+        }
+    }
+
+    private func launch(id: UUID, gate: CallbackGate, executablePath: String, arguments: [String],
+                        standardInput: Data?, workingDirectory: URL?, timeout: TimeInterval,
+                        launchFailurePrefix: String, decodeLine: @escaping LineDecoder,
+                        finish: @escaping FinishDecoder, environment: [String: String],
+                        onCleanup: (() -> Void)?, timeoutFailure: @escaping (TimeInterval) -> String,
+                        onEvent: @escaping (AutomationEvent) -> Void) {
+        guard gate.isValid else {
+            onCleanup?()
+            removeGate(id)
+            return
+        }
+        let process = Process()
+        let output = Pipe()
+        let errors = Pipe()
+        let input = standardInput.map { _ in Pipe() }
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+        process.currentDirectoryURL = workingDirectory
+        var childEnvironment = ProcessInfo.processInfo.environment
+        childEnvironment.merge(environment) { _, replacement in replacement }
+        process.environment = childEnvironment
+        process.standardInput = input ?? FileHandle.nullDevice
+        process.standardOutput = output
+        process.standardError = errors
+
+        let state = RunState(id: id, gate: gate, decodeLine: decodeLine, finish: finish,
+                             onCleanup: onCleanup, timeoutFailure: timeoutFailure, onEvent: onEvent)
+        state.process = process
+        runs[id] = state
+        process.terminationHandler = { [weak self] ended in
+            self?.queue.async { self?.recordTermination(id: id, status: ended.terminationStatus) }
+        }
+        do {
+            try process.run()
+        } catch {
+            emit([.failed("\(launchFailurePrefix): \(error.localizedDescription)")], for: state)
+            cleanup(state)
+            return
+        }
+
+        readStandardOutput(output.fileHandleForReading, id: id)
+        readStandardError(errors.fileHandleForReading, id: id)
+        if let input, let standardInput {
+            ioQueue.async {
+                defer { try? input.fileHandleForWriting.close() }
+                try? input.fileHandleForWriting.write(contentsOf: standardInput)
+            }
+        }
+        let timeoutWork = DispatchWorkItem { [weak self] in self?.timeout(id: id, after: timeout) }
+        state.timeoutWork = timeoutWork
+        queue.asyncAfter(deadline: .now() + max(0, timeout), execute: timeoutWork)
+    }
+
+    private func readStandardOutput(_ handle: FileHandle, id: UUID) {
+        ioQueue.async { [weak self] in
+            defer { try? handle.close() }
+            let descriptor = handle.fileDescriptor
+            let flags = Darwin.fcntl(descriptor, F_GETFL)
+            _ = Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = buffer.withUnsafeMutableBytes { bytes in
+                    Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+                }
+                if count > 0 {
+                    let data = Data(buffer.prefix(Int(count)))
+                    self?.queue.async { self?.recordOutput(data, id: id) }
+                } else if count == 0 {
+                    self?.queue.async { self?.recordOutput(Data(), id: id) }
+                    return
+                } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                    usleep(5_000)
+                } else {
+                    self?.queue.async { self?.recordOutput(Data(), id: id) }
+                    return
+                }
+            }
+        }
+    }
+
+    private func readStandardError(_ handle: FileHandle, id: UUID) {
+        ioQueue.async { [weak self] in
+            defer { try? handle.close() }
+            let descriptor = handle.fileDescriptor
+            let flags = Darwin.fcntl(descriptor, F_GETFL)
+            _ = Darwin.fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let count = buffer.withUnsafeMutableBytes { bytes in
+                    Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+                }
+                if count > 0 {
+                    let data = Data(buffer.prefix(Int(count)))
+                    self?.queue.async { self?.recordError(data, id: id) }
+                } else if count == 0 {
+                    self?.queue.async { self?.recordError(Data(), id: id) }
+                    return
+                } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                    usleep(5_000)
+                } else {
+                    self?.queue.async { self?.recordError(Data(), id: id) }
+                    return
+                }
+            }
+        }
+    }
+
+    private func recordOutput(_ data: Data, id: UUID) {
+        guard let state = runs[id] else { return }
+        guard !data.isEmpty else {
+            decodeBufferedOutput(for: state)
+            state.stdoutClosed = true
+            finishIfReady(state)
+            return
+        }
+        state.stdoutBuffer.append(data)
+        decodeBufferedOutput(for: state)
+    }
+
+    private func decodeBufferedOutput(for state: RunState) {
+        while let newline = state.stdoutBuffer.firstIndex(of: 0x0A) {
+            let lineData = Data(state.stdoutBuffer[state.stdoutBuffer.startIndex..<newline])
+            state.stdoutBuffer.removeSubrange(state.stdoutBuffer.startIndex...newline)
+            guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
+            emit(state.decodeLine(line), for: state)
+        }
+        if state.stdoutClosed, !state.stdoutBuffer.isEmpty {
+            let line = String(data: state.stdoutBuffer, encoding: .utf8)
+            state.stdoutBuffer.removeAll(keepingCapacity: false)
+            if let line, !line.isEmpty { emit(state.decodeLine(line), for: state) }
+        }
+    }
+
+    private func recordError(_ data: Data, id: UUID) {
+        guard let state = runs[id] else { return }
+        guard !data.isEmpty else {
+            state.stderrClosed = true
+            finishIfReady(state)
+            return
+        }
+        state.errors.append(data)
+    }
+
+    private func recordTermination(id: UUID, status: Int32) {
+        guard let state = runs[id] else { return }
+        state.forceKillWork?.cancel()
+        state.forceKillWork = nil
+        state.terminationStatus = status
+        finishIfReady(state)
+    }
+
+    private func finishIfReady(_ state: RunState) {
+        guard state.stdoutClosed, state.stderrClosed, let status = state.terminationStatus else { return }
+        if !state.terminalQueued { emit([state.finish(state.errors, status)], for: state) }
+        cleanup(state)
+    }
+
+    private func timeout(id: UUID, after timeout: TimeInterval) {
+        guard let state = runs[id], !state.terminalQueued else { return }
+        emit([.failed(state.timeoutFailure(timeout))], for: state)
+        requestStop(state)
+    }
+
+    private func cancel(id: UUID) {
+        guard let state = runs[id] else {
+            removeGate(id)
+            return
+        }
+        state.timeoutWork?.cancel()
+        state.timeoutWork = nil
+        requestStop(state)
+        if state.process?.isRunning != true { cleanup(state) }
+    }
+
+    private func requestStop(_ state: RunState) {
+        guard !state.stopRequested else { return }
+        state.stopRequested = true
+        guard let process = state.process, process.isRunning else { return }
+        process.terminate()
+        let forceKill = DispatchWorkItem { [weak self, weak state, weak process] in
+            guard let self, let state, let process, self.runs[state.id] === state,
+                  process.isRunning else { return }
+            Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        state.forceKillWork = forceKill
+        queue.asyncAfter(deadline: .now() + 0.25, execute: forceKill)
+    }
+
+    private func emit(_ events: [AutomationEvent], for state: RunState) {
+        for event in events {
+            guard !state.terminalQueued else { return }
+            let terminal: Bool
+            switch event {
+            case .completed, .failed: terminal = true
+            case .text, .sessionID: terminal = false
+            }
+            if terminal { state.terminalQueued = true }
+            let gate = state.gate
+            let id = state.id
+            DispatchQueue.main.async { [weak self] in
+                defer { if terminal { self?.removeGate(id) } }
+                guard gate.isValid else { return }
+                state.onEvent(event)
+            }
+        }
+    }
+
+    private func cleanup(_ state: RunState) {
+        guard runs[state.id] === state else { return }
+        state.timeoutWork?.cancel()
+        state.forceKillWork?.cancel()
+        state.onCleanup?()
+        runs[state.id] = nil
+        if !state.terminalQueued { removeGate(state.id) }
+    }
+
+    private func removeGate(_ id: UUID) {
+        gateLock.lock()
+        gates[id] = nil
+        gateLock.unlock()
     }
 }
 

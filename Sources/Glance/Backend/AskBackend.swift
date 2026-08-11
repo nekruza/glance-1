@@ -1,6 +1,6 @@
 import Foundation
 
-enum AskBackendKind: String, CaseIterable, Hashable {
+enum AskBackendKind: String, CaseIterable, Hashable, Codable {
     case claude
     case codex
 

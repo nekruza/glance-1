@@ -6,6 +6,7 @@ final class CodexAutomationProvider: AutomationProvider {
 
     private let binaryPath: String
     private let runner = AutomationOneShotRunner(label: "com.glance.automation.codex")
+    private let streamingRunner = AutomationStreamingRunner(label: "com.glance.automation.codex.stream")
 
     init(binaryPath: String, version: String) {
         self.binaryPath = binaryPath
@@ -14,6 +15,7 @@ final class CodexAutomationProvider: AutomationProvider {
 
     deinit {
         runner.cancelAll()
+        streamingRunner.cancelAll()
     }
 
     @discardableResult
@@ -40,8 +42,29 @@ final class CodexAutomationProvider: AutomationProvider {
     @discardableResult
     func startRun(_ request: AutomationRunRequest,
                   onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        runText(AutomationRequest(prompt: request.prompt, model: request.model,
-                                  workingDirectory: request.workingDirectory), onEvent: onEvent)
+        var arguments = ["exec", "--json", "--skip-git-repo-check",
+                         "--sandbox", request.sandbox ?? "workspace-write",
+                         "--approve-for-me",
+                         "-c", "sandbox_workspace_write.network_access=false"]
+        if let model = Self.codexModel(request.model) {
+            arguments += ["--model", model]
+        }
+        if let workspace = request.workingDirectory {
+            arguments += ["--cd", workspace.path]
+        }
+        arguments.append("-")
+
+        return streamingRunner.run(
+            executablePath: binaryPath,
+            arguments: arguments,
+            standardInput: Data(request.prompt.utf8),
+            workingDirectory: request.workingDirectory,
+            timeout: request.timeout,
+            launchFailurePrefix: "Couldn't launch Codex CLI",
+            decodeLine: Self.decodeRunLine,
+            finish: Self.finishRun,
+            onEvent: onEvent
+        )
     }
 
     @discardableResult
@@ -71,6 +94,7 @@ final class CodexAutomationProvider: AutomationProvider {
 
     func cancelAll() {
         runner.cancelAll()
+        streamingRunner.cancelAll()
     }
 
     private static func codexModel(_ model: String?) -> String? {
@@ -78,6 +102,21 @@ final class CodexAutomationProvider: AutomationProvider {
         let claudeAliases: Set<String> = ["haiku", "sonnet", "opus"]
         let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return claudeAliases.contains(normalized) ? nil : model
+    }
+
+    private static func decodeRunLine(_ line: String) -> [AutomationEvent] {
+        guard let event = try? CodexStreamEvent.decode(line), let automationEvent = event.automationEvent else {
+            return []
+        }
+        return [automationEvent]
+    }
+
+    private static func finishRun(_ errors: Data, _ status: Int32) -> AutomationEvent {
+        guard status == 0 else {
+            return .failed(failureMessage(errors,
+                fallback: "Codex CLI exited unexpectedly (status \(status))."))
+        }
+        return .failed(failureMessage(errors, fallback: "Codex CLI exited without a terminal event."))
     }
 
     private static func decode(_ output: Data, _ errors: Data, _ status: Int32) -> [AutomationEvent] {

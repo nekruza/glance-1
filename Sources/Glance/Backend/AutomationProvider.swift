@@ -37,13 +37,15 @@ struct AutomationRequest: Equatable {
     let model: String?
     let workingDirectory: URL?
     let timeout: TimeInterval
+    let systemPrompt: String?
 
     init(prompt: String, model: String? = nil, workingDirectory: URL? = nil,
-         timeout: TimeInterval = 240) {
+         timeout: TimeInterval = 240, systemPrompt: String? = nil) {
         self.prompt = prompt
         self.model = model
         self.workingDirectory = workingDirectory
         self.timeout = timeout
+        self.systemPrompt = systemPrompt
     }
 }
 
@@ -68,11 +70,14 @@ struct AutomationRunRequest: Equatable {
     let disallowedTools: [String]
     let systemPrompt: String?
     let sandbox: String?
+    /// TaskRunner's hard cap owns task lifetime. Provider-level timeouts sit
+    /// beyond it as a failsafe for callers that do not cancel promptly.
+    let timeout: TimeInterval
 
     init(prompt: String, model: String? = nil, workingDirectory: URL? = nil,
          transcriptURL: URL? = nil, allowedTools: [String] = [],
          disallowedTools: [String] = [], systemPrompt: String? = nil,
-         sandbox: String? = nil) {
+         sandbox: String? = nil, timeout: TimeInterval = 60 * 60) {
         self.prompt = prompt
         self.model = model
         self.workingDirectory = workingDirectory
@@ -81,6 +86,7 @@ struct AutomationRunRequest: Equatable {
         self.disallowedTools = disallowedTools
         self.systemPrompt = systemPrompt
         self.sandbox = sandbox
+        self.timeout = timeout
     }
 }
 

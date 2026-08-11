@@ -17,12 +17,16 @@ final class TaskRunner: ObservableObject {
     @Published private(set) var activeRunIds: Set<UUID> = []
 
     private let store: TaskStore
-    private let binaryPath: String
-    private var processes: [UUID: Process] = [:]        // runId → agent process
+    private let provider: AutomationProvider
+    /// Each provider call owns its child process. TaskRunner keeps only the
+    /// cancellation capability, never the provider's Process instance.
+    private var cancellations: [UUID: AutomationCancellation] = [:]
+    private var planningText: [UUID: String] = [:]
     private var stallTimers: [UUID: DispatchWorkItem] = [:]
     private var hardCapTimers: [UUID: DispatchWorkItem] = [:]
     private var repoLocks: Set<String> = []             // FR47 per-repo mutex
     private var queuedTaskIds: [UUID] = []
+    private var isCancellingAll = false
 
     /// FR47 concurrency cap.
     private let maxConcurrent = 2
@@ -37,9 +41,16 @@ final class TaskRunner: ObservableObject {
     /// Fired when a task reaches `done` — the board should re-rank (FR39).
     var onTaskCompleted: (() -> Void)?
 
-    init(store: TaskStore, binaryPath: String) {
+    init(store: TaskStore, provider: AutomationProvider) {
         self.store = store
-        self.binaryPath = binaryPath
+        self.provider = provider
+    }
+
+    /// Task 6 injects the selected provider. Keep the current AppCoordinator
+    /// construction source-compatible until that migration lands.
+    convenience init(store: TaskStore, binaryPath: String) {
+        self.init(store: store, provider: ClaudeAutomationProvider(binaryPath: binaryPath,
+                                                                     version: "compatibility"))
     }
 
     // MARK: - Phase 1: Plan (FR44.1)
@@ -62,6 +73,7 @@ final class TaskRunner: ObservableObject {
         lockRepo(task)
 
         let run = store.addRun(TaskRun(taskId: taskId, agentId: task.agentId,
+                                       provider: provider.descriptor.kind,
                                        workspacePath: task.workspacePath ?? ""))
         activeRunIds.insert(run.id)
 
@@ -78,33 +90,84 @@ final class TaskRunner: ObservableObject {
         """
 
         let profile = Preferences.shared.agent(task.agentId)
-        runOneShot(prompt: prompt, cwd: task.workspacePath,
-                   model: Self.resolveModel(task: task, profile: profile),
-                   systemPrompt: profile?.systemPrompt) { [weak self] output in
-            guard let self, var run = self.store.run(run.id) else { return }
-            guard var task = self.store.task(taskId) else { return }
-            if let plan = output, !plan.isEmpty {
-                run.plan = plan
-                self.store.updateRun(run)
+        startPlanning(runID: run.id, taskID: taskId, prompt: prompt,
+                      workingDirectory: task.workspacePath,
+                      model: Self.resolveModel(task: task, profile: profile),
+                      systemPrompt: profile?.systemPrompt)
+    }
 
-                // §6 A7: auto-approve small, non-code, boundary-free plans
-                // when the user has the policy on. Code is always gated.
-                if Self.planAutoApprovable(task: task, plan: plan) {
-                    self.store.record(ApprovalRecord(
-                        taskId: task.id, runId: run.id, gate: .plan,
-                        decision: .approved, detail: "auto-approved by policy (non-code, small, no boundary actions)"))
-                    task.status = .executing
-                    self.store.update(task)
-                    self.execute(runId: run.id, guidance: nil)
-                } else {
-                    task.status = .awaitingPlanApproval
-                    self.store.update(task)
-                    self.onGate?(.plan, "Plan ready for “\(task.title)”", taskId, run.id)
-                }
-            } else {
-                self.finishRun(run.id, state: .failed, reason: "Couldn't generate a plan (Claude CLI error).")
+    private func startPlanning(runID: UUID, taskID: UUID, prompt: String,
+                               workingDirectory: String?, model: String?, systemPrompt: String?) {
+        planningText[runID] = ""
+        let request = AutomationRequest(
+            prompt: prompt,
+            model: model,
+            workingDirectory: workingDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) },
+            timeout: 240,
+            systemPrompt: systemPrompt
+        )
+        let cancellation = provider.runText(request) { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handlePlanningEvent(event, runID: runID, taskID: taskID)
             }
         }
+        guard activeRunIds.contains(runID), store.run(runID)?.state.isTerminal == false else {
+            cancellation.cancel()
+            return
+        }
+        cancellations[runID] = cancellation
+    }
+
+    private func handlePlanningEvent(_ event: AutomationEvent, runID: UUID, taskID: UUID) {
+        guard let run = store.run(runID), !run.state.isTerminal else { return }
+        switch event {
+        case .sessionID(let sessionID):
+            persist(sessionID: sessionID, for: runID)
+        case .text(let text):
+            planningText[runID, default: ""] += text
+        case .completed:
+            let plan = planningText.removeValue(forKey: runID) ?? ""
+            cancellations[runID] = nil
+            completePlanning(runID: runID, taskID: taskID, plan: plan)
+        case .failed(let reason):
+            planningText[runID] = nil
+            finishRun(runID, state: .failed, reason: reason)
+        }
+    }
+
+    private func completePlanning(runID: UUID, taskID: UUID, plan: String) {
+        guard var run = store.run(runID), var task = store.task(taskID), !run.state.isTerminal else { return }
+        guard !plan.isEmpty else {
+            finishRun(runID, state: .failed,
+                      reason: "Couldn't generate a plan (\(provider.descriptor.displayName) error).")
+            return
+        }
+        run.plan = plan
+        store.updateRun(run)
+
+        // §6 A7: auto-approve small, non-code, boundary-free plans when the
+        // user has the policy on. Code is always gated.
+        if Self.planAutoApprovable(task: task, plan: plan) {
+            store.record(ApprovalRecord(
+                taskId: task.id, runId: run.id, gate: .plan,
+                decision: .approved, detail: "auto-approved by policy (non-code, small, no boundary actions)"))
+            task.status = .executing
+            store.update(task)
+            execute(runId: run.id, guidance: nil)
+        } else {
+            task.status = .awaitingPlanApproval
+            store.update(task)
+            onGate?(.plan, "Plan ready for “\(task.title)”", taskID, run.id)
+        }
+    }
+
+    private func persist(sessionID: String, for runID: UUID) {
+        guard var run = store.run(runID), !run.state.isTerminal else { return }
+        run.cliSessionID = sessionID
+        if provider.descriptor.kind == .claude, run.claudeSessionId == nil {
+            run.claudeSessionId = sessionID
+        }
+        store.updateRun(run)
     }
 
     /// Model precedence: explicit task override → agent preference → opus.
@@ -201,105 +264,83 @@ final class TaskRunner: ObservableObject {
         # Approved plan
         \(run.plan)
         """
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binaryPath)
-        // Prompt goes via STDIN: --allowedTools/--disallowedTools are variadic
-        // and would swallow a trailing positional prompt argument.
         let profile = Preferences.shared.agent(task.agentId)
         // Profiles can NARROW the toolset; boundary denies below apply always.
         let tools = profile?.allowedTools
             ?? ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch"]
-        var args = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose",
-                    "--allowedTools"] + tools
         // --allowedTools only ADDS grants — the user's global settings may
         // already allow e.g. Bash. Deny wins, so explicitly disallow every
         // vocabulary tool the profile leaves out, plus the boundary rules.
         let denied = AgentProfile.toolVocabulary.filter { !tools.contains($0) }
-        args += ["--disallowedTools"] + denied
-        args += ["Bash(git push:*)", "Bash(gh pr:*)", "Bash(gh api:*)"]
-        if let persona = profile?.systemPrompt, !persona.isEmpty {
-            args += ["--append-system-prompt", persona]
-        }
-        if let model = Self.resolveModel(task: task, profile: profile) {
-            args += ["--model", model]
-        }
-        proc.arguments = args
-        proc.currentDirectoryURL = workspace
-
-        let inPipe = Pipe()
-        let out = Pipe()
-        proc.standardInput = inPipe
-        proc.standardOutput = out
-        proc.standardError = Pipe()
-
-        var buffer = Data()
-        let transcriptHandle = try? FileHandle(forWritingAtPath: transcriptURL.path)
-        out.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            transcriptHandle?.write(data)
-            buffer.append(data)
-            // Parse complete lines for progress + session id.
-            while let nl = buffer.firstIndex(of: 0x0A) {
-                let lineData = Data(buffer[buffer.startIndex..<nl])
-                buffer.removeSubrange(buffer.startIndex...nl)
-                Task { @MainActor [weak self] in
-                    self?.ingestStreamLine(lineData, runId: runId)
-                }
-            }
-        }
-
-        proc.terminationHandler = { [weak self] p in
-            transcriptHandle?.closeFile()
+        let request = AutomationRunRequest(
+            prompt: prompt,
+            model: Self.resolveModel(task: task, profile: profile),
+            workingDirectory: workspace,
+            transcriptURL: transcriptURL,
+            allowedTools: tools,
+            disallowedTools: denied + ["Bash(git push:*)", "Bash(gh pr:*)", "Bash(gh api:*)"],
+            systemPrompt: profile?.systemPrompt,
+            sandbox: "workspace-write",
+            timeout: hardCap + 60
+        )
+        armStallTimer(runId)
+        armHardCap(runId)
+        let cancellation = provider.startRun(request) { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.executionEnded(runId: runId, exitStatus: p.terminationStatus)
+                self?.handleExecutionEvent(event, runId: runId)
             }
         }
-
-        do {
-            try proc.run()
-            if let data = prompt.data(using: .utf8) {
-                try? inPipe.fileHandleForWriting.write(contentsOf: data)
-            }
-            try? inPipe.fileHandleForWriting.close()
-            processes[runId] = proc
-            armStallTimer(runId)
-            armHardCap(runId)
-        } catch {
-            finishRun(runId, state: .failed, reason: "Couldn't launch agent: \(error.localizedDescription)")
-        }
-    }
-
-    private func ingestStreamLine(_ data: Data, runId: UUID) {
-        guard var run = store.run(runId) else { return }
-        guard let line = try? JSONDecoder().decode(StreamLine.self, from: data) else { return }
-        if let sid = line.sessionId, run.claudeSessionId == nil {
-            run.claudeSessionId = sid
-            store.updateRun(run)
-        }
-        if let text = line.streamedText, !text.isEmpty {
-            armStallTimer(runId) // output = alive (FR50)
-            run.progressTail = String((run.progressTail + text).suffix(2000))
-            store.updateRun(run)
-        }
-        if line.isResult, line.isError == true {
-            // surfaced at exit; nothing to do here
-        }
-    }
-
-    private func executionEnded(runId: UUID, exitStatus: Int32) {
-        guard let run = store.run(runId), !run.state.isTerminal else { return }
-        clearTimers(runId)
-        processes[runId] = nil
-        guard let task = store.task(run.taskId) else { return }
-
-        if exitStatus != 0 {
-            finishRun(runId, state: .failed,
-                      reason: "Agent exited with status \(exitStatus). See transcript.")
+        guard activeRunIds.contains(runId), store.run(runId)?.state.isTerminal == false else {
+            cancellation.cancel()
             return
         }
+        cancellations[runId] = cancellation
+    }
+
+    private func handleExecutionEvent(_ event: AutomationEvent, runId: UUID) {
+        guard let run = store.run(runId), !run.state.isTerminal else { return }
+        appendTranscript(event, runId: runId)
+        switch event {
+        case .sessionID(let sessionID):
+            persist(sessionID: sessionID, for: runId)
+        case .text(let text):
+            guard !text.isEmpty, var current = store.run(runId) else { return }
+            armStallTimer(runId) // output = alive (FR50)
+            current.progressTail = String((current.progressTail + text).suffix(2000))
+            store.updateRun(current)
+        case .completed:
+            executionEnded(runId: runId)
+        case .failed(let reason):
+            finishRun(runId, state: .failed, reason: reason)
+        }
+    }
+
+    private func executionEnded(runId: UUID) {
+        guard let run = store.run(runId), !run.state.isTerminal else { return }
+        clearTimers(runId)
+        cancellations[runId] = nil
+        guard let task = store.task(run.taskId) else { return }
         packageArtifacts(runId: runId, task: task)
+    }
+
+    /// Keep the transcript app-owned and provider-neutral. Providers expose
+    /// normalized events, so neither Codex's external thread log nor Claude's
+    /// raw stream format becomes part of persisted task history.
+    private func appendTranscript(_ event: AutomationEvent, runId: UUID) {
+        guard let path = store.run(runId)?.transcriptPath,
+              let handle = FileHandle(forWritingAtPath: path) else { return }
+        defer { try? handle.close() }
+        let record: [String: String]
+        switch event {
+        case .text(let text): record = ["type": "text", "text": text]
+        case .sessionID(let id): record = ["type": "session", "id": id]
+        case .completed: record = ["type": "completed"]
+        case .failed(let reason): record = ["type": "failed", "reason": reason]
+        }
+        guard var data = try? JSONSerialization.data(withJSONObject: record) else { return }
+        data.append(0x0A)
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: data)
     }
 
     // MARK: - Phase 4: Package artifacts + review gate (FR44.4, FR52)
@@ -376,7 +417,7 @@ final class TaskRunner: ObservableObject {
 
     /// Execute one gated boundary action (FR53): push + draft PR.
     func releaseBoundaryAction(runId: UUID, artifactId: UUID) {
-        guard var run = store.run(runId), let task = store.task(run.taskId),
+        guard let run = store.run(runId), let task = store.task(run.taskId),
               let idx = run.artifacts.firstIndex(where: { $0.id == artifactId }),
               run.artifacts[idx].boundary, !run.artifacts[idx].released else { return }
         let branch = run.artifacts[idx].payloadRef
@@ -412,21 +453,30 @@ final class TaskRunner: ObservableObject {
 
     // MARK: - Cancel / failure (FR48, FR51)
 
-    func cancelRun(runId: UUID) {
-        processes[runId]?.terminate()
-        finishRun(runId, state: .cancelled, reason: "Cancelled by user.")
+    func cancelRun(runId: UUID, reason: String = "Cancelled by user.") {
+        finishRun(runId, state: .cancelled, reason: reason)
     }
 
     var hasActiveRuns: Bool { !activeRunIds.isEmpty }
 
-    func cancelAll() {
-        for id in activeRunIds { cancelRun(runId: id) }
+    func cancelAll(reason: String = "Cancelled by user.") {
+        // Provider changes are a session boundary: do not let the cleanup of
+        // one cancelled run launch queued work through the old provider.
+        isCancellingAll = true
+        let queued = queuedTaskIds
+        queuedTaskIds.removeAll()
+        for taskID in queued where store.task(taskID)?.status == .queued {
+            store.setStatus(taskID, .ready)
+        }
+        let active = activeRunIds
+        for id in active { cancelRun(runId: id, reason: reason) }
+        isCancellingAll = false
     }
 
     private func finishRun(_ runId: UUID, state: RunState, reason: String?) {
         clearTimers(runId)
-        processes[runId]?.terminate()
-        processes[runId] = nil
+        planningText[runId] = nil
+        cancellations.removeValue(forKey: runId)?.cancel()
         guard var run = store.run(runId) else { return }
         guard !run.state.isTerminal else { return }
         run.state = state
@@ -437,23 +487,22 @@ final class TaskRunner: ObservableObject {
             task.status = (state == .cancelled) ? .ready : .failed
             store.update(task)
             unlockRepo(task)
-            cleanup(runId: runId, task: task)
             if state == .failed { onEvent?("“\(task.title)” failed — \(reason ?? "")", task.id) }
         }
         activeRunIds.remove(runId)
-        startNextQueued()
+        if !isCancellingAll { startNextQueued() }
     }
 
     private func cleanup(runId: UUID, task: TaskItem) {
         activeRunIds.remove(runId)
         unlockRepo(task)
-        startNextQueued()
+        if !isCancellingAll { startNextQueued() }
     }
 
     // MARK: - Queue / mutex (FR47)
 
     private func startNextQueued() {
-        guard activeRunIds.count < maxConcurrent, !queuedTaskIds.isEmpty else { return }
+        guard !isCancellingAll, activeRunIds.count < maxConcurrent, !queuedTaskIds.isEmpty else { return }
         let next = queuedTaskIds.removeFirst()
         if var t = store.task(next), t.status == .queued {
             t.status = .ready
@@ -510,50 +559,7 @@ final class TaskRunner: ObservableObject {
         hardCapTimers.removeValue(forKey: runId)?.cancel()
     }
 
-    // MARK: - One-shot helper (plan phase)
-
-    private func runOneShot(prompt: String, cwd: String?, model: String? = nil,
-                            systemPrompt: String? = nil,
-                            completion: @escaping (String?) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async { [binaryPath] in
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: binaryPath)
-            var args = ["-p"]
-            if let model { args += ["--model", model] }
-            if let systemPrompt, !systemPrompt.isEmpty {
-                args += ["--append-system-prompt", systemPrompt]
-            }
-            args.append(prompt)
-            proc.arguments = args
-            if let cwd, !cwd.isEmpty {
-                proc.currentDirectoryURL = URL(fileURLWithPath: cwd)
-            } else {
-                proc.currentDirectoryURL = FileManager.default.temporaryDirectory
-            }
-            let out = Pipe()
-            proc.standardOutput = out
-            proc.standardError = Pipe()
-            // A hung `claude` must not strand the plan phase forever — kill
-            // after a generous cap (same pattern as ComposioIngest); nil flows
-            // through the normal plan-failure path.
-            let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 240, execute: killer)
-            var text: String?
-            do {
-                try proc.run()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                proc.waitUntilExit()
-                killer.cancel()
-                if proc.terminationStatus == 0 {
-                    text = String(data: data, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            } catch { killer.cancel() }
-            DispatchQueue.main.async { completion(text) }
-        }
-    }
-
-    private static func shell(_ args: [String], cwd: String) -> (status: Int32, output: String) {
+    nonisolated private static func shell(_ args: [String], cwd: String) -> (status: Int32, output: String) {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = args
