@@ -10,4 +10,9 @@ final class AskBackendKindTests: XCTestCase {
     func testCodexUsesCLIDisplayName() {
         XCTAssertEqual(AskBackendKind.codex.displayName, "Codex CLI")
     }
+
+    @MainActor
+    func testTaskSettingsExposeAskBackendControl() {
+        XCTAssertEqual(TaskSettingsView.askBackendRowTitle, "Ask backend")
+    }
 }

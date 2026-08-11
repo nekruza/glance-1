@@ -5,6 +5,8 @@ import SwiftUI
 /// fallback when the task system is unavailable).
 struct TaskSettingsView: View {
 
+    static let askBackendRowTitle = "Ask backend"
+
     enum Section: String, CaseIterable {
         case general = "General"
         case appearance = "Appearance"
@@ -34,7 +36,7 @@ struct TaskSettingsView: View {
     @ObservedObject private var prefs = Preferences.shared
     @State private var section: Section = .general
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
-    @State private var cliStatus: ClaudeLocator.Status = ClaudeLocator.check()
+    @State private var askBackendStatus: AskBackendStatus = .notConnected
     @State private var testing = false
     @State private var testResult: String?
 
@@ -46,6 +48,11 @@ struct TaskSettingsView: View {
 
     @ObservedObject var session: TaskBoardSession
     var onClose: () -> Void
+
+    private enum AskBackendStatus {
+        case ok(version: String)
+        case notConnected
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,6 +73,7 @@ struct TaskSettingsView: View {
             }
             .frame(maxHeight: .infinity)
         }
+        .onAppear { rescanAskBackend() }
     }
 
     // MARK: - Chrome
@@ -504,9 +512,23 @@ struct TaskSettingsView: View {
 
     private var aiSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            row("Claude CLI", cliSubtitle) {
+            row(Self.askBackendRowTitle, "Local CLI used by the screen-aware overlay") {
+                Picker("", selection: $prefs.askBackend) {
+                    ForEach(AskBackendKind.allCases, id: \.self) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+                .onChange(of: prefs.askBackend) { _, _ in
+                    testResult = nil
+                    rescanAskBackend()
+                }
+            }
+            Divider().overlay(DS.divider)
+            row(prefs.askBackend.displayName, askBackendSubtitle) {
                 HStack(spacing: DS.Space.xs) {
-                    if case .ok = cliStatus {
+                    if case .ok = askBackendStatus {
                         pill("Connected", DS.success, soft: DS.successSoft)
                     } else {
                         pill("Not connected", DS.warning, soft: DS.warningSoft)
@@ -714,17 +736,17 @@ struct TaskSettingsView: View {
         .foregroundStyle(color)
     }
 
-    private var cliSubtitle: String {
-        if case .ok(_, let v) = cliStatus {
-            return "claude " + (v.split(separator: " ").first.map(String.init) ?? v)
+    private var askBackendSubtitle: String {
+        if case .ok(let version) = askBackendStatus {
+            return prefs.askBackend.rawValue + " " + (version.split(separator: " ").first.map(String.init) ?? version)
         }
-        return "Install/authenticate the Claude CLI to run tasks"
+        return "Install and sign in to (prefs.askBackend.displayName) to use the ask overlay"
     }
 
     private func runTest() {
         testing = true
         testResult = nil
-        BackendTester.test { outcome in
+        BackendTester.test(kind: prefs.askBackend) { outcome in
             testing = false
             switch outcome {
             case .success(let s):
@@ -732,7 +754,24 @@ struct TaskSettingsView: View {
             case .failure(let msg):
                 testResult = msg
             }
-            cliStatus = ClaudeLocator.check()
+            rescanAskBackend()
+        }
+    }
+
+    private func rescanAskBackend() {
+        switch prefs.askBackend {
+        case .claude:
+            if case .ok(_, let version) = ClaudeLocator.check() {
+                askBackendStatus = .ok(version: version)
+            } else {
+                askBackendStatus = .notConnected
+            }
+        case .codex:
+            if case .ok(_, let version) = CodexLocator.check() {
+                askBackendStatus = .ok(version: version)
+            } else {
+                askBackendStatus = .notConnected
+            }
         }
     }
 
