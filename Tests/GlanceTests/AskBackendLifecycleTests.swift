@@ -30,16 +30,25 @@ final class AskBackendLifecycleTests: XCTestCase {
         XCTAssertFalse(lifecycle.isCurrent(inFlightLease))
     }
 
-    func testCoordinatorDismissalShutsDownItsActiveBackend() {
+    func testCoordinatorDismissalClearsVisibleTranscriptAndShutsDownItsActiveBackend() {
         let lifecycle = AskBackendLifecycle()
         let backend = BackendSpy()
         lifecycle.install(backend)
-        let coordinator = AppCoordinator(backendLifecycle: lifecycle)
+        let overlay = OverlayController()
+        let coordinator = AppCoordinator(backendLifecycle: lifecycle, overlay: overlay)
+        overlay.session.turns = [
+            OverlaySession.Turn(question: "Old question", answer: "Old answer")
+        ]
+        overlay.session.input = "Old draft"
+        overlay.session.suggestions = ["Old follow-up"]
 
         coordinator.endSession()
 
         XCTAssertEqual(backend.shutdownCount, 1)
         XCTAssertNil(lifecycle.backend)
+        XCTAssertTrue(overlay.session.turns.isEmpty)
+        XCTAssertTrue(overlay.session.input.isEmpty)
+        XCTAssertTrue(overlay.session.suggestions.isEmpty)
     }
 }
 

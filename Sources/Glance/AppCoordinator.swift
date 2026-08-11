@@ -8,7 +8,7 @@ import Combine
 final class AppCoordinator {
 
     private let hotkey = HotkeyManager()
-    private let overlay = OverlayController()
+    private let overlay: OverlayController
     private let prefs = Preferences.shared
 
     // V2 task system (created in start() once the CLI path is known).
@@ -40,10 +40,17 @@ final class AppCoordinator {
     private var cancellables = Set<AnyCancellable>()
 
     init() {
+        self.overlay = OverlayController()
         self.backendLifecycle = AskBackendLifecycle()
     }
 
     init(backendLifecycle: AskBackendLifecycle) {
+        self.overlay = OverlayController()
+        self.backendLifecycle = backendLifecycle
+    }
+
+    init(backendLifecycle: AskBackendLifecycle, overlay: OverlayController) {
+        self.overlay = overlay
         self.backendLifecycle = backendLifecycle
     }
 
@@ -693,9 +700,11 @@ final class AppCoordinator {
     func endSession() {
         teardownBackend()
         pendingImagePNG = nil
-        // Attaching is an explicit, per-summon opt-in — never carry it over.
-        overlay.session.attachImage = false
-        overlay.session.isWorking = false
+        pendingCaptureLabel = ""
+        // A new invocation gets a new backend, so it must also start with an
+        // empty visible conversation and no per-turn UI state.
+        overlay.session.clearTranscript()
+        overlay.session.captureLabel = ""
     }
 
     /// App is quitting: don't leave orphaned claude processes behind, and

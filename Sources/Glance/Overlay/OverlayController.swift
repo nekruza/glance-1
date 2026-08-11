@@ -29,8 +29,7 @@ final class OverlayController {
         panel.onCancel = { [weak self] in self?.dismiss() }
     }
 
-    /// Present the overlay. The session persists across dismissals — previous
-    /// messages stay until the user clears them with the trash button.
+    /// Present the reusable overlay for a fresh invocation.
     func present() {
         session.dismissHandler = { [weak self] in self?.dismiss() }
 
