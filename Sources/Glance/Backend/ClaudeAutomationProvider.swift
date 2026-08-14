@@ -115,6 +115,7 @@ final class ClaudeAutomationProvider: AutomationProvider {
 
     func cancelAll() {
         runner.cancelAll()
+        streamingRunner.cancelAll()
     }
 
     private static func decode(_ output: Data, _ errors: Data, _ status: Int32) -> [AutomationEvent] {
@@ -226,7 +227,11 @@ final class AutomationStreamingRunner {
         var terminationStatus: Int32?
         var timeoutWork: DispatchWorkItem?
         var forceKillWork: DispatchWorkItem?
-        var terminalQueued = false
+        /// Terminal stream lines describe the CLI's requested outcome, but the
+        /// child lifecycle remains authoritative. Hold the line until the
+        /// process has exited and both pipes are drained.
+        var observedTerminal: AutomationEvent?
+        var terminalDelivered = false
         var stopRequested = false
 
         init(id: UUID, gate: CallbackGate, decodeLine: @escaping LineDecoder,
@@ -417,12 +422,29 @@ final class AutomationStreamingRunner {
             let lineData = Data(state.stdoutBuffer[state.stdoutBuffer.startIndex..<newline])
             state.stdoutBuffer.removeSubrange(state.stdoutBuffer.startIndex...newline)
             guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
-            emit(state.decodeLine(line), for: state)
+            recordDecodedEvents(state.decodeLine(line), for: state)
         }
         if state.stdoutClosed, !state.stdoutBuffer.isEmpty {
             let line = String(data: state.stdoutBuffer, encoding: .utf8)
             state.stdoutBuffer.removeAll(keepingCapacity: false)
-            if let line, !line.isEmpty { emit(state.decodeLine(line), for: state) }
+            if let line, !line.isEmpty { recordDecodedEvents(state.decodeLine(line), for: state) }
+        }
+    }
+
+    private func recordDecodedEvents(_ events: [AutomationEvent], for state: RunState) {
+        for event in events {
+            // A terminal line is intentionally not dispatched yet. It must be
+            // reconciled with exit status after stdout/stderr are fully read;
+            // this also keeps the timeout armed for a child that hangs after
+            // writing a nominal completion JSON line.
+            guard !state.terminalDelivered, state.observedTerminal == nil else { return }
+            switch event {
+            case .completed, .failed:
+                state.observedTerminal = event
+                return
+            case .text, .sessionID:
+                emit([event], for: state)
+            }
         }
     }
 
@@ -446,12 +468,26 @@ final class AutomationStreamingRunner {
 
     private func finishIfReady(_ state: RunState) {
         guard state.stdoutClosed, state.stderrClosed, let status = state.terminationStatus else { return }
-        if !state.terminalQueued { emit([state.finish(state.errors, status)], for: state) }
+        guard !state.terminalDelivered else {
+            cleanup(state)
+            return
+        }
+        // A non-zero exit wins over an optimistic terminal stream line. A
+        // clean exit preserves the provider's explicit terminal outcome; if
+        // there was no terminal line, retain the provider compatibility
+        // decoder (Claude accepts clean exit, Codex requires terminal JSON).
+        let outcome: AutomationEvent
+        if status == 0, let observedTerminal = state.observedTerminal {
+            outcome = observedTerminal
+        } else {
+            outcome = state.finish(state.errors, status)
+        }
+        emit([outcome], for: state)
         cleanup(state)
     }
 
     private func timeout(id: UUID, after timeout: TimeInterval) {
-        guard let state = runs[id], !state.terminalQueued else { return }
+        guard let state = runs[id], !state.terminalDelivered else { return }
         emit([.failed(state.timeoutFailure(timeout))], for: state)
         requestStop(state)
     }
@@ -483,13 +519,13 @@ final class AutomationStreamingRunner {
 
     private func emit(_ events: [AutomationEvent], for state: RunState) {
         for event in events {
-            guard !state.terminalQueued else { return }
+            guard !state.terminalDelivered else { return }
             let terminal: Bool
             switch event {
             case .completed, .failed: terminal = true
             case .text, .sessionID: terminal = false
             }
-            if terminal { state.terminalQueued = true }
+            if terminal { state.terminalDelivered = true }
             let gate = state.gate
             let id = state.id
             DispatchQueue.main.async { [weak self] in
@@ -506,7 +542,7 @@ final class AutomationStreamingRunner {
         state.forceKillWork?.cancel()
         state.onCleanup?()
         runs[state.id] = nil
-        if !state.terminalQueued { removeGate(state.id) }
+        if !state.terminalDelivered { removeGate(state.id) }
     }
 
     private func removeGate(_ id: UUID) {

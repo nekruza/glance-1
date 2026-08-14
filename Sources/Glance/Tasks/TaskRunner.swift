@@ -22,6 +22,10 @@ final class TaskRunner: ObservableObject {
     /// cancellation capability, never the provider's Process instance.
     private var cancellations: [UUID: AutomationCancellation] = [:]
     private var planningText: [UUID: String] = [:]
+    /// Planning always runs in an app-created scratch directory. This is kept
+    /// separately from `TaskRun.workspacePath`, which becomes the execution
+    /// worktree/scratch only after a plan is approved.
+    private var planningWorkspaces: [UUID: URL] = [:]
     private var stallTimers: [UUID: DispatchWorkItem] = [:]
     private var hardCapTimers: [UUID: DispatchWorkItem] = [:]
     private var repoLocks: Set<String> = []             // FR47 per-repo mutex
@@ -73,9 +77,13 @@ final class TaskRunner: ObservableObject {
         lockRepo(task)
 
         let run = store.addRun(TaskRun(taskId: taskId, agentId: task.agentId,
-                                       provider: provider.descriptor.kind,
-                                       workspacePath: task.workspacePath ?? ""))
+                                       provider: provider.descriptor.kind))
         activeRunIds.insert(run.id)
+
+        guard let planningWorkspace = createPlanningWorkspace(runId: run.id) else {
+            finishRun(run.id, state: .failed, reason: "Couldn't create an isolated planning workspace.")
+            return
+        }
 
         let prompt = """
         You are planning (NOT executing) a task. Produce a concise execution plan \
@@ -91,9 +99,26 @@ final class TaskRunner: ObservableObject {
 
         let profile = Preferences.shared.agent(task.agentId)
         startPlanning(runID: run.id, taskID: taskId, prompt: prompt,
-                      workingDirectory: task.workspacePath,
+                      workingDirectory: planningWorkspace.path,
                       model: Self.resolveModel(task: task, profile: profile),
                       systemPrompt: profile?.systemPrompt)
+    }
+
+    private func createPlanningWorkspace(runId: UUID) -> URL? {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glance-task-plan-\(runId.uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+            planningWorkspaces[runId] = workspace
+            return workspace
+        } catch {
+            return nil
+        }
+    }
+
+    private func removePlanningWorkspace(runId: UUID) {
+        guard let workspace = planningWorkspaces.removeValue(forKey: runId) else { return }
+        try? FileManager.default.removeItem(at: workspace)
     }
 
     private func startPlanning(runID: UUID, taskID: UUID, prompt: String,
@@ -137,6 +162,7 @@ final class TaskRunner: ObservableObject {
 
     private func completePlanning(runID: UUID, taskID: UUID, plan: String) {
         guard var run = store.run(runID), var task = store.task(taskID), !run.state.isTerminal else { return }
+        removePlanningWorkspace(runId: runID)
         guard !plan.isEmpty else {
             finishRun(runID, state: .failed,
                       reason: "Couldn't generate a plan (\(provider.descriptor.displayName) error).")
@@ -194,7 +220,10 @@ final class TaskRunner: ObservableObject {
     // MARK: - Phase 2: Plan gate (FR44.2, §6 A7)
 
     func approvePlan(runId: UUID, guidance: String? = nil) {
-        guard var run = store.run(runId), var task = store.task(run.taskId) else { return }
+        guard var run = store.run(runId), var task = store.task(run.taskId),
+              !run.state.isTerminal,
+              task.status == .awaitingPlanApproval,
+              activeRunIds.contains(runId) else { return }
         run.planApprovedAt = Date()
         store.updateRun(run)
         store.record(ApprovalRecord(taskId: task.id, runId: runId, gate: .plan,
@@ -206,7 +235,10 @@ final class TaskRunner: ObservableObject {
     }
 
     func rejectPlan(runId: UUID, reason: String = "") {
-        guard var run = store.run(runId), var task = store.task(run.taskId) else { return }
+        guard var run = store.run(runId), var task = store.task(run.taskId),
+              !run.state.isTerminal,
+              task.status == .awaitingPlanApproval,
+              activeRunIds.contains(runId) else { return }
         run.state = .planRejected
         run.endedAt = Date()
         store.updateRun(run)
@@ -221,6 +253,7 @@ final class TaskRunner: ObservableObject {
 
     private func execute(runId: UUID, guidance: String?) {
         guard var run = store.run(runId), let task = store.task(run.taskId) else { return }
+        removePlanningWorkspace(runId: runId)
 
         // Workspace: worktree for code (FR45), scratch dir otherwise (FR46).
         let workspace: URL
@@ -240,6 +273,7 @@ final class TaskRunner: ObservableObject {
             try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
             run.workspacePath = workspace.path
         }
+        run.state = .executing
         store.updateRun(run)
 
         let transcriptDir = FileManager.default.homeDirectoryForCurrentUser
@@ -476,6 +510,7 @@ final class TaskRunner: ObservableObject {
     private func finishRun(_ runId: UUID, state: RunState, reason: String?) {
         clearTimers(runId)
         planningText[runId] = nil
+        removePlanningWorkspace(runId: runId)
         cancellations.removeValue(forKey: runId)?.cancel()
         guard var run = store.run(runId) else { return }
         guard !run.state.isTerminal else { return }

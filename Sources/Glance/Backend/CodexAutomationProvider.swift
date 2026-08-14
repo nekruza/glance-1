@@ -21,17 +21,25 @@ final class CodexAutomationProvider: AutomationProvider {
     @discardableResult
     func runText(_ request: AutomationRequest,
                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        var arguments = ["exec", "--json", "--skip-git-repo-check"]
+        // One-shot work includes task planning. Keep it outside a user's
+        // checkout and make the Codex policy explicit just as task execution
+        // does: read-only filesystem access and no network.
+        let workspace = request.workingDirectory ?? FileManager.default.temporaryDirectory
+        var arguments = ["exec", "--json", "--skip-git-repo-check",
+                         "--sandbox", "read-only",
+                         "--approve-for-me",
+                         "-c", "sandbox_workspace_write.network_access=false"]
         if let model = Self.codexModel(request.model) {
             arguments += ["--model", model]
         }
+        arguments += ["--cd", workspace.path]
         arguments.append("-")
 
         return runner.run(
             executablePath: binaryPath,
             arguments: arguments,
             standardInput: Data(request.prompt.utf8),
-            workingDirectory: request.workingDirectory,
+            workingDirectory: workspace,
             timeout: request.timeout,
             launchFailurePrefix: "Couldn't launch Codex CLI",
             decode: Self.decode,

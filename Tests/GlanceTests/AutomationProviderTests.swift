@@ -113,7 +113,7 @@ final class AutomationProviderTests: XCTestCase {
     func testCodexOneShotWritesPromptToStdinAndParsesAgentMessage() throws {
         let result = try runFakeProvider(kind: .codex, prompt: "Return JSON")
 
-        XCTAssertEqual(result.arguments, ["exec", "--json", "--skip-git-repo-check", "-"])
+        XCTAssertEqual(result.arguments, codexReadOnlyArguments())
         XCTAssertEqual(result.standardInput, "Return JSON")
         XCTAssertEqual(result.events,
                        [.sessionID("thread-1"), .text("{\"ok\":true}"), .completed])
@@ -129,16 +129,14 @@ final class AutomationProviderTests: XCTestCase {
     func testCodexOneShotPlacesModelFlagBeforeStdinPlaceholder() throws {
         let result = try runFakeProvider(kind: .codex, prompt: "Return JSON", model: "gpt-test")
 
-        XCTAssertEqual(result.arguments,
-                       ["exec", "--json", "--skip-git-repo-check", "--model", "gpt-test", "-"])
+        XCTAssertEqual(result.arguments, codexReadOnlyArguments(model: "gpt-test"))
     }
 
     func testCodexOneShotOmitsClaudeAliasesPassedDirectly() throws {
         for alias in ["haiku", "sonnet", "opus"] {
             let result = try runFakeProvider(kind: .codex, prompt: "Return JSON", model: alias)
 
-            XCTAssertEqual(result.arguments,
-                           ["exec", "--json", "--skip-git-repo-check", "-"],
+            XCTAssertEqual(result.arguments, codexReadOnlyArguments(),
                            "Codex must not receive the Claude alias \(alias)")
         }
     }
@@ -421,6 +419,15 @@ final class AutomationProviderTests: XCTestCase {
                                        encoding: .utf8)
         return FakeInvocation(arguments: arguments, standardInput: standardInput,
                               environment: [:], events: events)
+    }
+
+    private func codexReadOnlyArguments(model: String? = nil) -> [String] {
+        var arguments = ["exec", "--json", "--skip-git-repo-check",
+                         "--sandbox", "read-only", "--approve-for-me",
+                         "-c", "sandbox_workspace_write.network_access=false"]
+        if let model { arguments += ["--model", model] }
+        arguments += ["--cd", FileManager.default.temporaryDirectory.path, "-"]
+        return arguments
     }
 
     private func makeFixtureDirectory() throws -> URL {
