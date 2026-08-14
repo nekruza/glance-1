@@ -7,6 +7,8 @@ import Foundation
 @MainActor
 final class Autopilot {
 
+    private let now: () -> Date
+
     /// Meetings we've kicked prep generation off for (this launch).
     private var prepRequested: Set<UUID> = []
     /// Meetings we've already posted a "prep ready" notification for.
@@ -16,6 +18,10 @@ final class Autopilot {
     /// Tasks we've kicked draft generation off for (this launch) — the
     /// retry-throttle: a failed draft is retried only on next launch.
     private var draftRequested: Set<UUID> = []
+
+    init(now: @escaping () -> Date = Date.init) {
+        self.now = now
+    }
 
     func tick(session: TaskBoardSession, notify: (String, UUID) -> Void) {
         let prefs = Preferences.shared
@@ -43,7 +49,7 @@ final class Autopilot {
     private func briefingTick(session: TaskBoardSession) {
         guard !session.briefingBusy else { return }
         let prefs = Preferences.shared
-        let now = Date()
+        let now = now()
         let cal = Calendar.current
         let weekday = cal.component(.weekday, from: now)
         guard weekday != 1, weekday != 7 else { return }

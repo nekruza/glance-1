@@ -3,6 +3,75 @@ import XCTest
 
 @MainActor
 final class ProviderGenerationTests: XCTestCase {
+    func testCoordinatorConfiguresCodexAskWithTaskCaptureInstructions() throws {
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glance-codex-ask-instructions-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = fixtureDirectory.appendingPathComponent("fake-codex")
+        let script = #"""
+        #!/bin/sh
+        fixture_dir="$(dirname "$0")"
+        printf '%s\n' "$@" > "$fixture_dir/args"
+        cat > "$fixture_dir/stdin"
+        printf '%s\n' '{"type":"thread.started","thread_id":"task-capture-thread"}'
+        printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Added.\n```glance-task\n{\"title\":\"Fix the Codex overlay\",\"taskKind\":\"code\"}\n```"}}'
+        printf '%s\n' '{"type":"turn.completed","usage":{}}'
+        """#
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let storeDirectory = fixtureDirectory.appendingPathComponent("store", isDirectory: true)
+        let store = TaskStore(directory: storeDirectory)
+        let overlay = OverlayController()
+        let provider = HoldingAutomationProvider(kind: .codex)
+        let automationFactory = AutomationProviderFactory(
+            makeClaude: { _, _ in HoldingAutomationProvider(kind: .claude) },
+            makeCodex: { _, _ in provider },
+            claudeStatus: { .ok(path: "/test/claude", version: "test") },
+            codexStatus: { .ok(path: executable.path, version: "test") }
+        )
+        let askFactory = AskBackendFactory(
+            makeClaude: { _ in RecordingAskBackend(kind: .claude, recorder: ProviderLaunchRecorder()) },
+            makeCodex: { CodexBackend(binaryPath: $0) },
+            claudeStatus: { .ok(path: "/test/claude", version: "test") },
+            codexStatus: { .ok(path: executable.path, version: "test") }
+        )
+        let coordinator = AppCoordinator(
+            backendLifecycle: AskBackendLifecycle(), overlay: overlay,
+            automationProviderFactory: automationFactory,
+            askBackendFactory: askFactory, taskStore: store
+        )
+        let previousBackend = Preferences.shared.askBackend
+        Preferences.shared.askBackend = .codex
+        defer {
+            Preferences.shared.askBackend = previousBackend
+            coordinator.endSession()
+            overlay.dismiss()
+        }
+
+        coordinator.replaceProviderServices(for: .codex)
+        coordinator.summon()
+        waitUntil { overlay.session.submitHandler != nil }
+        overlay.session.input = "Add a task from this screenshot"
+        overlay.session.submit()
+
+        waitUntil { store.tasks.contains { $0.title == "Fix the Codex overlay" } }
+        let arguments = try String(contentsOf: fixtureDirectory.appendingPathComponent("args"), encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        let configIndex = try XCTUnwrap(arguments.firstIndex(of: "-c"))
+        let override = arguments[configIndex + 1]
+        let prefix = "developer_instructions="
+        XCTAssertTrue(override.hasPrefix(prefix))
+        let encodedInstructions = String(override.dropFirst(prefix.count))
+        let instructions = try JSONDecoder().decode(String.self, from: Data(encodedInstructions.utf8))
+        XCTAssertEqual(instructions, TaskCapture.systemPrompt)
+        XCTAssertEqual(arguments.last, "-")
+        XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("stdin"), encoding: .utf8),
+                       "Add a task from this screenshot")
+        XCTAssertEqual(store.tasks.first?.taskKind, .code)
+    }
+
     func testCoordinatorCodexSelectionLaunchesOnlyCodexAcrossAIRequests() throws {
         let launches = ProviderLaunchRecorder()
         let harness = try CoordinatorProviderCoverageHarness(launches: launches)
@@ -192,6 +261,64 @@ final class ProviderGenerationTests: XCTestCase {
         harness.claude.emitComposio([.failed("stale Claude failure")])
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(completions.count, 1, "A stale provider callback must not settle the new UI twice")
+    }
+
+    /// Break protected: the scheduled briefing claims today's run before its
+    /// calendar freshness pull completes. A provider replacement must carry
+    /// that continuation to the new service bundle even when cancellation
+    /// suppresses the old CLI callback, or the whole workday is skipped.
+    func testProviderSwitchResumesScheduledBriefingAfterSuppressedCalendarPull() throws {
+        let harness = try CoordinatorProviderHarness(suppressClaudeCallbacksOnCancel: true)
+        defer { harness.removeStore() }
+        let prefs = Preferences.shared
+        let previous = (
+            key: prefs.composioKey,
+            enabledSources: prefs.enabledSources,
+            briefingEnabled: prefs.briefingEnabled,
+            briefingMinutes: prefs.briefingMinutes,
+            briefingLastRun: prefs.briefingLastRun,
+            prepEnabled: prefs.prepAutopilotEnabled
+        )
+        defer {
+            prefs.composioKey = previous.key
+            prefs.enabledSources = previous.enabledSources
+            prefs.briefingEnabled = previous.briefingEnabled
+            prefs.briefingMinutes = previous.briefingMinutes
+            prefs.briefingLastRun = previous.briefingLastRun
+            prefs.prepAutopilotEnabled = previous.prepEnabled
+        }
+        prefs.composioKey = "test-composio-token"
+        prefs.setFetch(.calendar, true)
+        prefs.briefingEnabled = true
+        prefs.briefingMinutes = 9 * 60
+        prefs.briefingLastRun = nil
+        prefs.prepAutopilotEnabled = false
+
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = TimeZone(secondsFromGMT: 0)
+        components.year = 2026
+        components.month = 8
+        components.day = 14 // Friday
+        components.hour = 10
+        let now = try XCTUnwrap(components.date)
+        let autopilot = Autopilot(now: { now })
+
+        harness.coordinator.replaceProviderServices(for: .claude)
+        let board = try XCTUnwrap(harness.coordinator.taskOverlay?.session)
+        autopilot.tick(session: board, notify: { _, _ in })
+        waitUntil { harness.claude.composioRequestCount == 1 }
+        XCTAssertEqual(harness.claude.textRequestCount, 0)
+
+        harness.coordinator.replaceProviderServices(for: .codex)
+
+        waitUntil { harness.codex.textRequestCount == 1 }
+        XCTAssertEqual(board.providerKind, .codex)
+        XCTAssertTrue(board.store.tasks.isEmpty,
+                      "Cancellation must not apply stale calendar pull data")
+        harness.claude.emitComposio([.text("[{\"title\":\"Stale meeting\"}]"), .completed])
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertTrue(board.store.tasks.isEmpty)
     }
 
     func testLateClaudeTaskAICallbackCannotMutateCodexBoard() throws {

@@ -17,6 +17,7 @@ final class CodexBackend: AskBackend {
     private var stdoutBuffer = Data()
     private var stderrBuffer = Data()
     private var threadID: String?
+    private var systemPrompt: String?
     private var activeImageURL: URL?
     private var currentHandler: ((AskBackendEvent) -> Void)?
     private var pendingTurn: PendingTurn?
@@ -35,6 +36,10 @@ final class CodexBackend: AskBackend {
         self.workingDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("glance-codex-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)", isDirectory: true)
         Self.createPrivateDirectory(at: workingDirectory)
+    }
+
+    func configure(systemPrompt: String) {
+        self.systemPrompt = systemPrompt
     }
 
     /// Codex's exec protocol needs a prompt to start, so warming only ensures
@@ -133,13 +138,18 @@ final class CodexBackend: AskBackend {
             arguments += ["resume", threadID]
         }
         arguments += ["--json", "--skip-git-repo-check"]
+        if let systemPrompt, !systemPrompt.isEmpty {
+            arguments += ["-c", Self.developerInstructionsOverride(systemPrompt)]
+        }
         let promptInput: Pipe?
-        if let activeImageURL {
+        if activeImageURL != nil || systemPrompt?.isEmpty == false {
             // `--image <FILE>...` is variadic on the first-turn command. Put
             // the explicit stdin prompt placeholder before it so the question
             // cannot be consumed as another image pathname.
             arguments.append("-")
-            arguments += ["--image", activeImageURL.path]
+            if let activeImageURL {
+                arguments += ["--image", activeImageURL.path]
+            }
             promptInput = Pipe()
         } else {
             arguments.append(question)
@@ -189,6 +199,15 @@ final class CodexBackend: AskBackend {
             resetProcessState()
             throw error
         }
+    }
+
+    /// `-c` accepts TOML values; a JSON string literal is also a valid TOML
+    /// basic string and preserves newlines, quotes, and backslashes exactly.
+    /// Codex injects this config field as a developer-role message, leaving
+    /// the user's prompt in stdin as a separate request.
+    private static func developerInstructionsOverride(_ instructions: String) -> String {
+        let encoded = (try? JSONEncoder().encode(instructions)) ?? Data(#""""#.utf8)
+        return "developer_instructions=" + (String(data: encoded, encoding: .utf8) ?? #""""#)
     }
 
     private func ingest(_ data: Data, from sourceProcess: Process) {

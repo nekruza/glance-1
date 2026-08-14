@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import Glance
 
 @MainActor
@@ -39,6 +40,58 @@ final class BackendTesterLifecycleTests: XCTestCase {
         session = nil
 
         XCTAssertEqual(cancelCount, 1)
+    }
+
+    /// Break protected: the reusable Tasks window retains its hosting view and
+    /// settings state after the traffic-light close. The real window delegate
+    /// boundary must cancel the health-check child even though neither the
+    /// controller nor session deinitializes.
+    func testClosingRetainedTasksWindowCancelsRunningBackendTest() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("backend-test-window-close-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("fake-codex")
+        let script = #"""
+        #!/bin/sh
+        trap '' TERM
+        printf '%s' "$$" > "$(dirname "$0")/pid"
+        exec /bin/sleep 60
+        """#
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let testSession = BackendTestSession { kind, timeout, completion in
+            BackendTester.test(
+                command: .init(executablePath: executable.path, arguments: []),
+                kind: kind, timeout: timeout, completion: completion
+            )
+        }
+        let storeDirectory = directory.appendingPathComponent("store", isDirectory: true)
+        let store = TaskStore(directory: storeDirectory)
+        let provider = WindowCloseAutomationProvider()
+        let controller = TaskOverlayController(
+            store: store,
+            runner: TaskRunner(store: store, provider: provider),
+            ai: TaskAI(provider: provider),
+            ingest: ComposioIngest(provider: provider),
+            backendTestSession: testSession
+        )
+        controller.session.showSettings = true
+        testSession.start(kind: .codex, timeout: 30)
+        controller.present()
+
+        let pidURL = directory.appendingPathComponent("pid")
+        waitForFile(pidURL)
+        let processID = try XCTUnwrap(pid_t(try String(contentsOf: pidURL, encoding: .utf8)))
+        defer { Darwin.kill(processID, SIGKILL) }
+        let window = try XCTUnwrap(NSApplication.shared.windows.first { $0.title == "Glance Tasks" })
+
+        window.close()
+
+        waitForProcessExit(processID, timeout: 1.5)
+        XCTAssertFalse(testSession.isTesting)
+        XCTAssertFalse(controller.isVisible)
     }
 
     func testCancellingBackendTestForceKillsAChildThatIgnoresTermination() throws {
@@ -95,4 +148,25 @@ final class BackendTesterLifecycleTests: XCTestCase {
         }
         XCTFail("Process \(processID) did not exit")
     }
+}
+
+private final class WindowCloseAutomationProvider: AutomationProvider {
+    let descriptor = AutomationProviderDescriptor(kind: .codex, version: "test")
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func cancelAll() {}
 }

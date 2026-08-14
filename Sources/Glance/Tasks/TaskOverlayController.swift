@@ -15,10 +15,12 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
     var onOpenSettings: (() -> Void)?
 
     init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
-         providerGeneration: UInt = 0) {
+         providerGeneration: UInt = 0,
+         backendTestSession: BackendTestSession? = nil) {
         self.store = store
         session = TaskBoardSession(store: store, runner: runner, ai: ai, ingest: ingest,
-                                   providerGeneration: providerGeneration)
+                                   providerGeneration: providerGeneration,
+                                   backendTestSession: backendTestSession)
         super.init()
         session.dismissHandler = { [weak self] in self?.dismiss() }
         session.settingsHandler = { [weak self] in
@@ -87,6 +89,7 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
     // Traffic-light close: window hides (isReleasedWhenClosed = false); drop
     // the app's dock presence with it.
     func windowWillClose(_ notification: Notification) {
+        session.cancelSettingsWork()
         AppActivation.release("tasks")
     }
 }

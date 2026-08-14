@@ -37,7 +37,7 @@ struct TaskSettingsView: View {
     @State private var section: Section = .general
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var askBackendStatus: AskBackendStatus = .notConnected
-    @StateObject private var backendTest = BackendTestSession()
+    @ObservedObject private var backendTest: BackendTestSession
 
     @State private var connections: [ComposioIngest.Connection] = []
     @State private var connectionsLoading = false
@@ -47,6 +47,12 @@ struct TaskSettingsView: View {
 
     @ObservedObject var session: TaskBoardSession
     var onClose: () -> Void
+
+    init(session: TaskBoardSession, onClose: @escaping () -> Void) {
+        self.session = session
+        self.onClose = onClose
+        _backendTest = ObservedObject(wrappedValue: session.backendTestSession)
+    }
 
     private enum AskBackendStatus {
         case ok(version: String)

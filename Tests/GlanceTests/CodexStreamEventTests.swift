@@ -223,6 +223,7 @@ final class CodexStreamEventTests: XCTestCase {
 
         let backend = CodexBackend(binaryPath: executable.path)
         defer { backend.shutdown() }
+        backend.configure(systemPrompt: "Capture requested tasks.")
 
         let firstCompleted = expectation(description: "first turn completes")
         var firstEvents: [AskBackendEvent] = []
@@ -236,7 +237,11 @@ final class CodexStreamEventTests: XCTestCase {
             .split(separator: "\n").map(String.init)
         let imageFlag = try XCTUnwrap(firstArguments.firstIndex(of: "--image"))
         let imagePath = firstArguments[imageFlag + 1]
-        XCTAssertEqual(firstArguments, ["exec", "--json", "--skip-git-repo-check", "-", "--image", imagePath])
+        XCTAssertEqual(firstArguments, [
+            "exec", "--json", "--skip-git-repo-check",
+            "-c", #"developer_instructions="Capture requested tasks.""#,
+            "-", "--image", imagePath
+        ])
         XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("stdin.1"), encoding: .utf8), "First")
         XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("image-state.1"), encoding: .utf8), "available")
         XCTAssertEqual(firstEvents, [.token("Hello"), .completed])
@@ -250,8 +255,12 @@ final class CodexStreamEventTests: XCTestCase {
 
         let secondArguments = try String(contentsOf: fixtureDirectory.appendingPathComponent("args.2"), encoding: .utf8)
             .split(separator: "\n").map(String.init)
-        XCTAssertEqual(secondArguments, ["exec", "resume", "abc", "--json", "--skip-git-repo-check", "Second"])
-        XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("stdin.2"), encoding: .utf8), "")
+        XCTAssertEqual(secondArguments, [
+            "exec", "resume", "abc", "--json", "--skip-git-repo-check",
+            "-c", #"developer_instructions="Capture requested tasks.""#,
+            "-"
+        ])
+        XCTAssertEqual(try String(contentsOf: fixtureDirectory.appendingPathComponent("stdin.2"), encoding: .utf8), "Second")
     }
 
     private func waitForFile(_ url: URL, timeout: TimeInterval = 2) {

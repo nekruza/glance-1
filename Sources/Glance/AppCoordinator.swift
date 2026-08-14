@@ -194,7 +194,7 @@ final class AppCoordinator {
         backendLifecycle.shutdown()
         suggestions?.cancel()
         taskRunner?.cancelAll(reason: "AI provider changed.")
-        taskOverlay?.session.cancelProviderWork()
+        taskOverlay?.session.prepareForProviderReplacement()
         settlePendingMeetingExtractions()
         providerServices?.provider.cancelAll()
         setupTasks(for: kind, generation: providerGeneration)
@@ -628,9 +628,7 @@ final class AppCoordinator {
         }
 
         let backend = selection.backend
-        if let claude = backend as? ClaudeBackend {
-            claude.appendSystemPrompt = TaskCapture.systemPrompt
-        }
+        backend.configure(systemPrompt: TaskCapture.systemPrompt)
         backend.firstTokenTimeout = 30 // FR13
         backend.startWarm()
         return (backend, connectionLabel(for: kind, version: selection.version))
@@ -703,6 +701,7 @@ final class AppCoordinator {
         let backend = ClaudeBackend(binaryPath: path,
                                     resumeSessionId: summary.id,
                                     resumeCwd: summary.cwd)
+        backend.configure(systemPrompt: TaskCapture.systemPrompt)
         // Resuming a large session (long transcript, project hooks) can take
         // far longer to first token than a fresh one.
         backend.firstTokenTimeout = 120

@@ -100,6 +100,7 @@ final class TaskBoardSession: ObservableObject {
     }
 
     let store: TaskStore
+    let backendTestSession: BackendTestSession
     private(set) var runner: TaskRunner
     private var ai: TaskAI
     private var ingest: ComposioIngest
@@ -109,6 +110,12 @@ final class TaskBoardSession: ObservableObject {
     private var providerGeneration: UInt
     private var pendingConnectionCompletions:
         [UUID: ([ComposioIngest.Connection]?, String?) -> Void] = [:]
+    /// A single-source pull may sequence provider-neutral work after fresh
+    /// data arrives (currently the scheduled briefing). Provider replacement
+    /// carries these continuations to the new bundle instead of losing them
+    /// with the cancelled CLI callback.
+    private var pendingPullCompletions: [UUID: () -> Void] = [:]
+    private var deferredPullCompletions: [() -> Void] = []
 
     private struct ProviderToken: Equatable {
         let generation: UInt
@@ -138,8 +145,10 @@ final class TaskBoardSession: ObservableObject {
     var providerKind: AskBackendKind { ai.providerKind }
 
     init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
-         providerGeneration: UInt = 0) {
+         providerGeneration: UInt = 0,
+         backendTestSession: BackendTestSession? = nil) {
         self.store = store
+        self.backendTestSession = backendTestSession ?? BackendTestSession()
         self.runner = runner
         self.ai = ai
         self.ingest = ingest
@@ -153,19 +162,43 @@ final class TaskBoardSession: ObservableObject {
     /// queued on the main actor.
     func replaceServices(runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
                          providerGeneration: UInt) {
-        cancelProviderWork()
+        cancelProviderWork(deferPullCompletions: true)
         self.runner = runner
         self.ai = ai
         self.ingest = ingest
         self.workContext = WorkContext(ingest: ingest)
         self.providerGeneration = providerGeneration
+        let continuations = deferredPullCompletions
+        deferredPullCompletions.removeAll()
+        continuations.forEach { $0() }
+    }
+
+    /// Invalidate old callbacks immediately while retaining any provider-
+    /// neutral work that must resume once replacement services are installed.
+    func prepareForProviderReplacement() {
+        cancelProviderWork(deferPullCompletions: true)
     }
 
     func cancelProviderWork() {
+        cancelProviderWork(deferPullCompletions: false)
+    }
+
+    func cancelSettingsWork() {
+        backendTestSession.cancel()
+    }
+
+    private func cancelProviderWork(deferPullCompletions: Bool) {
         providerGeneration &+= 1
         ingest.cancel()
         let pendingConnections = Array(pendingConnectionCompletions.values)
         pendingConnectionCompletions.removeAll()
+        let pendingPulls = Array(pendingPullCompletions.values)
+        pendingPullCompletions.removeAll()
+        if deferPullCompletions {
+            deferredPullCompletions.append(contentsOf: pendingPulls)
+        } else {
+            deferredPullCompletions.removeAll()
+        }
         pullingSource = nil
         pullAllRemaining = 0
         pullStatus = nil
@@ -245,10 +278,15 @@ final class TaskBoardSession: ObservableObject {
             return
         }
         let token = providerToken()
+        let completionID = UUID()
+        if let completion {
+            pendingPullCompletions[completionID] = completion
+        }
         pullingSource = target
         pullStatus = nil
         ingest.pull(target, store: store) { [weak self] result in
             guard let self, self.isCurrent(token) else { return }
+            let completion = self.pendingPullCompletions.removeValue(forKey: completionID)
             self.pullingSource = nil
             self.showPullStatus(Self.describe(target, result), token: token)
             self.autoTriage(result.createdIds)

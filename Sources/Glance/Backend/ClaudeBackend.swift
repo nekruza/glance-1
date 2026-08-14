@@ -77,6 +77,10 @@ final class ClaudeBackend: AskBackend {
 
     // MARK: - Lifecycle
 
+    func configure(systemPrompt: String) {
+        appendSystemPrompt = systemPrompt
+    }
+
     /// Pre-spawn the process (FR15 warm path). Idempotent.
     func startWarm() {
         ioQueue.async { [weak self] in self?.spawnIfNeeded() }

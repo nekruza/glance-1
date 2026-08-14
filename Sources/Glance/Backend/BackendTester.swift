@@ -226,12 +226,19 @@ final class BackendTestSession: ObservableObject {
         invalidate(to: kind)
     }
 
-    private func invalidate(to kind: AskBackendKind) {
+    /// Explicit owner-lifecycle boundary for retained settings surfaces. A
+    /// reusable window can close without releasing this object, so deinit is
+    /// not sufficient to stop its child process or reject a queued callback.
+    func cancel() {
         generation &+= 1
-        self.kind = kind
         cancellation?.cancel()
         cancellation = nil
         isTesting = false
         outcome = nil
+    }
+
+    private func invalidate(to kind: AskBackendKind) {
+        self.kind = kind
+        cancel()
     }
 }

@@ -22,7 +22,14 @@ enum AskBackendEvent {
 
 protocol AskBackend: AnyObject {
     var firstTokenTimeout: TimeInterval { get set }
+    func configure(systemPrompt: String)
     func startWarm()
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void)
     func shutdown()
+}
+
+extension AskBackend {
+    /// Backends that do not expose a distinct instruction channel may ignore
+    /// this. First-party implementations install it before warming.
+    func configure(systemPrompt: String) {}
 }
