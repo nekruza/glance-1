@@ -227,6 +227,10 @@ final class AutomationStreamingRunner {
         var terminationStatus: Int32?
         var timeoutWork: DispatchWorkItem?
         var forceKillWork: DispatchWorkItem?
+        /// Cancellation handles and provider bundles may be released as soon
+        /// as a provider switch begins. Keep the runner/state/process graph
+        /// alive until termination and both pipe drains let cleanup reap it.
+        var keepAlive: AutomationStreamingRunner?
         /// Terminal stream lines describe the CLI's requested outcome, but the
         /// child lifecycle remains authoritative. Hold the line until the
         /// process has exited and both pipes are drained.
@@ -325,6 +329,7 @@ final class AutomationStreamingRunner {
 
         let state = RunState(id: id, gate: gate, decodeLine: decodeLine, finish: finish,
                              onCleanup: onCleanup, timeoutFailure: timeoutFailure, onEvent: onEvent)
+        state.keepAlive = self
         state.process = process
         runs[id] = state
         process.terminationHandler = { [weak self] ended in
@@ -541,6 +546,7 @@ final class AutomationStreamingRunner {
         state.timeoutWork?.cancel()
         state.forceKillWork?.cancel()
         state.onCleanup?()
+        state.keepAlive = nil
         runs[state.id] = nil
         if !state.terminalDelivered { removeGate(state.id) }
     }

@@ -210,6 +210,39 @@ final class AutomationProviderTests: XCTestCase {
         provider.cancelAll()
     }
 
+    /// Break protected: callers release the old provider bundle immediately
+    /// after cancellation during a provider switch. The streaming runner must
+    /// still own and reap a task child that ignores SIGTERM.
+    func testStreamingCancellationForceKillsChildAfterProviderAndHandleReleased() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeIgnoringTermExecutable(in: fixtureDirectory)
+        let pidURL = fixtureDirectory.appendingPathComponent("pid")
+        let staleEvent = expectation(description: "cancelled streaming child emits no event")
+        staleEvent.isInverted = true
+        var provider: ClaudeAutomationProvider? = ClaudeAutomationProvider(
+            binaryPath: executable.path,
+            version: "test"
+        )
+        weak var weakProvider = provider
+        var cancellation: AutomationCancellation? = provider?.startRun(
+            AutomationRunRequest(prompt: "Wait", workingDirectory: fixtureDirectory, timeout: 5)
+        ) { _ in
+            staleEvent.fulfill()
+        }
+        waitForFile(pidURL)
+        let processID = try processID(from: pidURL)
+        defer { Darwin.kill(processID, SIGKILL) }
+
+        cancellation?.cancel()
+        cancellation = nil
+        provider = nil
+
+        XCTAssertNil(weakProvider, "the test must not keep the provider bundle alive")
+        waitForProcessExit(processID, timeout: 1.5)
+        wait(for: [staleEvent], timeout: 0.2)
+    }
+
     func testTimeoutForceKillsChildThatIgnoresSIGTERMAndFailsOnce() throws {
         let fixtureDirectory = try makeFixtureDirectory()
         defer { try? FileManager.default.removeItem(at: fixtureDirectory) }

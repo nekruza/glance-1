@@ -124,6 +124,11 @@ final class ComposioIngest {
     private let provider: AutomationProvider
     private let activeLock = NSLock()
     private var activeRequests: [UUID: ActiveRequest] = [:]
+    /// Invalidates both live provider calls and results already queued for the
+    /// main actor. A terminal provider event can remove its ActiveRequest
+    /// before that main-queue result executes, so request membership alone is
+    /// not a sufficient provider-switch gate.
+    private var operationGeneration: UInt64 = 0
     /// Concurrent: "Pull from all" runs 2–3 sources at once — each pull is its
     /// own provider subprocess, and completions all hop back to the main actor,
     /// so nothing here needs serialization.
@@ -156,6 +161,7 @@ final class ComposioIngest {
     /// completion with counts (dedup by sourceRef against all existing tasks).
     @MainActor
     func pull(_ target: FetchTarget, store: TaskStore, completion: @escaping (Result) -> Void) {
+        let generation = currentOperationGeneration()
         // Dedup identity: keys AND urls, case-folded, in one set. The model
         // authors sourceKey and sometimes drifts format between pulls (Slack
         // permalink vs channel+ts, Granola slugs) — an item whose key OR deep
@@ -172,7 +178,8 @@ final class ComposioIngest {
         // failed pull retries the full window.
         let startedAt = Date()
         let since = Preferences.shared.pullLastRun(target.key)
-        fetch(target, since: since) { fetched, error in
+        fetch(target, since: since, generation: generation) { [weak self] fetched, error in
+            guard let self, self.isOperationCurrent(generation) else { return }
             guard let fetched else {
                 completion(Result(created: 0, skippedDuplicates: 0,
                                   error: error ?? "No response — is \(target.displayName) connected in Composio?"))
@@ -207,10 +214,13 @@ final class ComposioIngest {
                 }
                 t.agentId = AgentProfile.idFor(name: f.agent)
                 t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
+                guard self.isOperationCurrent(generation) else { return }
                 createdIds.append(store.add(t).id)
                 created += 1
             }
+            guard self.isOperationCurrent(generation) else { return }
             Preferences.shared.setPullLastRun(target.key, startedAt)
+            guard self.isOperationCurrent(generation) else { return }
             completion(Result(created: created, skippedDuplicates: skipped, error: nil,
                               createdIds: createdIds))
         }
@@ -319,12 +329,16 @@ final class ComposioIngest {
     }
 
     private func runComposio(prompt: String, on queue: DispatchQueue,
+                             generation requestedGeneration: UInt64? = nil,
                              completion: @escaping (String?, String?) -> Void) {
+        let generation = requestedGeneration ?? currentOperationGeneration()
         queue.async { [weak self] in
             guard let self else { return }
+            guard self.isOperationCurrent(generation) else { return }
             let prefs = Preferences.shared
             guard !prefs.composioKey.isEmpty, !prefs.composioURL.isEmpty else {
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isOperationCurrent(generation) else { return }
                     completion(nil, "Composio isn't configured — set the MCP URL and API key in Settings.")
                 }
                 return
@@ -333,6 +347,10 @@ final class ComposioIngest {
             let id = UUID()
             let active = ActiveRequest()
             self.activeLock.lock()
+            guard self.operationGeneration == generation else {
+                self.activeLock.unlock()
+                return
+            }
             self.activeRequests[id] = active
             self.activeLock.unlock()
 
@@ -340,7 +358,8 @@ final class ComposioIngest {
                 ComposioAutomationRequest(prompt: prompt, endpoint: prefs.composioURL),
                 token: prefs.composioKey
             ) { [weak self, weak active] event in
-                self?.handle(event, id: id, active: active, completion: completion)
+                self?.handle(event, id: id, generation: generation,
+                             active: active, completion: completion)
             }
 
             self.activeLock.lock()
@@ -354,7 +373,8 @@ final class ComposioIngest {
         }
     }
 
-    private func handle(_ event: AutomationEvent, id: UUID, active: ActiveRequest?,
+    private func handle(_ event: AutomationEvent, id: UUID, generation: UInt64,
+                        active: ActiveRequest?,
                         completion: @escaping (String?, String?) -> Void) {
         guard let active else { return }
         var result: (String?, String?)?
@@ -380,12 +400,16 @@ final class ComposioIngest {
         activeLock.unlock()
 
         if let result {
-            DispatchQueue.main.async { completion(result.0, result.1) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isOperationCurrent(generation) else { return }
+                completion(result.0, result.1)
+            }
         }
     }
 
     private func cancelActiveRequests() {
         activeLock.lock()
+        operationGeneration &+= 1
         let active = Array(activeRequests.values)
         active.forEach { $0.finished = true }
         let cancellations = active.compactMap(\.cancellation)
@@ -394,15 +418,28 @@ final class ComposioIngest {
         cancellations.forEach { $0.cancel() }
     }
 
+    private func currentOperationGeneration() -> UInt64 {
+        activeLock.lock()
+        defer { activeLock.unlock() }
+        return operationGeneration
+    }
+
+    private func isOperationCurrent(_ generation: UInt64) -> Bool {
+        activeLock.lock()
+        defer { activeLock.unlock() }
+        return operationGeneration == generation
+    }
+
     static func failureMessage(kind: AskBackendKind, status: Int32) -> String {
         "Composio call failed (\(kind.displayName) exited \(status))."
     }
 
     // MARK: - Fetch (background)
 
-    private func fetch(_ target: FetchTarget, since: Date? = nil,
+    private func fetch(_ target: FetchTarget, since: Date? = nil, generation: UInt64,
                        completion: @escaping ([FetchedTask]?, String?) -> Void) {
-        runComposio(prompt: Self.prompt(for: target, since: since), on: queue) { text, error in
+        runComposio(prompt: Self.prompt(for: target, since: since), on: queue,
+                    generation: generation) { text, error in
             guard let text else {
                 completion(nil, error)
                 return

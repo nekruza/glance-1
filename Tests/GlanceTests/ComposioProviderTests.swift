@@ -191,6 +191,50 @@ final class ComposioProviderTests: XCTestCase {
         wait(for: [completed], timeout: 2)
     }
 
+    /// Break protected: a provider switch can happen after the provider's
+    /// terminal event removed its active request but before the queued main
+    /// completion runs. That stale completion must not land tasks or advance
+    /// the incremental pull timestamp.
+    @MainActor
+    func testComposioIngestCancelInvalidatesQueuedPullCompletion() throws {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let store = TaskStore(directory: fixtureDirectory)
+        let provider = QueuedPullAutomationProvider()
+        let ingest = ComposioIngest(provider: provider)
+        let target = ComposioIngest.FetchTarget.app(
+            slug: "queued-race-\(UUID().uuidString)",
+            name: "Queued race"
+        )
+        let staleCompletion = expectation(description: "cancelled queued pull does not complete")
+        staleCompletion.isInverted = true
+        let prefs = Preferences.shared
+        let oldURL = prefs.composioURL
+        let oldKey = prefs.composioKey
+        let defaults = UserDefaults.standard
+        let oldLastRuns = defaults.object(forKey: "tasks.pullLastRuns")
+        defer {
+            prefs.composioURL = oldURL
+            prefs.composioKey = oldKey
+            if let oldLastRuns {
+                defaults.set(oldLastRuns, forKey: "tasks.pullLastRuns")
+            } else {
+                defaults.removeObject(forKey: "tasks.pullLastRuns")
+            }
+        }
+        prefs.composioURL = "https://connect.composio.dev/mcp"
+        prefs.composioKey = "secret"
+
+        ingest.pull(target, store: store) { _ in staleCompletion.fulfill() }
+        XCTAssertEqual(provider.terminalHandled.wait(timeout: .now() + 2), .success,
+                       "provider must queue its terminal result while the main thread is blocked")
+        ingest.cancel()
+
+        wait(for: [staleCompletion], timeout: 0.2)
+        XCTAssertTrue(store.tasks.isEmpty)
+        XCTAssertNil(prefs.pullLastRun(target.key))
+    }
+
     private func fakeCodexComposioInvocation() throws -> ComposioInvocation {
         let fixtureDirectory = try makeFixtureDirectory()
         defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
@@ -402,4 +446,29 @@ private struct ComposioInvocation {
     let configuration: String
     let configurationPermissions: Int
     let events: [AutomationEvent]
+}
+
+private final class QueuedPullAutomationProvider: AutomationProvider {
+    let descriptor = AutomationProviderDescriptor(kind: .codex, version: "test")
+    let terminalHandled = DispatchSemaphore(value: 0)
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        onEvent(.text(#"[{"title":"Stale task","sourceKey":"stale-1"}]"#))
+        onEvent(.completed)
+        terminalHandled.signal()
+        return AutomationCancellation()
+    }
+
+    func cancelAll() {}
 }
