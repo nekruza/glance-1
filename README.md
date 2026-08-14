@@ -13,7 +13,7 @@ Implements `prd.md` (Screen-Aware Desktop Assistant). Personal tool.
 
 1. Hotkey (default **⌥Space**) → the active display is captured and a
    non-activating overlay appears, input focused.
-2. Type a question, press ↩. The screenshot + question go to the Ask backend
+2. Type a question, press ↩. The screenshot + question go to the AI provider
    selected in Settings (Claude Code or Codex), and the answer streams into the
    overlay as Markdown.
 3. Ask follow-ups in the same overlay (context is kept). Press **Esc**, the
@@ -32,6 +32,20 @@ and resumes the CLI session for follow-ups. The first question includes the
 screenshot, so either provider can answer in a single turn with no permission
 prompt. Processes are started only when an overlay is invoked to keep the idle
 footprint negligible.
+
+## One selected AI provider
+
+The locally signed-in CLI selected in Settings is the provider for every
+AI-driven feature: Ask and its follow-ups, task planning and automation,
+one-shot task enrichment and suggestions, Composio connected-app requests,
+and meeting summaries. Switching between Claude Code and Codex cancels
+in-flight work from the previous selection before new requests begin.
+
+Composio still requires its separately configured endpoint and API key. When
+Codex is selected, Glance passes the Composio MCP settings only to the specific
+Codex child process that needs them; it supplies the token only in that child
+process's environment and does not add Composio to your global Codex
+configuration.
 
 ## Requirements
 
@@ -56,8 +70,9 @@ bar (Settings, Quit). During development you can also `swift run`, but the
 
 - Rebind the global hotkey.
 - Launch at login.
-- Choose the **Ask backend**: Claude Code or Codex. The status row, Rescan, and
-  Test actions apply to the selected local CLI.
+- Choose the **AI provider**: Claude Code or Codex. The status row, Rescan, and
+  Test actions apply to the selected local CLI, which is then used for every
+  AI-driven feature.
 
 That's the whole surface (v1, by design).
 
@@ -81,9 +96,9 @@ This is a personal tool with deliberate, documented trade-offs (PRD NFR6):
 
 ## Not included (v1)
 
-Audio/meeting capture, stealth/hidden-from-screen-share behavior, other LLM
-providers, chat history across invocations, multi-user/accounts, Windows/Linux,
-Mac App Store distribution. See the PRD "Out of Scope".
+Stealth/hidden-from-screen-share behavior, other LLM providers, chat history
+across invocations, multi-user/accounts, Windows/Linux, and Mac App Store
+distribution. See the PRD "Out of Scope".
 
 ## Distribution
 

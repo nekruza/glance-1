@@ -3,6 +3,30 @@ import XCTest
 
 @MainActor
 final class ProviderGenerationTests: XCTestCase {
+    func testCodexSelectionHasNoClaudeAutomationLaunches() {
+        let services = ProviderCoverageServiceBundle(kind: .codex)
+        let previousKey = Preferences.shared.composioKey
+        let previousURL = Preferences.shared.composioURL
+        Preferences.shared.composioKey = "test-composio-token"
+        Preferences.shared.composioURL = "https://connect.composio.dev/mcp"
+        defer {
+            Preferences.shared.composioKey = previousKey
+            Preferences.shared.composioURL = previousURL
+        }
+
+        let workFinished = expectation(description: "selected provider completes every service request")
+        services.exerciseAskOneShotTaskAISuggestionsComposioAndMeetingSummary {
+            workFinished.fulfill()
+        }
+        wait(for: [workFinished], timeout: 1)
+
+        XCTAssertEqual(services.claudeLaunchCount, 0,
+                       "Codex selection must not launch Claude for any AI service")
+        XCTAssertEqual(services.codexAskLaunchCount, 1)
+        XCTAssertEqual(services.codexAutomationLaunchCount, 4,
+                       "Task AI, suggestions, Composio, and meeting summary use Codex")
+    }
+
     func testMeetingSummaryUsesCurrentCodexProvider() {
         let provider = SummaryAutomationProvider(kind: .codex)
         let transcriber = MeetingTranscriber()
@@ -370,6 +394,151 @@ private final class SummaryAutomationProvider: AutomationProvider {
     func runComposio(_ request: ComposioAutomationRequest, token: String,
                      onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
         runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
+    }
+
+    func cancelAll() {}
+}
+
+/// Exercises the same selected-provider service shape used by the app without
+/// launching either real CLI. Every fake launch is recorded by provider kind,
+/// so this regression fails if any one-shot service quietly reintroduces a
+/// Claude-specific construction path while Codex is selected.
+@MainActor
+private final class ProviderCoverageServiceBundle {
+    private let launches = ProviderLaunchRecorder()
+    private let claudeProvider: RecordingAutomationProvider
+    private let codexProvider: RecordingAutomationProvider
+    private let claudeAskBackend: RecordingAskBackend
+    private let codexAskBackend: RecordingAskBackend
+    private let askBackend: RecordingAskBackend
+    private let taskAI: TaskAI
+    private let suggestions: SuggestionService
+    private let composio: ComposioIngest
+    private let transcriber = MeetingTranscriber()
+
+    init(kind: AskBackendKind) {
+        claudeProvider = RecordingAutomationProvider(kind: .claude, recorder: launches)
+        codexProvider = RecordingAutomationProvider(kind: .codex, recorder: launches)
+        claudeAskBackend = RecordingAskBackend(kind: .claude, recorder: launches)
+        codexAskBackend = RecordingAskBackend(kind: .codex, recorder: launches)
+        let selectedProvider = kind == .claude ? claudeProvider : codexProvider
+        askBackend = kind == .claude ? claudeAskBackend : codexAskBackend
+        taskAI = TaskAI(provider: selectedProvider)
+        suggestions = SuggestionService(provider: selectedProvider)
+        composio = ComposioIngest(provider: selectedProvider)
+        transcriber.summaryProvider = { selectedProvider }
+    }
+
+    var claudeLaunchCount: Int { launches.count(for: .claude) }
+    var codexAskLaunchCount: Int { launches.count(for: .codex, role: .ask) }
+    var codexAutomationLaunchCount: Int { launches.count(for: .codex, role: .automation) }
+
+    func exerciseAskOneShotTaskAISuggestionsComposioAndMeetingSummary(
+        completion: @escaping () -> Void
+    ) {
+        let settled = DispatchGroup()
+        for _ in 0..<4 { settled.enter() }
+
+        askBackend.startWarm()
+        askBackend.ask(question: "What is on screen?", imagePNG: nil) { event in
+            if case .completed = event { settled.leave() }
+        }
+        taskAI.decompose(prompt: "Ship the provider switch") { _ in
+            settled.leave()
+        }
+        suggestions.suggest(question: "What is on screen?", answer: "A board") { _ in
+            settled.leave()
+        }
+        composio.listConnections { _, _ in
+            settled.leave()
+        }
+        transcriber.summarizeForTesting("Discussed the selected provider.")
+
+        settled.notify(queue: .main, execute: completion)
+    }
+}
+
+private final class ProviderLaunchRecorder {
+    enum Role {
+        case ask
+        case automation
+    }
+
+    private let lock = NSLock()
+    private var launches: [(kind: AskBackendKind, role: Role)] = []
+
+    func record(kind: AskBackendKind, role: Role) {
+        lock.lock()
+        launches.append((kind, role))
+        lock.unlock()
+    }
+
+    func count(for kind: AskBackendKind, role: Role? = nil) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return launches.filter { $0.kind == kind && (role == nil || $0.role == role) }.count
+    }
+}
+
+private final class RecordingAskBackend: AskBackend {
+    var firstTokenTimeout: TimeInterval = 30
+
+    private let kind: AskBackendKind
+    private let recorder: ProviderLaunchRecorder
+
+    init(kind: AskBackendKind, recorder: ProviderLaunchRecorder) {
+        self.kind = kind
+        self.recorder = recorder
+    }
+
+    func startWarm() {}
+
+    func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void) {
+        recorder.record(kind: kind, role: .ask)
+        onEvent(.token("Codex answer"))
+        onEvent(.completed)
+    }
+
+    func shutdown() {}
+}
+
+private final class RecordingAutomationProvider: AutomationProvider {
+    let descriptor: AutomationProviderDescriptor
+
+    private let recorder: ProviderLaunchRecorder
+
+    init(kind: AskBackendKind, recorder: ProviderLaunchRecorder) {
+        descriptor = AutomationProviderDescriptor(kind: kind, version: "test")
+        self.recorder = recorder
+    }
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        recorder.record(kind: descriptor.kind, role: .automation)
+        let output: String
+        if request.prompt.contains("Decompose the following braindump") {
+            output = "[{\"title\":\"Ship provider switch\"}]"
+        } else if request.prompt.contains("suggest 3 short follow-up questions") {
+            output = "What changed?\nWhat should I do next?"
+        } else {
+            output = "## Summary\nCodex produced the notes."
+        }
+        onEvent(.text(output))
+        onEvent(.completed)
+        return AutomationCancellation()
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        recorder.record(kind: descriptor.kind, role: .automation)
+        onEvent(.text("[]"))
+        onEvent(.completed)
+        return AutomationCancellation()
     }
 
     func cancelAll() {}
