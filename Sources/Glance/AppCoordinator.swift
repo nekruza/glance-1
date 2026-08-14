@@ -189,6 +189,10 @@ final class AppCoordinator {
         let services = ProviderServices(kind: kind, generation: generation,
                                         provider: provider, taskAI: ai,
                                         taskRunner: runner, ingest: ingest)
+        if let binaryPath = provider.descriptor.binaryPath {
+            ModelCatalog.shared.refresh(for: kind, binaryPath: binaryPath,
+                                        cliVersion: provider.descriptor.version)
+        }
         providerServices = services
         taskAI = ai
         taskRunner = runner
@@ -460,7 +464,13 @@ final class AppCoordinator {
         }
         let generation = providerGeneration
         taskAI.extractActionItems(meetingText: text) { [weak self] items in
-            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else {
+                // The reader button owns this completion. A provider switch
+                // must not apply the old result, but it still has to settle
+                // the visible extracting state.
+                completion(0)
+                return
+            }
             let items = items ?? []
             for d in items {
                 var t = TaskItem(title: d.title, source: .granola)

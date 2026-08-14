@@ -10,7 +10,7 @@ final class CodexAutomationProvider: AutomationProvider {
 
     init(binaryPath: String, version: String) {
         self.binaryPath = binaryPath
-        descriptor = AutomationProviderDescriptor(kind: .codex, version: version)
+        descriptor = AutomationProviderDescriptor(kind: .codex, version: version, binaryPath: binaryPath)
     }
 
     deinit {

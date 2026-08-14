@@ -12,6 +12,15 @@ enum AutomationModelChoice: String, CaseIterable, Equatable {
 struct AutomationProviderDescriptor: Equatable {
     let kind: AskBackendKind
     let version: String
+    /// The selected CLI executable. This is optional for test doubles and
+    /// unavailable providers, which do not have a process to probe.
+    let binaryPath: String?
+
+    init(kind: AskBackendKind, version: String, binaryPath: String? = nil) {
+        self.kind = kind
+        self.version = version
+        self.binaryPath = binaryPath
+    }
 
     var displayName: String { kind.displayName }
 

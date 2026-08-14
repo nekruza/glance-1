@@ -38,6 +38,65 @@ final class ProviderGenerationTests: XCTestCase {
         XCTAssertTrue(harness.coordinator.taskOverlay?.session.decomposePreview.isEmpty == true)
     }
 
+    func testProviderSwitchSettlesStaleMeetingExtractionWithoutAddingTasks() throws {
+        let harness = try CoordinatorProviderHarness()
+        defer {
+            harness.removeStore()
+            TranscriptPanelModel.shared.extractTasksHandler = nil
+        }
+        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
+        try "Follow up with the team.".write(to: notesURL, atomically: true, encoding: .utf8)
+        let entry = MeetingHistory.Entry(url: notesURL, title: "Meeting",
+                                         modified: Date(), snippet: "Follow up")
+        var completions: [Int] = []
+
+        harness.coordinator.replaceProviderServices(for: .claude)
+        TranscriptPanelModel.shared.extractTasksHandler?(entry) { completions.append($0) }
+        waitUntil { harness.claude.textRequestCount == 1 }
+
+        harness.coordinator.replaceProviderServices(for: .codex)
+        harness.claude.emitText([.text("[{\"title\":\"stale Claude task\"}]"), .completed])
+        waitUntil { completions == [0] }
+
+        XCTAssertTrue(harness.store.tasks.isEmpty)
+    }
+
+    func testProviderServiceRebuildRefreshesModelsForClaudeButNotCodex() throws {
+        let harness = try CoordinatorProviderHarness()
+        defer { harness.removeStore() }
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glance-model-catalog-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        let claudeProbe = try makeModelProbe(in: fixtureDirectory, named: "claude-probe")
+        let codexProbe = try makeModelProbe(in: fixtureDirectory, named: "codex-probe")
+        let refreshedClaude = HoldingAutomationProvider(kind: .claude,
+                                                        version: "claude-refresh-\(UUID().uuidString)",
+                                                        binaryPath: claudeProbe.path)
+        let untouchedCodex = HoldingAutomationProvider(kind: .codex,
+                                                        version: "codex-refresh-\(UUID().uuidString)",
+                                                        binaryPath: codexProbe.path)
+        let factory = AutomationProviderFactory(
+            makeClaude: { _, _ in refreshedClaude },
+            makeCodex: { _, _ in untouchedCodex },
+            claudeStatus: { .ok(path: claudeProbe.path, version: refreshedClaude.descriptor.version) },
+            codexStatus: { .ok(path: codexProbe.path, version: untouchedCodex.descriptor.version) }
+        )
+        let coordinator = AppCoordinator(
+            backendLifecycle: AskBackendLifecycle(), overlay: OverlayController(),
+            automationProviderFactory: factory, taskStore: harness.store
+        )
+
+        coordinator.replaceProviderServices(for: .claude)
+        waitUntil({ ModelCatalog.shared.displayName(for: "sonnet") == "Sonnet 4.5" }, timeout: 2)
+
+        coordinator.replaceProviderServices(for: .codex)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixtureDirectory.appendingPathComponent("codex-probe-ran").path))
+    }
+
     func testUnavailableSelectedProviderKeepsTheLocalBoardAvailable() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("glance-unavailable-provider-\(UUID().uuidString)", isDirectory: true)
@@ -73,6 +132,18 @@ final class ProviderGenerationTests: XCTestCase {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
         XCTAssertTrue(condition(), "Timed out waiting for the provider request")
+    }
+
+    private func makeModelProbe(in directory: URL, named name: String) throws -> URL {
+        let executable = directory.appendingPathComponent(name)
+        let script = """
+        #!/bin/sh
+        : > "$(dirname "$0")/$(basename "$0")-ran"
+        printf '{"modelUsage":{"claude-sonnet-4-5-20251001":{}}}'
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        return executable
     }
 }
 
@@ -126,8 +197,8 @@ private final class HoldingAutomationProvider: AutomationProvider {
         return textCallbacks.count
     }
 
-    init(kind: AskBackendKind) {
-        descriptor = AutomationProviderDescriptor(kind: kind, version: "test")
+    init(kind: AskBackendKind, version: String = "test", binaryPath: String? = nil) {
+        descriptor = AutomationProviderDescriptor(kind: kind, version: version, binaryPath: binaryPath)
     }
 
     func runText(_ request: AutomationRequest,

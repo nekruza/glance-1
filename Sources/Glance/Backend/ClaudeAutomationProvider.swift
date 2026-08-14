@@ -10,7 +10,7 @@ final class ClaudeAutomationProvider: AutomationProvider {
 
     init(binaryPath: String, version: String) {
         self.binaryPath = binaryPath
-        descriptor = AutomationProviderDescriptor(kind: .claude, version: version)
+        descriptor = AutomationProviderDescriptor(kind: .claude, version: version, binaryPath: binaryPath)
     }
 
     deinit {
