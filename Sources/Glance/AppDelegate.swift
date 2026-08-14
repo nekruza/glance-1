@@ -33,8 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transcriber.onLiveSegment = { seg in panel.append(text: seg.text, at: seg.start) }
         transcriber.onLiveReplaceLast = { seg in panel.replaceLast(text: seg.text, at: seg.start) }
         transcriber.onLivePartial = { text in panel.updatePartial(text) }
-        transcriber.summaryProvider = { [weak coordinator] in
-            coordinator?.currentAutomationProvider
+        transcriber.summaryProviderLease = { [weak coordinator] in
+            coordinator?.currentAutomationProviderLease()
         }
         // FR31: once the summary lands, mine the transcript for MY action items
         // → Inbox (deduped on sourceRef so a re-processed meeting adds nothing).

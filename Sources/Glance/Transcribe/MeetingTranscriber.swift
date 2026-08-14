@@ -169,6 +169,10 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
     /// this as a closure means summaries follow a provider switch instead of
     /// locating and launching Claude independently.
     var summaryProvider: (() -> AutomationProvider?)?
+    /// The app's coordinator supplies a generation-bound provider lease for
+    /// summaries. A late callback from a cancelled provider must never edit
+    /// notes or trigger downstream action-item ingestion after a switch.
+    var summaryProviderLease: (() -> AutomationProviderLease?)?
 
     // MARK: - Permissions
 
@@ -368,22 +372,24 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Fires `onSummarized` when the file is finalized, whether or not notes
     /// landed (so downstream action-item extraction always runs once).
     private func summarize(transcript: String, into url: URL) {
-        guard let provider = summaryProvider?() else {
+        guard let lease = summaryProviderLease?()
+                ?? summaryProvider?().map({ AutomationProviderLease(provider: $0, isCurrent: { true }) }) else {
             finishSummary(at: url)
             return
         }
 
         let state = SummaryState()
-        provider.runText(AutomationRequest(prompt: summaryPrompt(transcript: transcript))) { [weak self] event in
+        lease.provider.runText(AutomationRequest(prompt: summaryPrompt(transcript: transcript))) { [weak self] event in
             switch event {
             case .text(let text):
+                guard lease.isCurrent() else { return }
                 state.append(text)
             case .completed:
-                guard let notes = state.finish() else { return }
-                self?.finishSummary(notes: notes, at: url)
+                guard lease.isCurrent(), let notes = state.finish() else { return }
+                self?.finishSummary(notes: notes, at: url, isCurrent: lease.isCurrent)
             case .failed:
-                guard state.finish() != nil else { return }
-                self?.finishSummary(at: url)
+                guard lease.isCurrent(), state.finish() != nil else { return }
+                self?.finishSummary(at: url, isCurrent: lease.isCurrent)
             case .sessionID:
                 break
             }
@@ -395,6 +401,13 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
     func summarizeForTesting(_ transcript: String) {
         guard let provider = summaryProvider?() else { return }
         provider.runText(AutomationRequest(prompt: summaryPrompt(transcript: transcript))) { _ in }
+    }
+
+    /// Test seam for a delayed provider callback. This intentionally uses the
+    /// production finalization path so tests cover both note writes and the
+    /// `onSummarized` auto-ingest trigger.
+    func summarizeForTesting(_ transcript: String, into url: URL) {
+        summarize(transcript: transcript, into: url)
     }
 
     private func summaryPrompt(transcript: String) -> String {
@@ -411,14 +424,26 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
         """
     }
 
-    private func finishSummary(notes: String? = nil, at url: URL) {
-        if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !notes.isEmpty,
-           let existing = try? String(contentsOf: url, encoding: .utf8) {
-            let combined = notes + "\n\n---\n\n" + existing
-            try? combined.write(to: url, atomically: true, encoding: .utf8)
+    private func finishSummary(notes: String? = nil, at url: URL,
+                               isCurrent: @escaping () -> Bool = { true }) {
+        let finalize = { [weak self] in
+            // Run finalization on main, where provider replacement also runs.
+            // This makes the generation check and file/auto-ingest handoff an
+            // ordered operation rather than a background callback race.
+            guard isCurrent() else { return }
+            if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !notes.isEmpty,
+               let existing = try? String(contentsOf: url, encoding: .utf8) {
+                let combined = notes + "\n\n---\n\n" + existing
+                try? combined.write(to: url, atomically: true, encoding: .utf8)
+            }
+            self?.onSummarized?(url)
         }
-        DispatchQueue.main.async { [weak self] in self?.onSummarized?(url) }
+        if Thread.isMainThread {
+            finalize()
+        } else {
+            DispatchQueue.main.async(execute: finalize)
+        }
     }
 }
 

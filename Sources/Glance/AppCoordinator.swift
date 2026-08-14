@@ -44,6 +44,21 @@ final class AppCoordinator {
         providerServices?.provider
     }
 
+    /// A provider reference is not sufficient for work that may outlive a
+    /// selection change: a future selection can build the same provider kind
+    /// again. Capture this generation-bound lease and validate it immediately
+    /// before applying any asynchronous result.
+    func currentAutomationProviderLease() -> AutomationProviderLease? {
+        guard let services = providerServices else { return nil }
+        let kind = services.kind
+        let generation = services.generation
+        return AutomationProviderLease(provider: services.provider) { [weak self] in
+            let check = { self?.isCurrentProvider(kind: kind, generation: generation) ?? false }
+            if Thread.isMainThread { return check() }
+            return DispatchQueue.main.sync(execute: check)
+        }
+    }
+
     /// Opens the Settings window (wired to the status-item controller).
     var onOpenSettings: (() -> Void)?
 
@@ -98,8 +113,6 @@ final class AppCoordinator {
     }
 
     func start() {
-        claudeStatus = ClaudeLocator.check()
-
         hotkey.onFire = { [weak self] in self?.toggle() }
         hotkey.register(prefs.hotkey)
 

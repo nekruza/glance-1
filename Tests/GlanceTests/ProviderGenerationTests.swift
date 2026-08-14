@@ -13,6 +13,53 @@ final class ProviderGenerationTests: XCTestCase {
         XCTAssertTrue(provider.requestedPrompts.first?.contains("Meeting text") == true)
     }
 
+    func testProviderSwitchDropsQueuedMeetingSummaryBeforeItWritesOrAutoIngests() throws {
+        let harness = try CoordinatorProviderHarness()
+        defer { harness.removeStore() }
+        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
+        let originalNotes = "# Meeting\n\nTranscript"
+        try originalNotes.write(to: notesURL, atomically: true, encoding: .utf8)
+        let transcriber = MeetingTranscriber()
+        transcriber.summaryProviderLease = { harness.coordinator.currentAutomationProviderLease() }
+        var summarizedURLs: [URL] = []
+        transcriber.onSummarized = { summarizedURLs.append($0) }
+
+        harness.coordinator.replaceProviderServices(for: .claude)
+        transcriber.summarizeForTesting("Meeting text", into: notesURL)
+        waitUntil { harness.claude.textRequestCount == 1 }
+
+        harness.coordinator.replaceProviderServices(for: .codex)
+        // The harness intentionally reuses its Claude double. This catches a
+        // mere provider-identity check: an old callback must remain stale even
+        // after the user selects the same provider kind again.
+        harness.coordinator.replaceProviderServices(for: .claude)
+        harness.claude.emitText([.text("## Summary\nOld Claude notes"), .completed])
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(try String(contentsOf: notesURL, encoding: .utf8), originalNotes)
+        XCTAssertTrue(summarizedURLs.isEmpty)
+    }
+
+    func testCurrentProviderMeetingSummaryWritesNotesAndTriggersAutoIngest() throws {
+        let harness = try CoordinatorProviderHarness()
+        defer { harness.removeStore() }
+        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
+        try "# Meeting\n\nTranscript".write(to: notesURL, atomically: true, encoding: .utf8)
+        let transcriber = MeetingTranscriber()
+        transcriber.summaryProviderLease = { harness.coordinator.currentAutomationProviderLease() }
+        var summarizedURLs: [URL] = []
+        transcriber.onSummarized = { summarizedURLs.append($0) }
+
+        harness.coordinator.replaceProviderServices(for: .claude)
+        transcriber.summarizeForTesting("Meeting text", into: notesURL)
+        waitUntil { harness.claude.textRequestCount == 1 }
+        harness.claude.emitText([.text("## Summary\nCurrent Claude notes"), .completed])
+        waitUntil { summarizedURLs == [notesURL] }
+
+        let saved = try String(contentsOf: notesURL, encoding: .utf8)
+        XCTAssertTrue(saved.hasPrefix("## Summary\nCurrent Claude notes\n\n---\n\n# Meeting"))
+    }
+
     func testCoordinatorExposesCurrentCodexProviderForMeetingSummary() throws {
         let harness = try CoordinatorProviderHarness()
         defer { harness.removeStore() }
