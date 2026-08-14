@@ -265,8 +265,12 @@ final class TaskRunnerProviderTests: XCTestCase {
     func testCodexTerminalWaitsForStderrDrain() throws {
         let fixtureDirectory = try makeFixtureDirectory()
         let releaseURL = fixtureDirectory.appendingPathComponent("release")
+        var stderrChildPID: pid_t?
         defer {
             FileManager.default.createFile(atPath: releaseURL.path, contents: nil)
+            if let stderrChildPID, !waitForProcessExit(stderrChildPID, timeout: 1) {
+                Darwin.kill(stderrChildPID, SIGKILL)
+            }
             try? FileManager.default.removeItem(at: fixtureDirectory)
         }
         let executable = try makeStderrDrainCodexExecutable(in: fixtureDirectory)
@@ -286,10 +290,18 @@ final class TaskRunnerProviderTests: XCTestCase {
             }
         }
         XCTAssertTrue(waitForFile(fixtureDirectory.appendingPathComponent("terminal-written")))
+        let parentPID = try processID(from: fixtureDirectory.appendingPathComponent("parent-pid"))
+        stderrChildPID = try processID(from: fixtureDirectory.appendingPathComponent("stderr-child-pid"))
+        XCTAssertTrue(waitForProcessExit(parentPID, timeout: 1),
+                      "The CLI parent must have exited while the stderr holder remains alive")
+        XCTAssertFalse(waitForProcessExit(try XCTUnwrap(stderrChildPID), timeout: 0.05),
+                       "The background child must retain the stderr descriptor until release")
         wait(for: [earlyCompletion], timeout: 0.2)
         released = true
         FileManager.default.createFile(atPath: releaseURL.path, contents: nil)
         wait(for: [completed], timeout: 2)
+        XCTAssertTrue(waitForProcessExit(try XCTUnwrap(stderrChildPID), timeout: 1),
+                      "The fixture must release its background stderr holder")
     }
 
     /// Break protected: provider-wide cancellation includes the streaming
@@ -471,11 +483,15 @@ final class TaskRunnerProviderTests: XCTestCase {
         #!/bin/sh
         fixture_dir="$(dirname "$0")"
         cat >/dev/null
+        printf '%s' "$$" > "$fixture_dir/parent-pid"
+        (
+          exec 1>&-
+          while [ ! -f "$fixture_dir/release" ]; do sleep 0.01; done
+          printf '%s\n' 'late diagnostic' >&2
+        ) &
+        printf '%s' "$!" > "$fixture_dir/stderr-child-pid"
         printf '%s\n' '{"type":"turn.completed"}'
-        exec 1>&-
         : > "$fixture_dir/terminal-written"
-        while [ ! -f "$fixture_dir/release" ]; do sleep 0.01; done
-        printf '%s\n' 'late diagnostic' >&2
         exit 0
         """#
         try Data(script.utf8).write(to: executable)
