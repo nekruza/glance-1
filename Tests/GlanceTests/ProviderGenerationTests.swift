@@ -64,8 +64,12 @@ final class ProviderGenerationTests: XCTestCase {
         XCTAssertEqual(launches.count(for: .codex, role: .askConstruction), 1)
         XCTAssertEqual(launches.count(for: .codex, role: .askWarm), 1)
         XCTAssertEqual(launches.count(for: .codex, role: .askTurn), 1)
-        XCTAssertEqual(launches.count(for: .codex, role: .automation), 4,
-                       "Task AI, suggestions, Composio, and meeting summary use Codex: \(launches.summary())")
+        for context in ["taskAI", "suggestions", "composio", "meetingSummary"] {
+            XCTAssertEqual(launches.count(for: .codex, role: .automation, context: context), 1,
+                           "\(context) must launch Codex exactly once: \(launches.summary())")
+            XCTAssertEqual(launches.count(for: .claude, role: .automation, context: context), 0,
+                           "\(context) must not launch Claude: \(launches.summary())")
+        }
     }
 
     func testMeetingSummaryUsesCurrentCodexProvider() {
@@ -511,10 +515,14 @@ private final class ProviderLaunchRecorder {
         lock.unlock()
     }
 
-    func count(for kind: AskBackendKind, role: Role? = nil) -> Int {
+    func count(for kind: AskBackendKind, role: Role? = nil, context: String? = nil) -> Int {
         lock.lock()
         defer { lock.unlock() }
-        return launches.filter { $0.kind == kind && (role == nil || $0.role == role) }.count
+        return launches.filter {
+            $0.kind == kind
+                && (role == nil || $0.role == role)
+                && (context == nil || $0.context == context)
+        }.count
     }
 
     func summary() -> String {
