@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.onSettings = { [weak coordinator] in coordinator?.summonTaskSettings() }
         coordinator.onOpenSettings = { [weak statusItem] in statusItem?.showSettings() }
         statusItem.statusProvider = { [weak coordinator] in
-            coordinator?.backendStatusLine() ?? (false, "Claude CLI status unknown")
+            coordinator?.backendStatusLine() ?? (false, "AI provider status unknown")
         }
         statusItem.hotkeyWarningProvider = { [weak coordinator] in
             coordinator?.hotkeyWarnings() ?? []
@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transcriber.onLiveSegment = { seg in panel.append(text: seg.text, at: seg.start) }
         transcriber.onLiveReplaceLast = { seg in panel.replaceLast(text: seg.text, at: seg.start) }
         transcriber.onLivePartial = { text in panel.updatePartial(text) }
+        transcriber.summaryProvider = { [weak coordinator] in
+            coordinator?.currentAutomationProvider
+        }
         // FR31: once the summary lands, mine the transcript for MY action items
         // → Inbox (deduped on sourceRef so a re-processed meeting adds nothing).
         transcriber.onSummarized = { [weak self] url in

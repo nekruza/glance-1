@@ -3,6 +3,25 @@ import XCTest
 
 @MainActor
 final class ProviderGenerationTests: XCTestCase {
+    func testMeetingSummaryUsesCurrentCodexProvider() {
+        let provider = SummaryAutomationProvider(kind: .codex)
+        let transcriber = MeetingTranscriber()
+        transcriber.summaryProvider = { provider }
+
+        transcriber.summarizeForTesting("Meeting text")
+
+        XCTAssertTrue(provider.requestedPrompts.first?.contains("Meeting text") == true)
+    }
+
+    func testCoordinatorExposesCurrentCodexProviderForMeetingSummary() throws {
+        let harness = try CoordinatorProviderHarness()
+        defer { harness.removeStore() }
+
+        harness.coordinator.replaceProviderServices(for: .codex)
+
+        XCTAssertEqual(harness.coordinator.currentAutomationProvider?.descriptor.kind, .codex)
+    }
+
     func testProviderChangeCancelsTaskAndComposioWorkBeforeInstallingCodex() throws {
         let harness = try CoordinatorProviderHarness()
         defer { harness.removeStore() }
@@ -278,4 +297,33 @@ private final class HoldingAutomationProvider: AutomationProvider {
             callbacks.forEach { $0(event) }
         }
     }
+}
+
+private final class SummaryAutomationProvider: AutomationProvider {
+    let descriptor: AutomationProviderDescriptor
+    private(set) var requestedPrompts: [String] = []
+
+    init(kind: AskBackendKind) {
+        descriptor = AutomationProviderDescriptor(kind: kind, version: "test")
+    }
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        requestedPrompts.append(request.prompt)
+        onEvent(.text("## Summary\nDone"))
+        onEvent(.completed)
+        return AutomationCancellation()
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
+    }
+
+    func cancelAll() {}
 }

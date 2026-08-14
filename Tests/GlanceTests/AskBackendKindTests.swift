@@ -12,8 +12,13 @@ final class AskBackendKindTests: XCTestCase {
     }
 
     @MainActor
-    func testTaskSettingsExposeAskBackendControl() {
-        XCTAssertEqual(TaskSettingsView.askBackendRowTitle, "Ask backend")
+    func testTaskSettingsExposeAIProviderControl() {
+        XCTAssertEqual(TaskSettingsView.askBackendRowTitle, "AI provider")
+    }
+
+    @MainActor
+    func testSystemSettingsExposeAIProviderControl() {
+        XCTAssertEqual(SettingsView.aiProviderRowTitle, "AI provider")
     }
 
     @MainActor

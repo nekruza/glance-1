@@ -40,18 +40,18 @@ enum PermissionOnboarding {
         case .ok:
             return
         case .notFound:
-            alert.messageText = "Claude CLI not found"
+            alert.messageText = "\(AskBackendKind.claude.displayName) not found"
             alert.informativeText = """
-            Glance uses your local Claude Code CLI as its backend. It isn't on \
+            Glance uses your local \(AskBackendKind.claude.displayName) as its AI provider. It isn't on \
             this Mac (or not in a standard location).
 
             Install it from claude.com/code and sign in with `claude` in a \
             terminal, then try again.
             """
         case .unusable(let path, let reason):
-            alert.messageText = "Claude CLI isn't usable"
+            alert.messageText = "\(AskBackendKind.claude.displayName) isn't usable"
             alert.informativeText = """
-            Found Claude at \(path) but couldn't run it (\(reason)).
+            Found \(AskBackendKind.claude.displayName) at \(path) but couldn't run it (\(reason)).
 
             Open a terminal and confirm `claude --version` works, then try again.
             """
@@ -68,18 +68,18 @@ enum PermissionOnboarding {
         case .ok:
             return
         case .notFound:
-            alert.messageText = "Codex CLI not found"
+            alert.messageText = "\(AskBackendKind.codex.displayName) not found"
             alert.informativeText = """
-            Glance uses your local Codex CLI as its backend. It isn't on this \
+            Glance uses your local \(AskBackendKind.codex.displayName) as its AI provider. It isn't on this \
             Mac (or not in a standard location).
 
             Install Codex CLI, run `codex` in a terminal, and sign in with \
             ChatGPT, then try again.
             """
         case .unusable(let path, let reason):
-            alert.messageText = "Codex CLI isn't usable"
+            alert.messageText = "\(AskBackendKind.codex.displayName) isn't usable"
             alert.informativeText = """
-            Found Codex at \(path) but couldn't run it (\(reason)).
+            Found \(AskBackendKind.codex.displayName) at \(path) but couldn't run it (\(reason)).
 
             Open a terminal and confirm `codex --version` works, then try again.
             """

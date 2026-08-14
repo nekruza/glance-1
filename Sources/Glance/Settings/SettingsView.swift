@@ -4,6 +4,8 @@ import SwiftUI
 /// Status (Screen Recording, selected local CLI backend) cards + privacy footnote.
 /// No model picker / BYOK / MCP — out of scope (FR14/FR19).
 struct SettingsView: View {
+    static let aiProviderRowTitle = "AI provider"
+
     @ObservedObject private var prefs = Preferences.shared
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
@@ -42,7 +44,7 @@ struct SettingsView: View {
                     .labelsHidden()
                     .frame(width: 150)
                 } label: {
-                    settingLabel("Ask backend", "Local CLI used by the screen-aware overlay")
+                    settingLabel(Self.aiProviderRowTitle, "Local CLI used for Ask, tasks, suggestions, meetings, and Composio")
                 }
                 LabeledContent {
                     HStack(spacing: 8) {
@@ -178,7 +180,7 @@ struct SettingsView: View {
                         }
                     }
                 } label: {
-                    settingLabel("\(prefs.askBackend.displayName) backend", backendSubtitle)
+                    settingLabel("AI provider: \(prefs.askBackend.displayName)", backendSubtitle)
                 }
 
                 if let r = testResult { resultRow(r) }
@@ -239,17 +241,17 @@ struct SettingsView: View {
 
     private var backendSubtitle: String {
         switch prefs.askBackend {
-        case .claude: return "Local Claude Code — reuses its own auth"
-        case .codex: return "Local Codex — reuses its own auth"
+        case .claude: return "Local \(prefs.askBackend.displayName) — reuses its own auth"
+        case .codex: return "Local \(prefs.askBackend.displayName) — reuses its own auth"
         }
     }
 
     private var privacyNote: String {
         switch prefs.askBackend {
         case .claude:
-            return "No API keys stored. Ask-overlay model traffic goes through your local Claude CLI. Screenshots may persist in Claude Code session transcripts under ~/.claude/projects/ — see README."
+            return "No API keys stored. AI-provider traffic goes through your local \(prefs.askBackend.displayName). Screenshots may persist in Claude Code session transcripts under ~/.claude/projects/ — see README."
         case .codex:
-            return "No API keys stored by Glance. Attached screenshots use a private temporary PNG during the Codex turn and are deleted on completion or cancellation. Codex may retain its own session data — see README."
+            return "No API keys stored by Glance. Attached screenshots use a private temporary PNG during the \(prefs.askBackend.displayName) turn and are deleted on completion or cancellation. Codex may retain its own session data — see README."
         }
     }
 

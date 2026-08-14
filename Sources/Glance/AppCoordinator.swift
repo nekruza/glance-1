@@ -37,6 +37,13 @@ final class AppCoordinator {
     private var pendingMeetingExtractionCompletions: [UUID: (Int) -> Void] = [:]
     private var taskInfrastructureConfigured = false
 
+    /// The provider used by the current service bundle. Consumers such as the
+    /// meeting transcriber read this dynamically so a provider switch takes
+    /// effect before their next request begins.
+    var currentAutomationProvider: AutomationProvider? {
+        providerServices?.provider
+    }
+
     /// Opens the Settings window (wired to the status-item controller).
     var onOpenSettings: (() -> Void)?
 
@@ -710,11 +717,11 @@ final class AppCoordinator {
     // MARK: - Q&A
 
     private func handleSubmit(_ question: String) {
+        let kind = prefs.askBackend
         guard let backend else {
-            overlay.session.failTurn("Backend unavailable.")
+            overlay.session.failTurn("\(kind.displayName) unavailable.")
             return
         }
-        let kind = prefs.askBackend
         let generation = providerGeneration
         let attach = overlay.session.attachImage
 

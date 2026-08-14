@@ -1,7 +1,7 @@
 import Foundation
 
 /// One-shot health check for the Settings "Test" button: does the selected
-/// backend actually respond, and how fast. Independent of the streaming overlay path.
+/// AI provider actually respond, and how fast. Independent of the streaming overlay path.
 enum BackendTester {
 
     struct Success { let latency: TimeInterval; let reply: String }
@@ -44,7 +44,7 @@ enum BackendTester {
 
             let start = Date()
             do { try proc.run() } catch {
-                finish(completion, .failure("Couldn't launch \(kind.rawValue.capitalized): \(error.localizedDescription)"))
+                finish(completion, .failure("Couldn't launch \(kind.displayName): \(error.localizedDescription)"))
                 return
             }
 
@@ -81,7 +81,7 @@ enum BackendTester {
 
     static func message(for status: ClaudeLocator.Status) -> String {
         switch status {
-        case .notFound: return "Claude CLI not found. Install it from claude.com/code."
+        case .notFound: return "\(AskBackendKind.claude.displayName) not found. Install it from claude.com/code."
         case .unusable(let path, let reason): return "Found at \(path) but unusable: \(reason)."
         case .ok: return ""
         }
@@ -89,7 +89,7 @@ enum BackendTester {
 
     static func message(for kind: AskBackendKind, status: CodexLocator.Status) -> String {
         switch status {
-        case .notFound: return "Codex CLI not found. Install it and run `codex` to sign in."
+        case .notFound: return "\(kind.displayName) not found. Install it and run `codex` to sign in."
         case .unusable(let path, let reason): return "Found at \(path) but unusable: \(reason)."
         case .ok: return ""
         }
@@ -103,6 +103,6 @@ enum BackendTester {
         if t.contains("usage limit") || t.contains("rate limit") || t.contains("quota") {
             return "Usage limit reached (Pro/Max quota)."
         }
-        return "\(kind.rawValue.capitalized) error: \(raw)"
+        return "\(kind.displayName) error: \(raw)"
     }
 }

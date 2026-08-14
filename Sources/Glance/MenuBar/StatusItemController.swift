@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// FR5: menu-bar presence, styled to 03-menubar-dropdown (app header, Claude CLI
+/// FR5: menu-bar presence, styled to 03-menubar-dropdown (app header, AI provider
 /// status line, Ask / Settings / Quit). No Dock.
 @MainActor
 final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
@@ -111,7 +111,7 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     }
 
     private func refreshStatusLine() {
-        let (connected, label) = statusProvider?() ?? (false, "Claude CLI status unknown")
+        let (connected, label) = statusProvider?() ?? (false, "AI provider status unknown")
         let dot = connected ? "● " : "○ "
         let color = connected ? NSColor.systemGreen : NSColor.systemOrange
         statusLineItem?.attributedTitle = attributed([

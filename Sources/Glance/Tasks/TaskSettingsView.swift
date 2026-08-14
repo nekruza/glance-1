@@ -5,7 +5,7 @@ import SwiftUI
 /// fallback when the task system is unavailable).
 struct TaskSettingsView: View {
 
-    static let askBackendRowTitle = "Ask backend"
+    static let askBackendRowTitle = "AI provider"
 
     enum Section: String, CaseIterable {
         case general = "General"
@@ -512,7 +512,7 @@ struct TaskSettingsView: View {
 
     private var aiSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            row(Self.askBackendRowTitle, "Local CLI used by the screen-aware overlay") {
+            row(Self.askBackendRowTitle, "Local CLI used for Ask, tasks, suggestions, meetings, and Composio") {
                 Picker("", selection: $prefs.askBackend) {
                     ForEach(AskBackendKind.allCases, id: \.self) { kind in
                         Text(kind.displayName).tag(kind)
@@ -694,10 +694,10 @@ struct TaskSettingsView: View {
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
             Text("Glance v1.0").font(DS.Typo.title)
-            Text("Personal AI assistant: ask-anything overlay, meeting transcription, and an AI task board — all running through your local Claude CLI.")
+            Text("Personal AI assistant: Ask overlay, meeting transcription, and an AI task board — all running through your selected AI provider.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
             Divider().overlay(DS.divider)
-            Text("No API keys for model traffic — everything goes through your local Claude CLI and its auth. Task data stays in ~/Library/Application Support/Glance. The Composio key (Sources) is the one stored credential, used for read-only pulls.")
+            Text("No API keys for model traffic — everything goes through your selected \(prefs.askBackend.displayName) and its auth. Task data stays in ~/Library/Application Support/Glance. The Composio key (Sources) is the one stored credential, used for read-only pulls.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
         }
     }
@@ -738,9 +738,9 @@ struct TaskSettingsView: View {
 
     private var askBackendSubtitle: String {
         if case .ok(let version) = askBackendStatus {
-            return prefs.askBackend.rawValue + " " + (version.split(separator: " ").first.map(String.init) ?? version)
+            return prefs.askBackend.displayName + " " + (version.split(separator: " ").first.map(String.init) ?? version)
         }
-        return "Install and sign in to (prefs.askBackend.displayName) to use the ask overlay"
+        return "Install and sign in to \(prefs.askBackend.displayName) to use Glance's AI features"
     }
 
     private func runTest() {
