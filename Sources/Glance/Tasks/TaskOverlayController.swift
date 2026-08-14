@@ -14,9 +14,11 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
     var isVisible: Bool { window?.isVisible ?? false }
     var onOpenSettings: (() -> Void)?
 
-    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest) {
+    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
+         providerGeneration: UInt = 0) {
         self.store = store
-        session = TaskBoardSession(store: store, runner: runner, ai: ai, ingest: ingest)
+        session = TaskBoardSession(store: store, runner: runner, ai: ai, ingest: ingest,
+                                   providerGeneration: providerGeneration)
         super.init()
         session.dismissHandler = { [weak self] in self?.dismiss() }
         session.settingsHandler = { [weak self] in
@@ -50,6 +52,14 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
     func reveal(taskId: UUID) {
         session.selectedTaskId = taskId
         present()
+    }
+
+    /// Keep the existing board window/session (and its local UI state) while
+    /// replacing only the provider-owned task services.
+    func replaceServices(runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
+                         generation: UInt) {
+        session.replaceServices(runner: runner, ai: ai, ingest: ingest,
+                                providerGeneration: generation)
     }
 
     // MARK: - Window

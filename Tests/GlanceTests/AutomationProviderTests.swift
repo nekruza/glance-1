@@ -219,9 +219,14 @@ final class AutomationProviderTests: XCTestCase {
 
     func testCancelAllFromTextInvalidatesQueuedCompletion() throws {
         let fixtureDirectory = try makeFixtureDirectory()
+        let releaseURL = fixtureDirectory.appendingPathComponent("release")
         defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        defer { FileManager.default.createFile(atPath: releaseURL.path, contents: nil) }
         let executable = try makeExecutable(in: fixtureDirectory, script: #"""
         #!/bin/sh
+        fixture_dir="$(dirname "$0")"
+        : > "$fixture_dir/started"
+        while [ ! -f "$fixture_dir/release" ]; do sleep 0.01; done
         printf '{"ok":true}'
         """#)
         let provider = ClaudeAutomationProvider(binaryPath: executable.path, version: "test")
@@ -241,7 +246,10 @@ final class AutomationProviderTests: XCTestCase {
             }
         }
 
-        wait(for: [textDelivered, staleCompletion], timeout: 0.3)
+        waitForFile(fixtureDirectory.appendingPathComponent("started"))
+        FileManager.default.createFile(atPath: releaseURL.path, contents: nil)
+        wait(for: [textDelivered], timeout: 2)
+        wait(for: [staleCompletion], timeout: 0.2)
     }
 
     func testCodexDrainsLargeStdoutAndStderrWithoutDuplicatingTerminalEvent() throws {

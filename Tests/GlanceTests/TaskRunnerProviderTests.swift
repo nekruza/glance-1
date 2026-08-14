@@ -244,7 +244,7 @@ final class TaskRunnerProviderTests: XCTestCase {
         let completed = expectation(description: "hanging terminal never completes")
         completed.isInverted = true
 
-        provider.startRun(AutomationRunRequest(prompt: "Work", workingDirectory: fixtureDirectory, timeout: 0.15)) { event in
+        provider.startRun(AutomationRunRequest(prompt: "Work", workingDirectory: fixtureDirectory, timeout: 1)) { event in
             switch event {
             case .completed:
                 completed.fulfill()
@@ -254,8 +254,8 @@ final class TaskRunnerProviderTests: XCTestCase {
                 break
             }
         }
-        XCTAssertTrue(waitForFile(fixtureDirectory.appendingPathComponent("terminal-written")))
-        wait(for: [failed, completed], timeout: 1.5)
+        XCTAssertTrue(waitForFile(fixtureDirectory.appendingPathComponent("terminal-written"), timeout: 2))
+        wait(for: [failed, completed], timeout: 2)
         provider.cancelAll()
     }
 
@@ -466,7 +466,6 @@ final class TaskRunnerProviderTests: XCTestCase {
         let script = #"""
         #!/bin/sh
         fixture_dir="$(dirname "$0")"
-        cat >/dev/null
         printf '%s\n' '{"type":"turn.completed"}'
         : > "$fixture_dir/terminal-written"
         trap '' TERM

@@ -50,6 +50,32 @@ final class AskBackendLifecycleTests: XCTestCase {
         XCTAssertTrue(overlay.session.input.isEmpty)
         XCTAssertTrue(overlay.session.suggestions.isEmpty)
     }
+
+    func testCoordinatorProviderSwitchShutsDownAskBackendBeforeReplacingTaskServices() throws {
+        let lifecycle = AskBackendLifecycle()
+        let backend = BackendSpy()
+        lifecycle.install(backend)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glance-lifecycle-switch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = LifecycleAutomationProvider()
+        let factory = AutomationProviderFactory(
+            makeClaude: { _, _ in provider },
+            makeCodex: { _, _ in provider },
+            claudeStatus: { .ok(path: "/test/claude", version: "test") },
+            codexStatus: { .ok(path: "/test/codex", version: "test") }
+        )
+        let coordinator = AppCoordinator(
+            backendLifecycle: lifecycle, overlay: OverlayController(),
+            automationProviderFactory: factory, taskStore: TaskStore(directory: directory)
+        )
+
+        coordinator.replaceProviderServices(for: .codex)
+
+        XCTAssertEqual(backend.shutdownCount, 1)
+        XCTAssertNil(lifecycle.backend)
+        XCTAssertEqual(coordinator.taskOverlay?.session.providerKind, .codex)
+    }
 }
 
 private final class BackendSpy: AskBackend {
@@ -59,4 +85,25 @@ private final class BackendSpy: AskBackend {
     func startWarm() {}
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void) {}
     func shutdown() { shutdownCount += 1 }
+}
+
+private final class LifecycleAutomationProvider: AutomationProvider {
+    let descriptor = AutomationProviderDescriptor(kind: .codex, version: "test")
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        AutomationCancellation()
+    }
+
+    func cancelAll() {}
 }

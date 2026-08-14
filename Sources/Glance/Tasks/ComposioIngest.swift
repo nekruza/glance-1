@@ -134,14 +134,21 @@ final class ComposioIngest {
         self.provider = provider
     }
 
-    /// Compatibility bridge until AppCoordinator owns the selected provider
-    /// as part of the Task 6 service-bundle migration.
+    /// Backward-compatible bridge for callers that still supply a Claude
+    /// executable path directly.
     convenience init(binaryPath: String) {
         self.init(provider: ClaudeAutomationProvider(binaryPath: binaryPath,
                                                      version: "compatibility"))
     }
 
     deinit {
+        cancelActiveRequests()
+    }
+
+    /// Provider switches invalidate the board session before tearing down the
+    /// shared provider. Stop this ingest instance's per-request handles too,
+    /// so a stale MCP call cannot outlive its service bundle.
+    func cancel() {
         cancelActiveRequests()
     }
 
@@ -379,7 +386,9 @@ final class ComposioIngest {
 
     private func cancelActiveRequests() {
         activeLock.lock()
-        let cancellations = activeRequests.values.compactMap(\.cancellation)
+        let active = Array(activeRequests.values)
+        active.forEach { $0.finished = true }
+        let cancellations = active.compactMap(\.cancellation)
         activeRequests.removeAll()
         activeLock.unlock()
         cancellations.forEach { $0.cancel() }
