@@ -3,28 +3,69 @@ import XCTest
 
 @MainActor
 final class ProviderGenerationTests: XCTestCase {
-    func testCodexSelectionHasNoClaudeAutomationLaunches() {
-        let services = ProviderCoverageServiceBundle(kind: .codex)
+    func testCoordinatorCodexSelectionLaunchesOnlyCodexAcrossAIRequests() throws {
+        let launches = ProviderLaunchRecorder()
+        let harness = try CoordinatorProviderCoverageHarness(launches: launches)
+        defer {
+            harness.removeStore()
+            harness.overlay.dismiss()
+        }
+
+        let previousBackend = Preferences.shared.askBackend
         let previousKey = Preferences.shared.composioKey
         let previousURL = Preferences.shared.composioURL
+        Preferences.shared.askBackend = .codex
         Preferences.shared.composioKey = "test-composio-token"
         Preferences.shared.composioURL = "https://connect.composio.dev/mcp"
         defer {
+            Preferences.shared.askBackend = previousBackend
             Preferences.shared.composioKey = previousKey
             Preferences.shared.composioURL = previousURL
         }
 
-        let workFinished = expectation(description: "selected provider completes every service request")
-        services.exerciseAskOneShotTaskAISuggestionsComposioAndMeetingSummary {
-            workFinished.fulfill()
-        }
-        wait(for: [workFinished], timeout: 1)
+        // This is the production service-bundle replacement path. Its factory
+        // must build only Codex before task AI, suggestions, and Composio are
+        // reached through the coordinator-owned UI services.
+        harness.coordinator.replaceProviderServices(for: .codex)
 
-        XCTAssertEqual(services.claudeLaunchCount, 0,
-                       "Codex selection must not launch Claude for any AI service")
-        XCTAssertEqual(services.codexAskLaunchCount, 1)
-        XCTAssertEqual(services.codexAutomationLaunchCount, 4,
-                       "Task AI, suggestions, Composio, and meeting summary use Codex")
+        harness.coordinator.summon()
+        waitUntil { launches.count(for: .codex, role: .askWarm) == 1 }
+        waitUntil { harness.overlay.session.submitHandler != nil }
+
+        harness.overlay.session.input = "What is on screen?"
+        harness.overlay.session.submit()
+
+        guard let board = harness.coordinator.taskOverlay?.session else {
+            return XCTFail("Coordinator should expose the rebuilt task board")
+        }
+        board.decomposeText = "Ship the provider switch"
+        board.runDecompose()
+
+        let connectionsFinished = expectation(description: "Codex lists Composio connections")
+        board.listConnections { connections, error in
+            XCTAssertNil(error)
+            XCTAssertTrue(connections?.isEmpty == true)
+            connectionsFinished.fulfill()
+        }
+
+        let transcriber = MeetingTranscriber()
+        transcriber.summaryProviderLease = { [weak coordinator = harness.coordinator] in
+            coordinator?.currentAutomationProviderLease()
+        }
+        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
+        try "Meeting transcript".write(to: notesURL, atomically: true, encoding: .utf8)
+        transcriber.summarizeForTesting("Discussed the selected provider.", into: notesURL)
+
+        wait(for: [connectionsFinished], timeout: 1)
+
+        XCTAssertEqual(launches.count(for: .claude), 0,
+                       "Codex selection must never construct or launch Claude: \(launches.summary())")
+        XCTAssertEqual(launches.count(for: .codex, role: .automationConstruction), 1)
+        XCTAssertEqual(launches.count(for: .codex, role: .askConstruction), 1)
+        XCTAssertEqual(launches.count(for: .codex, role: .askWarm), 1)
+        XCTAssertEqual(launches.count(for: .codex, role: .askTurn), 1)
+        XCTAssertEqual(launches.count(for: .codex, role: .automation), 4,
+                       "Task AI, suggestions, Composio, and meeting summary use Codex: \(launches.summary())")
     }
 
     func testMeetingSummaryUsesCurrentCodexProvider() {
@@ -399,77 +440,74 @@ private final class SummaryAutomationProvider: AutomationProvider {
     func cancelAll() {}
 }
 
-/// Exercises the same selected-provider service shape used by the app without
-/// launching either real CLI. Every fake launch is recorded by provider kind,
-/// so this regression fails if any one-shot service quietly reintroduces a
-/// Claude-specific construction path while Codex is selected.
 @MainActor
-private final class ProviderCoverageServiceBundle {
-    private let launches = ProviderLaunchRecorder()
-    private let claudeProvider: RecordingAutomationProvider
-    private let codexProvider: RecordingAutomationProvider
-    private let claudeAskBackend: RecordingAskBackend
-    private let codexAskBackend: RecordingAskBackend
-    private let askBackend: RecordingAskBackend
-    private let taskAI: TaskAI
-    private let suggestions: SuggestionService
-    private let composio: ComposioIngest
-    private let transcriber = MeetingTranscriber()
+private final class CoordinatorProviderCoverageHarness {
+    let storeDirectory: URL
+    let store: TaskStore
+    let overlay: OverlayController
+    let coordinator: AppCoordinator
 
-    init(kind: AskBackendKind) {
-        claudeProvider = RecordingAutomationProvider(kind: .claude, recorder: launches)
-        codexProvider = RecordingAutomationProvider(kind: .codex, recorder: launches)
-        claudeAskBackend = RecordingAskBackend(kind: .claude, recorder: launches)
-        codexAskBackend = RecordingAskBackend(kind: .codex, recorder: launches)
-        let selectedProvider = kind == .claude ? claudeProvider : codexProvider
-        askBackend = kind == .claude ? claudeAskBackend : codexAskBackend
-        taskAI = TaskAI(provider: selectedProvider)
-        suggestions = SuggestionService(provider: selectedProvider)
-        composio = ComposioIngest(provider: selectedProvider)
-        transcriber.summaryProvider = { selectedProvider }
+    init(launches: ProviderLaunchRecorder) throws {
+        let claudeProvider = RecordingAutomationProvider(kind: .claude, recorder: launches)
+        let codexProvider = RecordingAutomationProvider(kind: .codex, recorder: launches)
+        let claudeAsk = RecordingAskBackend(kind: .claude, recorder: launches)
+        let codexAsk = RecordingAskBackend(kind: .codex, recorder: launches)
+        storeDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glance-provider-coverage-\(UUID().uuidString)", isDirectory: true)
+        store = TaskStore(directory: storeDirectory)
+        overlay = OverlayController()
+        let automationFactory = AutomationProviderFactory(
+            makeClaude: { _, _ in
+                launches.record(kind: .claude, role: .automationConstruction)
+                return claudeProvider
+            },
+            makeCodex: { _, _ in
+                launches.record(kind: .codex, role: .automationConstruction)
+                return codexProvider
+            },
+            claudeStatus: { .ok(path: "/test/claude", version: "test") },
+            codexStatus: { .ok(path: "/test/codex", version: "test") }
+        )
+        let askBackendFactory = AskBackendFactory(
+            makeClaude: { _ in
+                launches.record(kind: .claude, role: .askConstruction)
+                return claudeAsk
+            },
+            makeCodex: { _ in
+                launches.record(kind: .codex, role: .askConstruction)
+                return codexAsk
+            },
+            claudeStatus: { .ok(path: "/test/claude", version: "test") },
+            codexStatus: { .ok(path: "/test/codex", version: "test") }
+        )
+        coordinator = AppCoordinator(
+            backendLifecycle: AskBackendLifecycle(), overlay: overlay,
+            automationProviderFactory: automationFactory,
+            askBackendFactory: askBackendFactory,
+            taskStore: store
+        )
     }
 
-    var claudeLaunchCount: Int { launches.count(for: .claude) }
-    var codexAskLaunchCount: Int { launches.count(for: .codex, role: .ask) }
-    var codexAutomationLaunchCount: Int { launches.count(for: .codex, role: .automation) }
-
-    func exerciseAskOneShotTaskAISuggestionsComposioAndMeetingSummary(
-        completion: @escaping () -> Void
-    ) {
-        let settled = DispatchGroup()
-        for _ in 0..<4 { settled.enter() }
-
-        askBackend.startWarm()
-        askBackend.ask(question: "What is on screen?", imagePNG: nil) { event in
-            if case .completed = event { settled.leave() }
-        }
-        taskAI.decompose(prompt: "Ship the provider switch") { _ in
-            settled.leave()
-        }
-        suggestions.suggest(question: "What is on screen?", answer: "A board") { _ in
-            settled.leave()
-        }
-        composio.listConnections { _, _ in
-            settled.leave()
-        }
-        transcriber.summarizeForTesting("Discussed the selected provider.")
-
-        settled.notify(queue: .main, execute: completion)
+    func removeStore() {
+        try? FileManager.default.removeItem(at: storeDirectory)
     }
 }
 
 private final class ProviderLaunchRecorder {
     enum Role {
-        case ask
+        case automationConstruction
+        case askConstruction
+        case askWarm
+        case askTurn
         case automation
     }
 
     private let lock = NSLock()
-    private var launches: [(kind: AskBackendKind, role: Role)] = []
+    private var launches: [(kind: AskBackendKind, role: Role, context: String)] = []
 
-    func record(kind: AskBackendKind, role: Role) {
+    func record(kind: AskBackendKind, role: Role, context: String = "") {
         lock.lock()
-        launches.append((kind, role))
+        launches.append((kind, role, context))
         lock.unlock()
     }
 
@@ -477,6 +515,12 @@ private final class ProviderLaunchRecorder {
         lock.lock()
         defer { lock.unlock() }
         return launches.filter { $0.kind == kind && (role == nil || $0.role == role) }.count
+    }
+
+    func summary() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return launches.map { "\($0.kind.rawValue):\($0.role):\($0.context)" }.joined(separator: ", ")
     }
 }
 
@@ -491,10 +535,12 @@ private final class RecordingAskBackend: AskBackend {
         self.recorder = recorder
     }
 
-    func startWarm() {}
+    func startWarm() {
+        recorder.record(kind: kind, role: .askWarm)
+    }
 
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void) {
-        recorder.record(kind: kind, role: .ask)
+        recorder.record(kind: kind, role: .askTurn)
         onEvent(.token("Codex answer"))
         onEvent(.completed)
     }
@@ -514,15 +560,19 @@ private final class RecordingAutomationProvider: AutomationProvider {
 
     func runText(_ request: AutomationRequest,
                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        recorder.record(kind: descriptor.kind, role: .automation)
         let output: String
+        let context: String
         if request.prompt.contains("Decompose the following braindump") {
             output = "[{\"title\":\"Ship provider switch\"}]"
+            context = "taskAI"
         } else if request.prompt.contains("suggest 3 short follow-up questions") {
             output = "What changed?\nWhat should I do next?"
+            context = "suggestions"
         } else {
             output = "## Summary\nCodex produced the notes."
+            context = "meetingSummary"
         }
+        recorder.record(kind: descriptor.kind, role: .automation, context: context)
         onEvent(.text(output))
         onEvent(.completed)
         return AutomationCancellation()
@@ -535,7 +585,7 @@ private final class RecordingAutomationProvider: AutomationProvider {
 
     func runComposio(_ request: ComposioAutomationRequest, token: String,
                      onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        recorder.record(kind: descriptor.kind, role: .automation)
+        recorder.record(kind: descriptor.kind, role: .automation, context: "composio")
         onEvent(.text("[]"))
         onEvent(.completed)
         return AutomationCancellation()

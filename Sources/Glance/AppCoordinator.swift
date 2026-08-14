@@ -29,6 +29,7 @@ final class AppCoordinator {
     }
 
     private let automationProviderFactory: AutomationProviderFactory
+    private let askBackendFactory: AskBackendFactory
     private var providerServices: ProviderServices?
     private var providerGeneration: UInt = 0
     /// Reader extraction has its own visible busy state. Providers are allowed
@@ -85,6 +86,7 @@ final class AppCoordinator {
         self.overlay = OverlayController()
         self.backendLifecycle = AskBackendLifecycle()
         self.automationProviderFactory = AutomationProviderFactory()
+        self.askBackendFactory = AskBackendFactory()
     }
 
     init(backendLifecycle: AskBackendLifecycle) {
@@ -92,6 +94,7 @@ final class AppCoordinator {
         self.overlay = OverlayController()
         self.backendLifecycle = backendLifecycle
         self.automationProviderFactory = AutomationProviderFactory()
+        self.askBackendFactory = AskBackendFactory()
     }
 
     init(backendLifecycle: AskBackendLifecycle, overlay: OverlayController) {
@@ -99,17 +102,20 @@ final class AppCoordinator {
         self.overlay = overlay
         self.backendLifecycle = backendLifecycle
         self.automationProviderFactory = AutomationProviderFactory()
+        self.askBackendFactory = AskBackendFactory()
     }
 
     /// Composition seam for the app's provider factory. It is intentionally
     /// the same lifecycle path used in production, rather than a test-only
     /// alternate task stack.
     init(backendLifecycle: AskBackendLifecycle, overlay: OverlayController,
-         automationProviderFactory: AutomationProviderFactory, taskStore: TaskStore) {
+         automationProviderFactory: AutomationProviderFactory,
+         askBackendFactory: AskBackendFactory = AskBackendFactory(), taskStore: TaskStore) {
         self.taskStore = taskStore
         self.overlay = overlay
         self.backendLifecycle = backendLifecycle
         self.automationProviderFactory = automationProviderFactory
+        self.askBackendFactory = askBackendFactory
     }
 
     func start() {
@@ -611,33 +617,22 @@ final class AppCoordinator {
     /// the same selected provider in `replaceProviderServices(for:)`.
     private func makeSelectedBackend() -> (backend: AskBackend, statusLabel: String)? {
         let kind = prefs.askBackend
-        let backend: AskBackend
-        let version: String
-
-        switch kind {
-        case .claude:
-            claudeStatus = ClaudeLocator.check()
-            guard case .ok(let path, let detectedVersion) = claudeStatus else {
-                PermissionOnboarding.reportClaudeStatus(claudeStatus)
-                return nil
-            }
-            let claude = ClaudeBackend(binaryPath: path)
-            claude.appendSystemPrompt = TaskCapture.systemPrompt
-            backend = claude
-            version = detectedVersion
-        case .codex:
-            let status = CodexLocator.check()
-            guard case .ok(let path, let detectedVersion) = status else {
-                PermissionOnboarding.reportCodexStatus(status)
-                return nil
-            }
-            backend = CodexBackend(binaryPath: path)
-            version = detectedVersion
+        let selection: AskBackendFactory.Selection
+        switch askBackendFactory.make(kind: kind) {
+        case .success(let selected):
+            selection = selected
+        case .failure(let status):
+            PermissionOnboarding.reportAskProvider(kind: kind, availability: status)
+            return nil
         }
 
+        let backend = selection.backend
+        if let claude = backend as? ClaudeBackend {
+            claude.appendSystemPrompt = TaskCapture.systemPrompt
+        }
         backend.firstTokenTimeout = 30 // FR13
         backend.startWarm()
-        return (backend, connectionLabel(for: kind, version: version))
+        return (backend, connectionLabel(for: kind, version: selection.version))
     }
 
     private func showOverlay() {

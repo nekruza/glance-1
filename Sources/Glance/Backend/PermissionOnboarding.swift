@@ -61,6 +61,23 @@ enum PermissionOnboarding {
         alert.runModal()
     }
 
+    /// Report the selected conversational provider's unified discovery result
+    /// while retaining the provider-specific installation guidance above.
+    static func reportAskProvider(kind: AskBackendKind, availability: AutomationAvailability) {
+        switch (kind, availability) {
+        case (_, .available):
+            return
+        case (.claude, .notFound):
+            reportClaudeStatus(.notFound)
+        case (.claude, .unusable(let path, let reason)):
+            reportClaudeStatus(.unusable(path: path, reason: reason))
+        case (.codex, .notFound):
+            reportCodexStatus(.notFound)
+        case (.codex, .unusable(let path, let reason)):
+            reportCodexStatus(.unusable(path: path, reason: reason))
+        }
+    }
+
     /// Selected-provider diagnostics for Codex CLI missing / unusable.
     static func reportCodexStatus(_ status: CodexLocator.Status) {
         let alert = NSAlert()
