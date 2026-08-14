@@ -107,6 +107,8 @@ final class TaskBoardSession: ObservableObject {
     /// cache so prep notes across meetings reuse one fetch per source.
     private(set) var workContext: WorkContext
     private var providerGeneration: UInt
+    private var pendingConnectionCompletions:
+        [UUID: ([ComposioIngest.Connection]?, String?) -> Void] = [:]
 
     private struct ProviderToken: Equatable {
         let generation: UInt
@@ -162,15 +164,23 @@ final class TaskBoardSession: ObservableObject {
     func cancelProviderWork() {
         providerGeneration &+= 1
         ingest.cancel()
+        let pendingConnections = Array(pendingConnectionCompletions.values)
+        pendingConnectionCompletions.removeAll()
         pullingSource = nil
         pullAllRemaining = 0
+        pullStatus = nil
         decomposeBusy = false
         isPrioritizing = false
         promptBusyTaskIds.removeAll()
         prepBusyTaskIds.removeAll()
+        prepPhase = "Gathering context…"
         draftBusyTaskIds.removeAll()
         sendBusyTaskIds.removeAll()
+        sendError.removeAll()
         briefingBusy = false
+        // Some providers suppress callbacks when cancelled. Settle view-owned
+        // spinners synchronously while the old generation is invalidated.
+        pendingConnections.forEach { $0(nil, nil) }
     }
 
     private func providerToken() -> ProviderToken {
@@ -181,7 +191,7 @@ final class TaskBoardSession: ObservableObject {
         token.generation == providerGeneration && token.kind == providerKind
     }
 
-    /// Settings ▸ Agents passthrough: Opus designs a profile from a request.
+    /// Settings ▸ Agents passthrough: the selected provider designs a profile.
     func generateAgent(request: String, completion: @escaping (AgentProfile?) -> Void) {
         let token = providerToken()
         let existing = Preferences.shared.agents.map(\.name)
@@ -210,8 +220,12 @@ final class TaskBoardSession: ObservableObject {
     /// Settings ▸ Connections passthrough (ingest is private).
     func listConnections(completion: @escaping ([ComposioIngest.Connection]?, String?) -> Void) {
         let token = providerToken()
+        let requestID = UUID()
+        pendingConnectionCompletions[requestID] = completion
         ingest.listConnections { [weak self] connections, error in
-            guard let self, self.isCurrent(token) else { return }
+            guard let self, self.isCurrent(token),
+                  let completion = self.pendingConnectionCompletions.removeValue(forKey: requestID)
+            else { return }
             completion(connections, error)
         }
     }

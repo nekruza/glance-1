@@ -71,6 +71,32 @@ final class CodexStreamEventTests: XCTestCase {
         waitForFileRemoval(URL(fileURLWithPath: imagePath))
     }
 
+    func testShutdownForceKillsCodexProcessThatIgnoresTermination() throws {
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-shutdown-kill-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = fixtureDirectory.appendingPathComponent("fake-codex")
+        let script = #"""
+        #!/bin/sh
+        trap '' TERM
+        printf '%s' "$$" > "$(dirname "$0")/pid"
+        exec /bin/sleep 60
+        """#
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let backend = CodexBackend(binaryPath: executable.path)
+        backend.ask(question: "Wait", imagePNG: nil) { _ in }
+        let pidURL = fixtureDirectory.appendingPathComponent("pid")
+        waitForFile(pidURL)
+        let processID = try XCTUnwrap(pid_t(try String(contentsOf: pidURL, encoding: .utf8)))
+        defer { Darwin.kill(processID, SIGKILL) }
+
+        backend.shutdown()
+
+        waitForProcessExit(processID, timeout: 1.5)
+    }
+
     func testBackendDispatchesFollowUpWhenCompletedProcessStalls() throws {
         let fixtureDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-stalled-exit-test-\(UUID().uuidString)", isDirectory: true)
@@ -256,6 +282,21 @@ final class CodexStreamEventTests: XCTestCase {
             }
         }
         wait(for: [removed], timeout: timeout + 0.5)
+    }
+
+    private func waitForProcessExit(_ processID: pid_t, timeout: TimeInterval) {
+        let exited = expectation(description: "process \(processID) exits")
+        DispatchQueue.global().async {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if Darwin.kill(processID, 0) == -1, errno == ESRCH {
+                    exited.fulfill()
+                    return
+                }
+                usleep(10_000)
+            }
+        }
+        wait(for: [exited], timeout: timeout + 0.5)
     }
 
     private func permissions(atPath path: String) throws -> Int {

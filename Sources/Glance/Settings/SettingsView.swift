@@ -11,10 +11,8 @@ struct SettingsView: View {
 
     @State private var status: BackendStatus = .notConnected
     @State private var hasScreenPermission = ScreenCaptureService.hasPermission
-    @State private var testing = false
-    @State private var testResult: TestResult?
+    @StateObject private var backendTest = BackendTestSession()
 
-    private enum TestResult { case ok(String), fail(String) }
     private enum BackendStatus { case ok(String), notConnected }
 
     var body: some View {
@@ -183,12 +181,12 @@ struct SettingsView: View {
                     settingLabel("AI provider: \(prefs.askBackend.displayName)", backendSubtitle)
                 }
 
-                if let r = testResult { resultRow(r) }
+                if let outcome = backendTest.outcome { resultRow(outcome) }
 
                 HStack {
-                    Button(testing ? "Testing…" : "Test") { runTest() }
-                        .disabled(testing || !isOK)
-                    if testing { ProgressView().controlSize(.small) }
+                    Button(backendTest.isTesting ? "Testing…" : "Test") { runTest() }
+                        .disabled(backendTest.isTesting || !isOK)
+                    if backendTest.isTesting { ProgressView().controlSize(.small) }
                     Spacer()
                     Button("Rescan") { rescan() }
                 }
@@ -207,6 +205,7 @@ struct SettingsView: View {
             rescan()
         }
         .onChange(of: prefs.askBackend) { _, _ in
+            backendTest.providerDidChange(to: prefs.askBackend)
             rescan()
         }
     }
@@ -230,12 +229,16 @@ struct SettingsView: View {
         .foregroundStyle(color)
     }
 
-    @ViewBuilder private func resultRow(_ r: TestResult) -> some View {
+    @ViewBuilder private func resultRow(_ r: BackendTester.Outcome) -> some View {
         switch r {
-        case .ok(let m):
-            Label(m, systemImage: "checkmark.circle.fill").foregroundStyle(DS.success).font(.callout)
-        case .fail(let m):
-            Label(m, systemImage: "exclamationmark.circle.fill").foregroundStyle(DS.warning).font(.callout)
+        case .success(let success):
+            Label(String(format: "Responded in %.1fs — \u{201C}%@\u{201D}",
+                         success.latency, success.reply),
+                  systemImage: "checkmark.circle.fill")
+                .foregroundStyle(DS.success).font(.callout)
+        case .failure(let message):
+            Label(message, systemImage: "exclamationmark.circle.fill")
+                .foregroundStyle(DS.warning).font(.callout)
         }
     }
 
@@ -266,18 +269,7 @@ struct SettingsView: View {
     }
 
     private func runTest() {
-        testing = true; testResult = nil
-        let kind = prefs.askBackend
-        BackendTester.test(kind: kind) { outcome in
-            guard prefs.askBackend == kind else { return }
-            testing = false
-            switch outcome {
-            case .success(let s):
-                testResult = .ok(String(format: "Responded in %.1fs — \u{201C}%@\u{201D}", s.latency, s.reply))
-            case .failure(let msg):
-                testResult = .fail(msg)
-            }
-        }
+        backendTest.start(kind: prefs.askBackend)
     }
 
     /// Bridges "minutes since midnight" to a DatePicker time.
@@ -323,7 +315,5 @@ struct SettingsView: View {
             }
         }
         hasScreenPermission = ScreenCaptureService.hasPermission
-        testing = false
-        testResult = nil
     }
 }

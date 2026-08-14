@@ -37,8 +37,7 @@ struct TaskSettingsView: View {
     @State private var section: Section = .general
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var askBackendStatus: AskBackendStatus = .notConnected
-    @State private var testing = false
-    @State private var testResult: String?
+    @StateObject private var backendTest = BackendTestSession()
 
     @State private var connections: [ComposioIngest.Connection] = []
     @State private var connectionsLoading = false
@@ -521,7 +520,11 @@ struct TaskSettingsView: View {
                 .labelsHidden()
                 .frame(width: 130)
                 .onChange(of: prefs.askBackend) { _, _ in
-                    testResult = nil
+                    backendTest.providerDidChange(to: prefs.askBackend)
+                    connectionsLoading = false
+                    connectionsError = nil
+                    connectionsCheckedAt = nil
+                    connections = []
                     rescanAskBackend()
                 }
             }
@@ -533,13 +536,13 @@ struct TaskSettingsView: View {
                     } else {
                         pill("Not connected", DS.warning, soft: DS.warningSoft)
                     }
-                    Button(testing ? "Testing…" : "Test") { runTest() }
+                    Button(backendTest.isTesting ? "Testing…" : "Test") { runTest() }
                         .controlSize(.small)
-                        .disabled(testing)
+                        .disabled(backendTest.isTesting)
                 }
             }
-            if let r = testResult {
-                Text(r).font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+            if let outcome = backendTest.outcome {
+                Text(testResultText(outcome)).font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                     .padding(.bottom, DS.Space.xs)
             }
             Divider().overlay(DS.divider)
@@ -744,17 +747,15 @@ struct TaskSettingsView: View {
     }
 
     private func runTest() {
-        testing = true
-        testResult = nil
-        BackendTester.test(kind: prefs.askBackend) { outcome in
-            testing = false
-            switch outcome {
-            case .success(let s):
-                testResult = String(format: "Responded in %.1fs — “%@”", s.latency, s.reply)
-            case .failure(let msg):
-                testResult = msg
-            }
-            rescanAskBackend()
+        backendTest.start(kind: prefs.askBackend)
+    }
+
+    private func testResultText(_ outcome: BackendTester.Outcome) -> String {
+        switch outcome {
+        case .success(let success):
+            return String(format: "Responded in %.1fs — “%@”", success.latency, success.reply)
+        case .failure(let message):
+            return message
         }
     }
 

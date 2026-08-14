@@ -158,6 +158,42 @@ final class ProviderGenerationTests: XCTestCase {
         XCTAssertEqual(harness.coordinator.taskOverlay?.session.providerKind, .codex)
     }
 
+    func testProviderSwitchClearsTransientBoardStateAndSettlesSuppressedConnectionRefresh() throws {
+        let harness = try CoordinatorProviderHarness(suppressClaudeCallbacksOnCancel: true)
+        defer { harness.removeStore() }
+        let previousKey = Preferences.shared.composioKey
+        let previousURL = Preferences.shared.composioURL
+        Preferences.shared.composioKey = "test-composio-token"
+        Preferences.shared.composioURL = "https://connect.composio.dev/mcp"
+        defer {
+            Preferences.shared.composioKey = previousKey
+            Preferences.shared.composioURL = previousURL
+        }
+        let taskID = UUID()
+        var completions: [([ComposioIngest.Connection]?, String?)] = []
+
+        harness.coordinator.replaceProviderServices(for: .claude)
+        guard let board = harness.coordinator.taskOverlay?.session else {
+            return XCTFail("Expected task board session")
+        }
+        board.pullStatus = "Composio call failed (Claude exited 1)."
+        board.sendError[taskID] = "Claude could not send this draft."
+        board.listConnections { completions.append(($0, $1)) }
+        waitUntil { harness.claude.composioRequestCount == 1 }
+
+        harness.coordinator.replaceProviderServices(for: .codex)
+
+        XCTAssertNil(board.pullStatus)
+        XCTAssertTrue(board.sendError.isEmpty)
+        XCTAssertEqual(completions.count, 1,
+                       "A provider switch must settle a settings refresh even when cancellation suppresses the CLI callback")
+        XCTAssertNil(completions.first?.0)
+        XCTAssertNil(completions.first?.1)
+        harness.claude.emitComposio([.failed("stale Claude failure")])
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(completions.count, 1, "A stale provider callback must not settle the new UI twice")
+    }
+
     func testLateClaudeTaskAICallbackCannotMutateCodexBoard() throws {
         let harness = try CoordinatorProviderHarness()
         defer { harness.removeStore() }
@@ -254,6 +290,56 @@ final class ProviderGenerationTests: XCTestCase {
             atPath: fixtureDirectory.appendingPathComponent("codex-probe-ran").path))
     }
 
+    func testSwitchingToCodexCancelsActiveClaudeModelProbeBeforeAnotherAliasLaunches() throws {
+        let harness = try CoordinatorProviderHarness()
+        defer { harness.removeStore() }
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glance-model-probe-cancel-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let probe = fixtureDirectory.appendingPathComponent("claude-probe")
+        let script = #"""
+        #!/bin/sh
+        fixture_dir="$(dirname "$0")"
+        count_file="$fixture_dir/count"
+        count=0
+        if [ -f "$count_file" ]; then count="$(cat "$count_file")"; fi
+        count=$((count + 1))
+        printf '%s' "$count" > "$count_file"
+        if [ "$count" -gt 1 ]; then : > "$fixture_dir/launched-another-alias"; fi
+        trap '' TERM
+        printf '%s' "$$" > "$fixture_dir/pid"
+        exec /bin/sleep 60
+        """#
+        try Data(script.utf8).write(to: probe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: probe.path)
+        let provider = HoldingAutomationProvider(kind: .claude,
+                                                 version: "claude-cancel-\(UUID().uuidString)",
+                                                 binaryPath: probe.path)
+        let factory = AutomationProviderFactory(
+            makeClaude: { _, _ in provider },
+            makeCodex: { _, _ in HoldingAutomationProvider(kind: .codex) },
+            claudeStatus: { .ok(path: probe.path, version: provider.descriptor.version) },
+            codexStatus: { .ok(path: "/test/codex", version: "test") }
+        )
+        let coordinator = AppCoordinator(
+            backendLifecycle: AskBackendLifecycle(), overlay: OverlayController(),
+            automationProviderFactory: factory, taskStore: harness.store
+        )
+
+        coordinator.replaceProviderServices(for: .claude)
+        let pidURL = fixtureDirectory.appendingPathComponent("pid")
+        waitForFile(pidURL)
+        let processID = try XCTUnwrap(pid_t(try String(contentsOf: pidURL, encoding: .utf8)))
+        defer { Darwin.kill(processID, SIGKILL) }
+
+        coordinator.replaceProviderServices(for: .codex)
+
+        waitForProcessExit(processID, timeout: 1.5)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixtureDirectory.appendingPathComponent("launched-another-alias").path))
+    }
+
     func testUnavailableSelectedProviderKeepsTheLocalBoardAvailable() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("glance-unavailable-provider-\(UUID().uuidString)", isDirectory: true)
@@ -301,6 +387,24 @@ final class ProviderGenerationTests: XCTestCase {
         try script.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
         return executable
+    }
+
+    private func waitForFile(_ url: URL, timeout: TimeInterval = 2) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !FileManager.default.fileExists(atPath: url.path), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
+                      "Timed out waiting for \(url.lastPathComponent)")
+    }
+
+    private func waitForProcessExit(_ processID: pid_t, timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if Darwin.kill(processID, 0) == -1, errno == ESRCH { return }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTFail("Process \(processID) did not exit")
     }
 }
 

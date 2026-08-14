@@ -534,8 +534,8 @@ private struct AgentEditorPane: View {
 
 // MARK: - AI design sheet
 
-/// Describe the agent you need; Opus designs the profile (persona, model,
-/// least-privilege tools). On success the new agent is appended and selected.
+/// Describe the agent you need; the selected provider designs the profile
+/// (persona, model, least-privilege tools). On success it is appended and selected.
 private struct AIDesignSheet: View {
     @ObservedObject var session: TaskBoardSession
     var onCreated: (UUID) -> Void
@@ -551,7 +551,7 @@ private struct AIDesignSheet: View {
                 Image(systemName: "sparkles").foregroundStyle(DS.accentText)
                 Text("Design an agent with AI").font(DS.Typo.headline)
             }
-            Text("Describe the specialist you need. Opus writes the persona, picks the model, and grants least-privilege tools. Review and tweak before first use.")
+            Text("Describe the specialist you need. \(session.providerKind.displayName) writes the persona, picks the model, and grants least-privilege tools. Review and tweak before first use.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 

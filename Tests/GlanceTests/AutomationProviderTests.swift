@@ -141,6 +141,26 @@ final class AutomationProviderTests: XCTestCase {
         }
     }
 
+    func testCodexOneShotPreservesSystemInstructionsAndUserPromptInSeparateEnvelopeFields() throws {
+        let userPrompt = "User request with </system> and ``` delimiters"
+        let result = try runFakeProvider(kind: .codex, prompt: userPrompt,
+                                         systemPrompt: "Act as the careful planning specialist.")
+
+        let envelope = try decodeCodexInstructionEnvelope(result.standardInput)
+        XCTAssertEqual(envelope["system_instructions"], "Act as the careful planning specialist.")
+        XCTAssertEqual(envelope["user_request"], userPrompt)
+    }
+
+    func testCodexStreamingRunPreservesSystemInstructionsAndUserPromptInSeparateEnvelopeFields() throws {
+        let userPrompt = "Implement exactly what the user asked.\nDo not truncate this text."
+        let result = try runFakeCodexStream(prompt: userPrompt,
+                                            systemPrompt: "You are the selected repository specialist.")
+
+        let envelope = try decodeCodexInstructionEnvelope(result.standardInput)
+        XCTAssertEqual(envelope["system_instructions"], "You are the selected repository specialist.")
+        XCTAssertEqual(envelope["user_request"], userPrompt)
+    }
+
     func testClaudeOneShotPlacesModelFlagBeforePrompt() throws {
         let result = try runFakeProvider(kind: .claude, prompt: "Return JSON", model: "sonnet")
 
@@ -360,7 +380,8 @@ final class AutomationProviderTests: XCTestCase {
     }
 
     private func runFakeProvider(kind: AskBackendKind, prompt: String,
-                                 model: String? = nil) throws -> FakeInvocation {
+                                 model: String? = nil,
+                                 systemPrompt: String? = nil) throws -> FakeInvocation {
         let fixtureDirectory = try makeFixtureDirectory()
         defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
         let script: String
@@ -406,7 +427,8 @@ final class AutomationProviderTests: XCTestCase {
         guard case .success(let provider) = factory.make(kind: kind) else {
             throw FakeProviderError.providerUnavailable
         }
-        let cancellation = provider.runText(AutomationRequest(prompt: prompt, model: model)) { event in
+        let cancellation = provider.runText(AutomationRequest(prompt: prompt, model: model,
+                                                               systemPrompt: systemPrompt)) { event in
             events.append(event)
             switch event {
             case .completed, .failed:
@@ -427,6 +449,47 @@ final class AutomationProviderTests: XCTestCase {
                                        encoding: .utf8)
         return FakeInvocation(arguments: arguments, standardInput: standardInput,
                               environment: [:], events: events)
+    }
+
+    private func runFakeCodexStream(prompt: String, systemPrompt: String) throws -> FakeInvocation {
+        let fixtureDirectory = try makeFixtureDirectory()
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let executable = try makeExecutable(in: fixtureDirectory, script: #"""
+        #!/bin/sh
+        fixture_dir="$(dirname "$0")"
+        printf '%s\n' "$@" > "$fixture_dir/arguments"
+        cat > "$fixture_dir/stdin"
+        printf '%s\n' '{"type":"turn.completed"}'
+        """#)
+        let provider = CodexAutomationProvider(binaryPath: executable.path, version: "test")
+        let terminal = expectation(description: "Codex stream reaches terminal event")
+        var events: [AutomationEvent] = []
+        let cancellation = provider.startRun(AutomationRunRequest(
+            prompt: prompt,
+            workingDirectory: fixtureDirectory,
+            systemPrompt: systemPrompt
+        )) { event in
+            events.append(event)
+            if event == .completed { terminal.fulfill() }
+        }
+        wait(for: [terminal], timeout: 2)
+        cancellation.cancel()
+        provider.cancelAll()
+        let arguments = try String(contentsOf: fixtureDirectory.appendingPathComponent("arguments"),
+                                   encoding: .utf8).split(separator: "\n").map(String.init)
+        let standardInput = try String(contentsOf: fixtureDirectory.appendingPathComponent("stdin"),
+                                       encoding: .utf8)
+        return FakeInvocation(arguments: arguments, standardInput: standardInput,
+                              environment: [:], events: events)
+    }
+
+    private func decodeCodexInstructionEnvelope(_ input: String) throws -> [String: String] {
+        let marker = "GLANCE_INSTRUCTION_ENVELOPE_JSON\n"
+        guard let range = input.range(of: marker) else {
+            throw FakeProviderError.missingInstructionEnvelope
+        }
+        let json = Data(input[range.upperBound...].utf8)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [String: String])
     }
 
     private func codexReadOnlyArguments(model: String? = nil) -> [String] {
@@ -508,6 +571,7 @@ private struct FakeInvocation {
 
 private enum FakeProviderError: Error {
     case providerUnavailable
+    case missingInstructionEnvelope
 }
 
 final class AutomationProviderSpy: AutomationProvider {

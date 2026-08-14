@@ -190,6 +190,7 @@ final class AppCoordinator {
     /// terminated.
     func replaceProviderServices(for kind: AskBackendKind) {
         providerGeneration &+= 1
+        ModelCatalog.shared.providerDidChange()
         backendLifecycle.shutdown()
         suggestions?.cancel()
         taskRunner?.cancelAll(reason: "AI provider changed.")

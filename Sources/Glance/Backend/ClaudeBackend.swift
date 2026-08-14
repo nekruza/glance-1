@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Drives one Claude CLI process per overlay session (FR14).
 ///
@@ -37,6 +38,11 @@ final class ClaudeBackend: AskBackend {
     private var currentHandler: ((AskBackendEvent) -> Void)?
     private var sawTokenThisTurn = false
     private var timeoutWork: DispatchWorkItem?
+    private var shutdownForceKillWork: DispatchWorkItem?
+    private var shuttingDown = false
+    /// `AskBackendLifecycle` releases a backend immediately after shutdown.
+    /// Retain this owner until its child has actually exited.
+    private var shutdownKeepAlive: ClaudeBackend?
 
     private let ioQueue = DispatchQueue(label: "com.h57q3wq0c.glance.backend")
 
@@ -77,7 +83,7 @@ final class ClaudeBackend: AskBackend {
     }
 
     private func spawnIfNeeded() {
-        guard process == nil else { return }
+        guard process == nil, !shuttingDown else { return }
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
@@ -153,21 +159,23 @@ final class ClaudeBackend: AskBackend {
     /// End the session (FR4 dismissal, FR9 cleanup). Terminates the process and
     /// drops the in-memory screenshot bytes.
     func shutdown() {
-        ioQueue.async { [weak self] in
-            guard let self else { return }
+        ioQueue.async { [self] in
             self.timeoutWork?.cancel()
+            self.timeoutWork = nil
             self.currentHandler = nil
+            self.shuttingDown = true
             if let p = self.process, p.isRunning {
+                self.shutdownKeepAlive = self
                 self.stdinPipe?.fileHandleForWriting.closeFile()
-                p.terminate()
+                (p.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+                self.requestShutdown(of: p)
+            } else {
+                self.process = nil
+                self.stdinPipe = nil
+                self.finishShutdown()
             }
-            self.process = nil
-            self.stdinPipe = nil
             self.stdoutBuffer.removeAll()
             self.didSendFirstMessage = false
-            if self.ownsWorkingDir {
-                try? FileManager.default.removeItem(at: self.workingDir)
-            }
         }
     }
 
@@ -212,6 +220,8 @@ final class ClaudeBackend: AskBackend {
         // A terminated process we already replaced (timeout → shutdown →
         // respawn) must not clobber the live one's state.
         guard p === process else { return }
+        shutdownForceKillWork?.cancel()
+        shutdownForceKillWork = nil
         // If the process dies mid-turn, surface it rather than spin (FR13/FR16).
         timeoutWork?.cancel()
         if currentHandler != nil {
@@ -219,6 +229,33 @@ final class ClaudeBackend: AskBackend {
         }
         process = nil
         stdinPipe = nil
+        if shuttingDown { finishShutdown() }
+    }
+
+    private func requestShutdown(of process: Process) {
+        guard process.isRunning else {
+            self.process = nil
+            self.stdinPipe = nil
+            finishShutdown()
+            return
+        }
+        process.terminate()
+        let work = DispatchWorkItem { [weak self, weak process] in
+            guard let self, let process, process === self.process,
+                  process.isRunning else { return }
+            Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        shutdownForceKillWork = work
+        ioQueue.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func finishShutdown() {
+        shutdownForceKillWork?.cancel()
+        shutdownForceKillWork = nil
+        if ownsWorkingDir {
+            try? FileManager.default.removeItem(at: workingDir)
+        }
+        shutdownKeepAlive = nil
     }
 
     private func startTimeout() {

@@ -25,6 +25,10 @@ final class CodexBackend: AskBackend {
     private var receivedTerminalEvent = false
     private var timeoutWork: DispatchWorkItem?
     private var terminalExitWork: DispatchWorkItem?
+    private var shuttingDown = false
+    /// Keep the backend and its Process owned until the termination handler
+    /// observes exit, even after AskBackendLifecycle drops its reference.
+    private var shutdownKeepAlive: CodexBackend?
 
     init(binaryPath: String) {
         self.binaryPath = binaryPath
@@ -36,14 +40,15 @@ final class CodexBackend: AskBackend {
     /// Codex's exec protocol needs a prompt to start, so warming only ensures
     /// the private working directory is ready.
     func startWarm() {
-        ioQueue.async { [workingDirectory] in
-            Self.createPrivateDirectory(at: workingDirectory)
+        ioQueue.async { [weak self] in
+            guard let self, !self.shuttingDown else { return }
+            Self.createPrivateDirectory(at: self.workingDirectory)
         }
     }
 
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void) {
         ioQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.shuttingDown else { return }
             if self.process != nil, self.currentHandler == nil, self.pendingTurn == nil {
                 self.pendingTurn = PendingTurn(question: question, imagePNG: imagePNG, handler: onEvent)
                 return
@@ -85,12 +90,12 @@ final class CodexBackend: AskBackend {
         // Invalidate callbacks already queued on main before scheduling the
         // slower process/file cleanup on ioQueue.
         advanceCallbackGeneration()
-        ioQueue.async { [weak self] in
-            guard let self else { return }
+        ioQueue.async { [self] in
             self.timeoutWork?.cancel()
             self.timeoutWork = nil
             self.terminalExitWork?.cancel()
             self.terminalExitWork = nil
+            self.shuttingDown = true
             self.advanceCallbackGeneration()
             self.currentHandler = nil
             self.pendingTurn = nil
@@ -98,10 +103,12 @@ final class CodexBackend: AskBackend {
             self.stdoutPipe?.fileHandleForReading.readabilityHandler = nil
             self.stderrPipe?.fileHandleForReading.readabilityHandler = nil
             if let process = self.process, process.isRunning {
-                process.terminate()
+                self.shutdownKeepAlive = self
+                self.requestShutdown(of: process)
+            } else {
+                self.resetProcessState()
+                self.finishShutdown()
             }
-            self.resetProcessState()
-            try? FileManager.default.removeItem(at: self.workingDirectory)
         }
     }
 
@@ -266,6 +273,10 @@ final class CodexBackend: AskBackend {
         let nextTurn = pendingTurn
         pendingTurn = nil
         resetProcessState()
+        if shuttingDown {
+            finishShutdown()
+            return
+        }
         if let nextTurn {
             beginTurn(question: nextTurn.question, imagePNG: nextTurn.imagePNG, onEvent: nextTurn.handler)
         }
@@ -294,6 +305,29 @@ final class CodexBackend: AskBackend {
         }
         terminalExitWork = work
         ioQueue.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func requestShutdown(of process: Process) {
+        guard process.isRunning else {
+            resetProcessState()
+            finishShutdown()
+            return
+        }
+        process.terminate()
+        let work = DispatchWorkItem { [weak self, weak process] in
+            guard let self, let process, process === self.process,
+                  process.isRunning else { return }
+            Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        terminalExitWork = work
+        ioQueue.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func finishShutdown() {
+        terminalExitWork?.cancel()
+        terminalExitWork = nil
+        try? FileManager.default.removeItem(at: workingDirectory)
+        shutdownKeepAlive = nil
     }
 
     private func startTimeout() {
