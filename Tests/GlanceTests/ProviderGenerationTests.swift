@@ -61,6 +61,28 @@ final class ProviderGenerationTests: XCTestCase {
         XCTAssertTrue(harness.store.tasks.isEmpty)
     }
 
+    func testProviderSwitchSettlesMeetingExtractionWhenCancellationSuppressesCallback() throws {
+        let harness = try CoordinatorProviderHarness(suppressClaudeCallbacksOnCancel: true)
+        defer {
+            harness.removeStore()
+            TranscriptPanelModel.shared.extractTasksHandler = nil
+        }
+        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
+        try "Follow up with the team.".write(to: notesURL, atomically: true, encoding: .utf8)
+        let entry = MeetingHistory.Entry(url: notesURL, title: "Meeting",
+                                         modified: Date(), snippet: "Follow up")
+        var completions: [Int] = []
+
+        harness.coordinator.replaceProviderServices(for: .claude)
+        TranscriptPanelModel.shared.extractTasksHandler?(entry) { completions.append($0) }
+        waitUntil { harness.claude.textRequestCount == 1 }
+
+        harness.coordinator.replaceProviderServices(for: .codex)
+
+        waitUntil { completions == [0] }
+        XCTAssertTrue(harness.store.tasks.isEmpty)
+    }
+
     func testProviderServiceRebuildRefreshesModelsForClaudeButNotCodex() throws {
         let harness = try CoordinatorProviderHarness()
         defer { harness.removeStore() }
@@ -149,13 +171,16 @@ final class ProviderGenerationTests: XCTestCase {
 
 @MainActor
 private final class CoordinatorProviderHarness {
-    let claude = HoldingAutomationProvider(kind: .claude)
-    let codex = HoldingAutomationProvider(kind: .codex)
+    let claude: HoldingAutomationProvider
+    let codex: HoldingAutomationProvider
     let storeDirectory: URL
     let store: TaskStore
     let coordinator: AppCoordinator
 
-    init() throws {
+    init(suppressClaudeCallbacksOnCancel: Bool = false) throws {
+        claude = HoldingAutomationProvider(kind: .claude,
+                                           suppressCallbacksOnCancel: suppressClaudeCallbacksOnCancel)
+        codex = HoldingAutomationProvider(kind: .codex)
         storeDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("glance-provider-generation-\(UUID().uuidString)", isDirectory: true)
         store = TaskStore(directory: storeDirectory)
@@ -197,8 +222,12 @@ private final class HoldingAutomationProvider: AutomationProvider {
         return textCallbacks.count
     }
 
-    init(kind: AskBackendKind, version: String = "test", binaryPath: String? = nil) {
+    private let suppressCallbacksOnCancel: Bool
+
+    init(kind: AskBackendKind, version: String = "test", binaryPath: String? = nil,
+         suppressCallbacksOnCancel: Bool = false) {
         descriptor = AutomationProviderDescriptor(kind: kind, version: version, binaryPath: binaryPath)
+        self.suppressCallbacksOnCancel = suppressCallbacksOnCancel
     }
 
     func runText(_ request: AutomationRequest,
@@ -225,6 +254,10 @@ private final class HoldingAutomationProvider: AutomationProvider {
     func cancelAll() {
         lock.lock()
         cancelAllCount += 1
+        if suppressCallbacksOnCancel {
+            textCallbacks.removeAll()
+            composioCallbacks.removeAll()
+        }
         lock.unlock()
     }
 

@@ -31,6 +31,10 @@ final class AppCoordinator {
     private let automationProviderFactory: AutomationProviderFactory
     private var providerServices: ProviderServices?
     private var providerGeneration: UInt = 0
+    /// Reader extraction has its own visible busy state. Providers are allowed
+    /// to suppress callbacks when cancelled, so keep its completion at the
+    /// lifecycle boundary and settle it explicitly on a provider change.
+    private var pendingMeetingExtractionCompletions: [UUID: (Int) -> Void] = [:]
     private var taskInfrastructureConfigured = false
 
     /// Opens the Settings window (wired to the status-item controller).
@@ -164,6 +168,7 @@ final class AppCoordinator {
         suggestions?.cancel()
         taskRunner?.cancelAll(reason: "AI provider changed.")
         taskOverlay?.session.cancelProviderWork()
+        settlePendingMeetingExtractions()
         providerServices?.provider.cancelAll()
         setupTasks(for: kind, generation: providerGeneration)
     }
@@ -463,12 +468,14 @@ final class AppCoordinator {
             return
         }
         let generation = providerGeneration
+        let extractionID = UUID()
+        pendingMeetingExtractionCompletions[extractionID] = completion
         taskAI.extractActionItems(meetingText: text) { [weak self] items in
             guard let self, self.isCurrentProvider(kind: kind, generation: generation) else {
                 // The reader button owns this completion. A provider switch
                 // must not apply the old result, but it still has to settle
                 // the visible extracting state.
-                completion(0)
+                self?.completeMeetingExtraction(extractionID, count: 0)
                 return
             }
             let items = items ?? []
@@ -483,8 +490,19 @@ final class AppCoordinator {
                 let added = self.taskStore.add(t)
                 self.taskNotifications.post(message: "Task added: \(added.title)", taskId: added.id)
             }
-            completion(items.count)
+            self.completeMeetingExtraction(extractionID, count: items.count)
         }
+    }
+
+    private func settlePendingMeetingExtractions() {
+        let completions = Array(pendingMeetingExtractionCompletions.values)
+        pendingMeetingExtractionCompletions.removeAll()
+        completions.forEach { $0(0) }
+    }
+
+    private func completeMeetingExtraction(_ id: UUID, count: Int) {
+        guard let completion = pendingMeetingExtractionCompletions.removeValue(forKey: id) else { return }
+        completion(count)
     }
 
     /// Hotkey bindings that failed to register, for the menu warning line.
