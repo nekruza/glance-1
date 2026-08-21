@@ -110,6 +110,12 @@ enum DS {
     // MARK: - Typography (the only point sizes on the light surfaces)
 
     enum Typo {
+        /// Onboarding hero title only.
+        static let hero = Font.system(size: 22, weight: .semibold)
+        /// Onboarding hero symbol (inside the 64pt accent circle).
+        static let heroIcon = Font.system(size: 26, weight: .medium)
+        /// Onboarding feature-row symbol (inside the 32pt chip).
+        static let rowIcon = Font.system(size: 14, weight: .medium)
         static let title = Font.system(size: 17, weight: .semibold)
         static let headline = Font.system(size: 13, weight: .semibold)
         static let body = Font.system(size: 13)

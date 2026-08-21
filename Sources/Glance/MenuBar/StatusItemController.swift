@@ -18,6 +18,8 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     var statusProvider: (() -> (connected: Bool, label: String))?
     /// Provides hotkey bindings that failed to register (empty = all good).
     var hotkeyWarningProvider: (() -> [String])?
+    /// Re-opens the first-launch welcome tour.
+    var onWelcome: (() -> Void)?
 
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
@@ -79,6 +81,10 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let welcome = NSMenuItem(title: "Welcome Tour…", action: #selector(welcomeAction), keyEquivalent: "")
+        welcome.target = self
+        menu.addItem(welcome)
+
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
@@ -137,6 +143,8 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     @objc private func tasksAction() { onTasks?() }
 
     @objc private func toggleTranscription() { onToggleTranscription?() }
+
+    @objc private func welcomeAction() { onWelcome?() }
 
     /// Legacy small Settings window — fallback used only when the task
     /// system (and its in-window settings page) is unavailable.
