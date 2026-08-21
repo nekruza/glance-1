@@ -13,8 +13,9 @@ final class TaskRunnerProviderTests: XCTestCase {
         let (_, invocation, run) = try startCodexRun(workspace: workspace.path)
 
         XCTAssertEqual(Array(invocation.arguments.prefix(5)),
-                       ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write"])
-        XCTAssertTrue(invocation.arguments.contains("--approve-for-me"))
+                       ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--approve-for-me"])
+        XCTAssertFalse(invocation.arguments.contains("--sandbox"),
+                       "codex exec rejects --sandbox alongside --approve-for-me (which implies workspace-write)")
         XCTAssertTrue(invocation.arguments.contains("sandbox_workspace_write.network_access=false"))
         XCTAssertFalse(invocation.arguments.contains("opus"),
                        "Codex must not receive a stored Claude model alias")
@@ -35,9 +36,10 @@ final class TaskRunnerProviderTests: XCTestCase {
 
         let (planningInvocation, _, _) = try startCodexRun(workspace: workspace.path)
 
-        XCTAssertEqual(Array(planningInvocation.arguments.prefix(5)),
-                       ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only"])
-        XCTAssertTrue(planningInvocation.arguments.contains("--approve-for-me"))
+        XCTAssertEqual(Array(planningInvocation.arguments.prefix(6)),
+                       ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only"])
+        XCTAssertFalse(planningInvocation.arguments.contains("--approve-for-me"),
+                       "codex exec rejects --approve-for-me alongside an explicit --sandbox")
         XCTAssertTrue(planningInvocation.arguments.contains("sandbox_workspace_write.network_access=false"))
         XCTAssertNotEqual(argument(after: "--cd", in: planningInvocation.arguments), workspace.path)
         XCTAssertNotEqual(planningInvocation.workingDirectory, workspace.path)

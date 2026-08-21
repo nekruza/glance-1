@@ -527,7 +527,8 @@ final class AutomationProviderTests: XCTestCase {
 
     private func codexReadOnlyArguments(model: String? = nil) -> [String] {
         var arguments = ["exec", "--json", "--skip-git-repo-check",
-                         "--sandbox", "read-only", "--approve-for-me",
+                         "--ignore-user-config",
+                         "--sandbox", "read-only",
                          "-c", "sandbox_workspace_write.network_access=false"]
         if let model { arguments += ["--model", model] }
         arguments += ["--cd", FileManager.default.temporaryDirectory.path, "-"]

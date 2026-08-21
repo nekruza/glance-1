@@ -23,11 +23,16 @@ final class CodexAutomationProvider: AutomationProvider {
                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
         // One-shot work includes task planning. Keep it outside a user's
         // checkout and make the Codex policy explicit just as task execution
-        // does: read-only filesystem access and no network.
+        // does: read-only filesystem access and no network. codex exec rejects
+        // --approve-for-me next to an explicit --sandbox (it implies its own
+        // workspace-write sandbox), and --ignore-user-config keeps globally
+        // enabled plugins/MCP servers out of the run — their startup "error"
+        // events would otherwise read as terminal failures, and with no MCP
+        // servers loaded there is nothing left needing approval.
         let workspace = request.workingDirectory ?? FileManager.default.temporaryDirectory
         var arguments = ["exec", "--json", "--skip-git-repo-check",
+                         "--ignore-user-config",
                          "--sandbox", "read-only",
-                         "--approve-for-me",
                          "-c", "sandbox_workspace_write.network_access=false"]
         if let model = Self.codexModel(request.model) {
             arguments += ["--model", model]
@@ -53,10 +58,18 @@ final class CodexAutomationProvider: AutomationProvider {
     @discardableResult
     func startRun(_ request: AutomationRunRequest,
                   onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        var arguments = ["exec", "--json", "--skip-git-repo-check",
-                         "--sandbox", request.sandbox ?? "workspace-write",
-                         "--approve-for-me",
-                         "-c", "sandbox_workspace_write.network_access=false"]
+        var arguments = ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config"]
+        let sandbox = request.sandbox ?? "workspace-write"
+        if sandbox == "workspace-write" {
+            // --approve-for-me itself supplies the workspace-write sandbox;
+            // codex exec rejects an explicit --sandbox next to it.
+            arguments.append("--approve-for-me")
+        } else {
+            // Non-default sandbox: keep it explicit, forgoing auto-approval
+            // (the two flags are mutually exclusive in codex exec).
+            arguments += ["--sandbox", sandbox]
+        }
+        arguments += ["-c", "sandbox_workspace_write.network_access=false"]
         if let model = Self.codexModel(request.model) {
             arguments += ["--model", model]
         }
@@ -85,10 +98,16 @@ final class CodexAutomationProvider: AutomationProvider {
     func runComposio(_ request: ComposioAutomationRequest, token: String,
                      onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
         let endpoint = request.endpoint ?? "https://connect.composio.dev/mcp"
+        // `codex exec` auto-denies MCP tool calls that require approval
+        // ("user cancelled MCP tool call"), so Composio pulls silently return
+        // nothing without --approve-for-me. --ignore-user-config keeps the run
+        // on the injected Composio server alone (Claude's --strict-mcp-config
+        // equivalent); auth still resolves through CODEX_HOME.
         return runner.run(
             executablePath: binaryPath,
             arguments: [
                 "exec", "--json", "--skip-git-repo-check",
+                "--ignore-user-config", "--approve-for-me",
                 "-c", "mcp_servers.composio.url=\"\(endpoint)\"",
                 "-c", "mcp_servers.composio.bearer_token_env_var=\"GLANCE_COMPOSIO_TOKEN\"",
                 "-"

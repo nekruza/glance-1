@@ -7,6 +7,7 @@ final class ComposioProviderTests: XCTestCase {
 
         XCTAssertEqual(invocation.arguments, [
             "exec", "--json", "--skip-git-repo-check",
+            "--ignore-user-config", "--approve-for-me",
             "-c", "mcp_servers.composio.url=\"https://connect.composio.dev/mcp\"",
             "-c", "mcp_servers.composio.bearer_token_env_var=\"GLANCE_COMPOSIO_TOKEN\"",
             "-"
