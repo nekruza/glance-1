@@ -30,6 +30,12 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
+            // Stays the `sparkle` symbol, not the app logo (`BrandMark`): a
+            // status item is a template image, so macOS would flatten the
+            // logo's gradient squircle into one solid silhouette. The symbol
+            // also tracks the menu bar's light/dark appearance for free.
+            // The onboarding copy and MenuBarMock illustration both depict
+            // this icon — change all three together or none.
             button.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Glance")
             button.image?.isTemplate = true
         }

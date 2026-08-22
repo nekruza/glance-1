@@ -702,7 +702,10 @@ struct TaskSettingsView: View {
 
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
-            Text("Glance v1.0").font(DS.Typo.title)
+            HStack(spacing: DS.Space.sm) {
+                BrandMark(size: 48)
+                Text("Glance v1.0").font(DS.Typo.title)
+            }
             Text("Personal AI assistant: Ask overlay, meeting transcription, and an AI task board — all running through your selected AI provider.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
             Divider().overlay(DS.divider)

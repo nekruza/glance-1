@@ -46,11 +46,19 @@ struct OnboardingView: View {
 
     private func pageBody(_ page: OnboardingPage) -> some View {
         VStack(spacing: DS.Space.md) {
-            ZStack {
-                Circle().fill(DS.accentSoft).frame(width: 64, height: 64)
-                Image(systemName: page.symbol)
-                    .font(DS.Typo.heroIcon)
-                    .foregroundStyle(DS.accentText)
+            Group {
+                // The welcome page introduces the app, so it gets the real
+                // logo; the rest are topic pages and keep their symbol.
+                if page.id == "welcome" {
+                    BrandMark(size: 64)
+                } else {
+                    ZStack {
+                        Circle().fill(DS.accentSoft).frame(width: 64, height: 64)
+                        Image(systemName: page.symbol)
+                            .font(DS.Typo.heroIcon)
+                            .foregroundStyle(DS.accentText)
+                    }
+                }
             }
             .padding(.top, DS.Space.xs)
 
