@@ -20,7 +20,8 @@ Screenshots return wallpaper only (Terminal lacks Screen Recording) — verify v
 - SwiftUI buttons expose no title/description; identify by `help` (tooltip) text or position. Board footer: help "Settings", "Back to the board", "Open the ask overlay".
 - Settings sidebar = 9 unlabeled AXButtons at x=10, y=136+31·i, in `Section` enum order (general, appearance, ai, agents, repos, connections, schedule, activity, about) → Connections is the 6th.
 - Connections cards load via a `claude -p` subprocess — poll for AXCheckBox count in a loop (5s × 24). Card switches are AXCheckBoxes; app names are AXStaticTexts at the same y.
-- Board pull menu = AXPopUpButton with help containing "Fetch new work"; after AXPress, read `menu items of menu 1 of e` for titles.
+- SwiftUI `Menu` exposes as **AXMenuButton**, not AXPopUpButton — a role filter of `AXButton`/`AXPopUpButton` silently misses every menu on the board. Two exist: help "Fetch new work into the Inbox (read-only)" (pull) and help starting "Column order when you Tidy" (tidy sort).
+- Board pull menu: AXMenuButton with help containing "Fetch new work"; after AXPress, read `menu items of menu 1 of e` for titles. Dividers come back as `missing value` — skip them.
 - `round` is a reserved word in AppleScript loop variables.
 - Behavior assertions: `defaults read com.h57q3wq0c.glance tasks.enabledSources` (and other `tasks.*` keys) after AX interactions — writes land immediately via Preferences didSet.
 - AXPress bypasses hit testing; for overlay/hit-test regressions use System Events `click at {x,y}` instead.
