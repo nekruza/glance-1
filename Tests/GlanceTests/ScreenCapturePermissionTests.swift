@@ -32,4 +32,18 @@ final class ScreenCapturePermissionTests: XCTestCase {
         ScreenCaptureService.probedGranted = false
         XCTAssertFalse(ScreenCaptureService.hasPermission)
     }
+
+    /// FR7/FR8 regression: the pre-overlay grab must give up *before* it can
+    /// reach ScreenCaptureKit when permission is missing. An unauthorized
+    /// SCShareableContent call raises the system Screen Recording prompt, so
+    /// probing here made the prompt reappear on every single overlay open.
+    func testOpportunisticCaptureSkipsScreenCaptureKitWhenDenied() async {
+        ScreenCaptureService.preflight = { false }
+        ScreenCaptureService.probedGranted = false
+        let shot = await ScreenCaptureService.captureActiveDisplayIfPermitted()
+        XCTAssertNil(shot)
+        // Untouched: a real ScreenCaptureKit attempt would have written the
+        // probe result either way.
+        XCTAssertFalse(ScreenCaptureService.probedGranted)
+    }
 }

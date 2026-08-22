@@ -583,11 +583,10 @@ final class AppCoordinator {
         // overlay either way. Permission is prompted only if the user attaches.
         Task { [weak self] in
             guard let self else { return }
-            // Attempt regardless of the preflight — the capture itself is the
-            // authoritative permission check and updates hasPermission, so a
-            // grant given while the app is running is picked up here without
-            // a relaunch.
-            let shot = try? await ScreenCaptureService.captureActiveDisplay()
+            // Silent when Screen Recording isn't granted: capturing here would
+            // raise the system TCC prompt on EVERY invocation. The prompt
+            // belongs to the user-initiated attach path (FR7).
+            let shot = await ScreenCaptureService.captureActiveDisplayIfPermitted()
             guard self.backendLifecycle.isCurrent(lease),
                   self.isCurrentProvider(kind: kind, generation: generation) else { return }
             if let shot {

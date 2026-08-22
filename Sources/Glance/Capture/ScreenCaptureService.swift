@@ -66,9 +66,19 @@ enum ScreenCaptureService {
     /// Ask ScreenCaptureKit whether capture actually works and cache the
     /// answer for `hasPermission`. Doubles as the shareable-content cache
     /// warmer at launch (FR2). Shows no UI of its own.
+    ///
+    /// This is the ONLY place allowed to call ScreenCaptureKit speculatively:
+    /// an unauthorized call raises the system Screen Recording prompt, so it
+    /// runs at most once per launch. Every other caller must gate on
+    /// `hasPermission` (see `captureActiveDisplayIfPermitted()`).
     @discardableResult
     static func probePermission() async -> Bool {
-        if preflight() {
+        let preflightSaid = preflight()
+        // Diagnostic: lets a headless verify run tell "TCC really denies us"
+        // apart from "the preflight lies about our dev signature" (`defaults
+        // read com.h57q3wq0c.glance diag.capturePreflight`).
+        UserDefaults.standard.set(preflightSaid, forKey: "diag.capturePreflight")
+        if preflightSaid {
             probedGranted = true
             return true
         }
@@ -87,6 +97,19 @@ enum ScreenCaptureService {
     /// (deep link to System Settings) is driven by the caller (FR7).
     @discardableResult
     static func requestPermission() -> Bool { CGRequestScreenCaptureAccess() }
+
+    /// FR8 pre-overlay grab: capture only when Screen Recording is known to be
+    /// granted, and return nil without ever touching ScreenCaptureKit when it
+    /// isn't. An unauthorized SCShareableContent call raises the system TCC
+    /// prompt, and the overlay opens far more often than anyone attaches a
+    /// screenshot (attachment is off by default) — probing on every invocation
+    /// turns a missing grant into a modal dialog on every hotkey press.
+    /// Recovery without a relaunch still works: `probePermission()` runs once
+    /// at launch, and `preflight()` flips to true as soon as the grant lands.
+    static func captureActiveDisplayIfPermitted() async -> CaptureResult? {
+        guard hasPermission else { return nil }
+        return try? await captureActiveDisplay()
+    }
 
     /// Capture a still of the display containing the mouse cursor (FR6).
     /// Alternative "keyboard-focus display" reading rejected in PRD as less
