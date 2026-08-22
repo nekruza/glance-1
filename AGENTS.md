@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Glance is a Swift Package Manager macOS 14+ menu-bar application. Application code lives in `Sources/Glance/`, with features grouped into folders such as `Backend/`, `Capture/`, `Overlay/`, `Tasks/`, `Settings/`, and `Transcribe/`. Keep shared app coordination and design tokens at the target root. XCTest suites belong in `Tests/GlanceTests/`. Build and signing helpers are in `Scripts/`; design notes, specifications, and implementation plans live in `docs/`. Generated output goes under `build/` or `.build/` and should not be committed.
+Glance is a Swift Package Manager macOS 14+ menu-bar application. Application code lives in `Sources/Glance/`, with features grouped into folders such as `Backend/`, `Capture/`, `Overlay/`, `Tasks/`, and `Settings/`. Keep shared app coordination and design tokens at the target root. XCTest suites belong in `Tests/GlanceTests/`. Build and signing helpers are in `Scripts/`; design notes, specifications, and implementation plans live in `docs/`. Generated output goes under `build/` or `.build/` and should not be committed.
 
 ## Build, Test, and Development Commands
 
