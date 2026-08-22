@@ -517,7 +517,7 @@ struct TaskSettingsView: View {
 
     private var aiSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            row(Self.askBackendRowTitle, "Local CLI used for Ask, tasks, suggestions, meetings, and Composio") {
+            row(Self.askBackendRowTitle, "Local CLI used for Ask, tasks, suggestions, and Composio") {
                 Picker("", selection: $prefs.askBackend) {
                     ForEach(AskBackendKind.allCases, id: \.self) { kind in
                         Text(kind.displayName).tag(kind)
@@ -706,7 +706,7 @@ struct TaskSettingsView: View {
                 BrandMark(size: 48)
                 Text("Glance v1.0").font(DS.Typo.title)
             }
-            Text("Personal AI assistant: Ask overlay, meeting transcription, and an AI task board — all running through your selected AI provider.")
+            Text("Personal AI assistant: Ask overlay and an AI task board — both running through your selected AI provider.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
             Divider().overlay(DS.divider)
             Text("No API keys for model traffic — everything goes through your selected \(prefs.askBackend.displayName) and its auth. Task data stays in ~/Library/Application Support/Glance. The Composio key (Sources) is the one stored credential, used for read-only pulls.")

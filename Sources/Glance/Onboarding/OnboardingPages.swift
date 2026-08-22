@@ -76,7 +76,7 @@ enum OnboardingCatalog {
                     OnboardingRow(
                         symbol: "checkmark.seal",
                         title: "One provider for everything",
-                        detail: "Ask, task planning, drafts, connected-app pulls, and meeting summaries all use the CLI you choose."),
+                        detail: "Ask, task planning, drafts, and connected-app pulls all use the CLI you choose."),
                     OnboardingRow(
                         symbol: "lock",
                         title: "Nothing stored by Glance",
@@ -114,21 +114,13 @@ enum OnboardingCatalog {
             OnboardingPage(
                 id: "privacy",
                 symbol: "lock.shield",
-                title: "Meetings, privacy & permissions",
-                subtitle: "Transcribe meetings on-device — and know exactly where your data goes.",
+                title: "Privacy & permissions",
+                subtitle: "Know exactly where your data goes.",
                 rows: [
-                    OnboardingRow(
-                        symbol: "mic",
-                        title: "Meeting transcription",
-                        detail: "Start from the menu bar. Speech is transcribed on-device; notes and an AI summary are saved when you stop."),
-                    OnboardingRow(
-                        symbol: "text.badge.checkmark",
-                        title: "Action items, extracted",
-                        detail: "Your action items from each meeting land on the task board automatically."),
                     OnboardingRow(
                         symbol: "hand.raised",
                         title: "Permissions when needed",
-                        detail: "Screen Recording is requested the first time you attach a screenshot; Microphone & Speech the first time you transcribe."),
+                        detail: "Screen Recording is requested the first time you attach a screenshot — nothing else."),
                     OnboardingRow(
                         symbol: "network.slash",
                         title: "Private by design",

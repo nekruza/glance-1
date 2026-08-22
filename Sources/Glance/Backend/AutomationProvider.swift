@@ -138,15 +138,6 @@ protocol AutomationProvider: AnyObject {
     func cancelAll()
 }
 
-/// Captures the selected provider together with the generation check that
-/// proves it is still the same service bundle when an asynchronous result
-/// arrives. Consumers must use this rather than retaining a provider alone
-/// across a provider switch.
-struct AutomationProviderLease {
-    let provider: AutomationProvider
-    let isCurrent: () -> Bool
-}
-
 enum AutomationAvailability: Error, Equatable {
     case notFound
     case unusable(path: String, reason: String)

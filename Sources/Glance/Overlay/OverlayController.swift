@@ -12,7 +12,6 @@ final class OverlayController {
     private var hostingView: NSHostingView<OverlayView>?
     private var sizeCancellable: AnyCancellable?
     private var heightCancellable: AnyCancellable?
-    private var paneCancellable: AnyCancellable?
 
     /// Deterministic window heights — no SwiftUI/window auto-sizing feedback
     /// loop (that raced and clipped the input + footer).
@@ -53,26 +52,16 @@ final class OverlayController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.applySize() }
 
-        // Live-transcript pane toggling changes width (and forces the tall
-        // layout so the transcript is readable even with no conversation).
-        paneCancellable = TranscriptPanelModel.shared.$isVisible
-            .removeDuplicates()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.applySize() }
-
         // Idle window height tracks the TRUE rendered content height reported
         // by the view (GeometryReader) — measuring the hosting view from AppKit
         // under-reported and clipped the rounded corners top and bottom. Idle
         // content height doesn't depend on the window height, so this settles
-        // in one step (no resize feedback loop). Skip while the transcript
-        // pane is open — the pane stretches the content to the full window
-        // height and would corrupt the measured idle height.
+        // in one step (no resize feedback loop).
         heightCancellable = session.$contentHeight
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] h in
-                guard let self, self.session.turns.isEmpty, h > 20,
-                      !TranscriptPanelModel.shared.isVisible else { return }
+                guard let self, self.session.turns.isEmpty, h > 20 else { return }
                 self.idleHeight = ceil(h)
                 self.applySize()
             }
@@ -102,14 +91,11 @@ final class OverlayController {
 
     // MARK: - Layout
 
-    /// One source of truth for the window size: width grows for the transcript
-    /// pane; height is idle-compact only when there's no conversation AND no
-    /// pane open.
+    /// One source of truth for the window size: height is idle-compact until
+    /// there's a conversation to show.
     private func applySize() {
-        let paneOpen = TranscriptPanelModel.shared.isVisible
-        let width = Theme.overlayWidth + (paneOpen ? Theme.transcriptPaneWidth + 1 : 0)
-        let height = (session.turns.isEmpty && !paneOpen) ? idleHeight : conversationHeight
-        panel.setContentSize(NSSize(width: width, height: height))
+        let height = session.turns.isEmpty ? idleHeight : conversationHeight
+        panel.setContentSize(NSSize(width: Theme.overlayWidth, height: height))
     }
 
     private func positionPanel() {

@@ -381,30 +381,6 @@ final class TaskAI {
         runText(prompt: prompt, model: "sonnet", completion: completion)
     }
 
-    // MARK: - Meeting action items (transcript pane reader)
-
-    /// Extract ONLY the user's own action items from meeting notes.
-    func extractActionItems(meetingText: String, completion: @escaping ([DecomposedTask]?) -> Void) {
-        let prompt = """
-        From these meeting notes/transcript, extract action items that belong to \
-        ME (the note-taker — items I committed to, was assigned, or clearly own; \
-        speakers may be unlabeled, use judgment). Output JSON only (no prose, no \
-        fences): array of 0-8 objects {"title": "<imperative, <=120 chars>", \
-        "description": "<context from the meeting incl. any deadline>", \
-        "labels": [..], "taskKind": "code|writing|research|other", \
-        "estimate": "minutes|hour|halfday|day+", "agent": "<best-fit agent NAME \
-        from the roster below, or null>"}. Do NOT invent tasks; empty \
-        array if none are mine.
-
-        Agent roster:
-        \(Self.agentRoster())
-
-        Notes:
-        \(String(meetingText.prefix(30_000)))
-        """
-        runJSON(prompt: prompt, model: "sonnet", completion: completion)
-    }
-
     // MARK: - Plumbing
 
     /// Run one provider request and decode its text as T. Completion on main.
