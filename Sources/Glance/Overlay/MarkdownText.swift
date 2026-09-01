@@ -18,6 +18,9 @@ struct MarkdownPalette {
     let inlineCodeBg: Color
     /// Fill behind a table's header row.
     let tableHeaderBg: Color
+    /// Border and fill of a suggested-message draft card.
+    let draftBorder: Color
+    let draftBg: Color
 
     static let dark = MarkdownPalette(
         bullet: Theme.accent,
@@ -29,7 +32,9 @@ struct MarkdownPalette {
         quoteFg: Theme.fg.opacity(0.82),
         rule: Theme.glassBorder,
         inlineCodeBg: Color.white.opacity(0.09),
-        tableHeaderBg: Color.white.opacity(0.05))
+        tableHeaderBg: Color.white.opacity(0.05),
+        draftBorder: Theme.accent.opacity(0.45),
+        draftBg: Theme.accent.opacity(0.07))
 
     static let light = MarkdownPalette(
         bullet: DS.accentText,
@@ -41,7 +46,9 @@ struct MarkdownPalette {
         quoteFg: DS.textSecondary,
         rule: DS.divider,
         inlineCodeBg: DS.surfaceHover,
-        tableHeaderBg: DS.surface)
+        tableHeaderBg: DS.surface,
+        draftBorder: DS.accentText.opacity(0.4),
+        draftBg: DS.accentText.opacity(0.06))
 }
 
 /// FR11 subset Markdown renderer for streamed answers. Required: fenced code
@@ -169,7 +176,7 @@ struct MarkdownText: View {
                     }
 
             case .draft(let t):
-                MarkdownText(text: t, palette: palette)
+                DraftCard(markdown: t, palette: palette)
 
             case .paragraph(let t):
                 Text(Self.inline(t, palette))
@@ -227,7 +234,8 @@ struct MarkdownText: View {
             return 16
         case (_, .code), (.code, _),
              (_, .quote), (.quote, _),
-             (_, .table), (.table, _):
+             (_, .table), (.table, _),
+             (_, .draft), (.draft, _):
             return 12
         default:
             return 10
@@ -520,5 +528,73 @@ struct MarkdownTable: View {
             // 8.2pt/char approximates 13pt system text with bold key columns.
             narrow ? min(CGFloat(width) * 8.2, 240) : nil
         }
+    }
+}
+
+/// Small copy button with a transient "Copied ✓" confirmation, shared by the
+/// draft card and code blocks. The payload closure runs at click time, so
+/// streaming content copies whatever has arrived by then.
+struct CopyChip: View {
+    let helpText: String
+    let palette: MarkdownPalette
+    let copyAction: () -> Void
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            copyAction()
+            copied = true
+            // Revert so a second copy still reads as an action.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(copied ? "Copied" : "Copy")
+                    .font(.system(size: 10.5))
+            }
+            .foregroundStyle(copied ? palette.bullet : palette.heading)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 5).fill(palette.inlineCodeBg))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .animation(.easeOut(duration: 0.15), value: copied)
+    }
+}
+
+/// Suggested-message card (```glance-draft): labeled, accent-tinted, with a
+/// Copy that puts rich + plain text on the pasteboard (DraftCopy). Exists
+/// because a drag-selection cannot span the sibling Text blocks of a
+/// multi-paragraph draft — copying the deliverable needs one affordance.
+struct DraftCard: View {
+    let markdown: String
+    let palette: MarkdownPalette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "envelope")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(palette.bullet)
+                Text("SUGGESTED MESSAGE")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.4)
+                    .foregroundStyle(palette.heading)
+                Spacer()
+                CopyChip(helpText: "Copy the suggested message", palette: palette) {
+                    DraftCopy.write(markdown)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            Rectangle().fill(palette.draftBorder.opacity(0.5)).frame(height: 1)
+            // The draft is prose — render it like any answer text, never
+            // monospaced.
+            MarkdownText(text: markdown, palette: palette)
+                .padding(12)
+        }
+        .background(RoundedRectangle(cornerRadius: 10).fill(palette.draftBg))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.draftBorder, lineWidth: 1))
     }
 }
