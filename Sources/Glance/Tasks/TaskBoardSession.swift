@@ -668,7 +668,7 @@ final class TaskBoardSession: ObservableObject {
         // keyword check misses.
         if Self.isSocialEvent(task.title) {
             prepPhase = "Writing notes…"
-            writePrepNotes(task, digests: [:], boardContext: "")
+            writePrepNotes(task, digests: [:], boardContext: "", token: token)
             return
         }
         prepPhase = "Gathering context…"
@@ -676,17 +676,31 @@ final class TaskBoardSession: ObservableObject {
         workContext.digests { [weak self] digests in
             guard let self, self.isCurrent(token) else { return }
             self.prepPhase = "Writing notes…"
-            self.ai.prepNotes(for: task, workDigests: digests,
-                              boardContext: boardContext) { [weak self] text in
-                guard let self, self.isCurrent(token) else { return }
-                self.prepBusyTaskIds.remove(task.id)
-                guard let text else {
-                    self.noteAIFailure("Prep notes failed — \(task.title). Try again.")
-                    return
-                }
-                guard var t = self.store.task(task.id) else { return }
-                t.prepNotes = text
-                self.store.update(t)
+            self.writePrepNotes(task, digests: digests,
+                                boardContext: boardContext, token: token)
+        }
+    }
+
+    /// Obviously-social calendar events, where prep is logistics, not work.
+    static func isSocialEvent(_ title: String) -> Bool {
+        let t = title.lowercased()
+        let social = ["lunch", "dinner", "breakfast", "coffee", "drinks",
+                      "birthday", "party", "picnic", "bbq", "social", "outing",
+                      "celebration", "happy hour"]
+        return social.contains { t.contains($0) }
+    }
+
+    private func writePrepNotes(_ task: TaskItem,
+                                digests: [WorkContext.Source: String],
+                                boardContext: String,
+                                token: ProviderToken) {
+        ai.prepNotes(for: task, workDigests: digests,
+                     boardContext: boardContext) { [weak self] text in
+            guard let self, self.isCurrent(token) else { return }
+            self.prepBusyTaskIds.remove(task.id)
+            guard let text else {
+                self.noteAIFailure("Prep notes failed — \(task.title). Try again.")
+                return
             }
             guard var t = self.store.task(task.id) else { return }
             t.prepNotes = text
