@@ -15,6 +15,13 @@ struct OverlayView: View {
     // re-engages.
     @State private var pinAtBottom = true
 
+    /// True while the panel height should track its content (idle prompt row).
+    /// The transcript pane stretches content to the full window height, so it
+    /// forces the flexible layout too.
+    private var growsWithContent: Bool {
+        session.turns.isEmpty && !liveTranscript.isVisible
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
@@ -30,6 +37,17 @@ struct OverlayView: View {
                 footer
             }
             .frame(width: Theme.overlayWidth)
+            // Idle mode: refuse the window's proposed height and report the
+            // TRUE ideal height instead. Without this the hosting view forces
+            // the column into the window's current (short) bounds, SwiftUI
+            // compresses the growing TextField to fit, and the height we
+            // measure below is just the window height we were handed — a
+            // circular constraint that pins the panel at one row forever.
+            // fixedSize breaks the cycle: content height depends only on the
+            // text, so the controller's resize settles in one step.
+            // Conversation mode keeps the flexible layout (fixed 560pt window,
+            // scrolling transcript in the middle).
+            .fixedSize(horizontal: false, vertical: growsWithContent)
             if liveTranscript.isVisible {
                 Divider().overlay(Theme.glassBorder)
                 TranscriptPaneView(model: liveTranscript)
