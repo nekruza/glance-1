@@ -68,6 +68,14 @@ struct MarkdownText: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Enabled once here rather than per block: it propagates through the
+        // environment, so headings / bullets / ordered items become selectable
+        // too (they were previously unselectable — only paragraph, quote and
+        // code opted in). NOTE this still cannot make a drag span blocks —
+        // SwiftUI scopes a selection to a single Text view and every block is
+        // its own Text. Copying a whole answer goes through the Copy button in
+        // OverlayView, not through selection.
+        .textSelection(.enabled)
     }
 
     // MARK: - Block model
@@ -133,7 +141,6 @@ struct MarkdownText: View {
                 Text(code)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(palette.codeFg)
-                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
                     .background(RoundedRectangle(cornerRadius: 10).fill(palette.codeBg))
@@ -147,7 +154,6 @@ struct MarkdownText: View {
                 Text(Self.inline(t, palette))
                     .lineSpacing(3)
                     .foregroundStyle(palette.quoteFg)
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 2)
@@ -162,7 +168,6 @@ struct MarkdownText: View {
                 Text(Self.inline(t, palette))
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
 
             case .table(let header, let rows, let aligns):
                 MarkdownTable(header: header, rows: rows, alignments: aligns, palette: palette)
@@ -462,8 +467,7 @@ struct MarkdownTable: View {
                 GridRow {
                     ForEach(header.indices, id: \.self) { c in
                         cell(Text(MarkdownText.Block.inline(rows[r][c], palette))
-                                .lineSpacing(2)
-                                .textSelection(.enabled),
+                                .lineSpacing(2),
                              column: c, cap: caps[c])
                     }
                 }

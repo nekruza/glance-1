@@ -27,12 +27,28 @@ final class OverlayHeightTests: XCTestCase {
                               backing: .buffered, defer: false)
         window.contentView = host
         host.layoutSubtreeIfNeeded()
-        // GeometryReader's onAppear/onChange land on the next runloop turns.
-        for _ in 0..<8 {
+        // GeometryReader's onAppear/onChange land on later runloop turns. Poll
+        // until the value has settled rather than spinning a fixed number of
+        // times — a fixed count is a wall-clock bet that loses on a busy
+        // machine (observed once as a flake) and silently measures a
+        // half-laid-out view.
+        var stable = 0
+        var last: CGFloat = -1
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.02))
             host.layoutSubtreeIfNeeded()
+            let h = session.contentHeight
+            if h > 20 && h == last {
+                stable += 1
+                if stable >= 3 { return h }   // 3 consecutive identical reads
+            } else {
+                stable = 0
+            }
+            last = h
         }
-        return session.contentHeight
+        XCTFail("content height never settled (last = \(last))")
+        return last
     }
 
     /// The bug: with the window already collapsed to one row, typing more rows

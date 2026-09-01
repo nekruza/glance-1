@@ -181,13 +181,25 @@ struct OverlayView: View {
             ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
                 askedHeader(turn)
                 answerBlock(turn)
-                    .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 18)
+                    .padding(.horizontal, 22).padding(.top, 14)
+                    .padding(.bottom, canCopy(turn) ? 8 : 18)
+                if canCopy(turn) {
+                    CopyAnswerButton(markdown: turn.answer)
+                        .padding(.horizontal, 22).padding(.bottom, 14)
+                }
                 if idx < session.turns.count - 1 {
                     Divider().overlay(Theme.glassBorder)
                 }
                 Color.clear.frame(height: 1).id(turn.id)
             }
         }
+    }
+
+    /// Drag-selection can only ever cover ONE Markdown block (SwiftUI scopes a
+    /// text selection to a single Text view), so every answer needs an explicit
+    /// whole-message copy affordance.
+    private func canCopy(_ turn: OverlaySession.Turn) -> Bool {
+        !turn.answer.isEmpty && !turn.failed
     }
 
     private func askedHeader(_ turn: OverlaySession.Turn) -> some View {
@@ -526,6 +538,45 @@ private struct ScrollPinTracker: NSViewRepresentable {
         }
 
         deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
+    }
+}
+
+/// Copies a whole answer to the clipboard as Markdown.
+///
+/// Necessary because `.textSelection(.enabled)` cannot span sibling views:
+/// MarkdownText renders each block as its own Text, so dragging across an
+/// answer stops dead at the first block boundary and the user gets one
+/// paragraph. This copies the raw Markdown the model actually produced —
+/// paste-ready for Slack, Notion or an editor.
+private struct CopyAnswerButton: View {
+    let markdown: String
+    @State private var copied = false
+
+    var body: some View {
+        Button(action: copy) {
+            HStack(spacing: 5) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(copied ? "Copied" : "Copy")
+                    .font(.system(size: 11))
+            }
+            .foregroundStyle(copied ? Theme.success : Theme.muted)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.field))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.glassBorder, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Copy the entire answer as Markdown")
+        .animation(.easeOut(duration: 0.15), value: copied)
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(markdown, forType: .string)
+        copied = true
+        // Revert the confirmation so a second copy still reads as an action.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
     }
 }
 
