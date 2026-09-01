@@ -16,6 +16,8 @@ struct MarkdownPalette {
     let rule: Color
     /// Chip behind `inline code`.
     let inlineCodeBg: Color
+    /// Fill behind a table's header row.
+    let tableHeaderBg: Color
 
     static let dark = MarkdownPalette(
         bullet: Theme.accent,
@@ -26,7 +28,8 @@ struct MarkdownPalette {
         quoteBar: Theme.accent.opacity(0.6),
         quoteFg: Theme.fg.opacity(0.82),
         rule: Theme.glassBorder,
-        inlineCodeBg: Color.white.opacity(0.09))
+        inlineCodeBg: Color.white.opacity(0.09),
+        tableHeaderBg: Color.white.opacity(0.05))
 
     static let light = MarkdownPalette(
         bullet: DS.accentText,
@@ -37,7 +40,8 @@ struct MarkdownPalette {
         quoteBar: DS.accentText.opacity(0.5),
         quoteFg: DS.textSecondary,
         rule: DS.divider,
-        inlineCodeBg: DS.surfaceHover)
+        inlineCodeBg: DS.surfaceHover,
+        tableHeaderBg: DS.surface)
 }
 
 /// FR11 subset Markdown renderer for streamed answers. Required: fenced code
@@ -75,6 +79,7 @@ struct MarkdownText: View {
         case code(String)
         case quote(String)
         case paragraph(String)
+        case table(header: [String], rows: [[String]], alignments: [Alignment])
         case rule
 
         /// Nesting indent per list level.
@@ -159,6 +164,9 @@ struct MarkdownText: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
 
+            case .table(let header, let rows, let aligns):
+                MarkdownTable(header: header, rows: rows, alignments: aligns, palette: palette)
+
             case .rule:
                 Rectangle()
                     .fill(palette.rule)
@@ -206,7 +214,8 @@ struct MarkdownText: View {
         case (_, .rule), (.rule, _):
             return 16
         case (_, .code), (.code, _),
-             (_, .quote), (.quote, _):
+             (_, .quote), (.quote, _),
+             (_, .table), (.table, _):
             return 12
         default:
             return 10
@@ -247,8 +256,12 @@ struct MarkdownText: View {
             return min(indents.count - 1, 3)
         }
 
-        for rawLine in text.components(separatedBy: "\n") {
+        let lines = text.components(separatedBy: "\n")
+        var i = 0
+        while i < lines.count {
+            let rawLine = lines[i]
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            defer { i += 1 }
 
             if trimmed.hasPrefix("```") {
                 if inCode { flushCode(); inCode = false }
@@ -263,6 +276,37 @@ struct MarkdownText: View {
                 flushText(); indents.removeAll()
                 blocks.append(.rule)
                 continue
+            }
+
+            // A pipe row is only a table when the NEXT line is a delimiter row
+            // with a matching cell count — otherwise prose containing a "|"
+            // followed by a "---" would be swallowed as a table.
+            if trimmed.contains("|"), i + 1 < lines.count {
+                let header = splitRow(trimmed)
+                let delim = splitRow(lines[i + 1].trimmingCharacters(in: .whitespaces))
+                if header.count >= 2, delim.count == header.count,
+                   isDelimiterRow(lines[i + 1].trimmingCharacters(in: .whitespaces)) {
+                    flushText(); indents.removeAll()
+                    var rows: [[String]] = []
+                    var j = i + 2
+                    while j < lines.count {
+                        let row = lines[j].trimmingCharacters(in: .whitespaces)
+                        guard row.contains("|") else { break }
+                        var cells = splitRow(row)
+                        if cells.count < header.count {
+                            cells += Array(repeating: "", count: header.count - cells.count)
+                        } else if cells.count > header.count {
+                            cells = Array(cells.prefix(header.count))
+                        }
+                        rows.append(cells)
+                        j += 1
+                    }
+                    blocks.append(.table(header: header,
+                                         rows: rows,
+                                         alignments: alignments(delim)))
+                    i = j - 1   // `defer` adds the final +1
+                    continue
+                }
             }
 
             if trimmed.hasPrefix(">") {
@@ -360,5 +404,101 @@ struct MarkdownText: View {
         if lower.hasPrefix("[ ] ") { return (false, String(s.dropFirst(4))) }
         if lower.hasPrefix("[x] ") { return (true, String(s.dropFirst(4))) }
         return nil
+    }
+
+    /// Cells of a table row, with the optional leading/trailing pipes removed.
+    private static func splitRow(_ s: String) -> [String] {
+        var t = Substring(s)
+        if t.hasPrefix("|") { t = t.dropFirst() }
+        if t.hasSuffix("|") { t = t.dropLast() }
+        return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// `|---|:--:|---:|` — every cell dashes, optionally colon-anchored.
+    private static func isDelimiterRow(_ s: String) -> Bool {
+        let cells = splitRow(s)
+        guard !cells.isEmpty else { return false }
+        return cells.allSatisfy { cell in
+            cell.contains("-") && cell.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    private static func alignments(_ delimiter: [String]) -> [Alignment] {
+        delimiter.map { cell in
+            switch (cell.hasPrefix(":"), cell.hasSuffix(":")) {
+            case (true, true):  return .center
+            case (false, true): return .trailing
+            default:            return .leading
+            }
+        }
+    }
+}
+
+/// A Markdown table. Split out of `MarkdownText.Block` because it needs to
+/// derive column widths from its own content before building the Grid.
+struct MarkdownTable: View {
+    let header: [String]
+    let rows: [[String]]
+    let alignments: [Alignment]
+    let palette: MarkdownPalette
+
+    var body: some View {
+        let caps = Self.columnCaps(header: header, rows: rows)
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow {
+                ForEach(header.indices, id: \.self) { c in
+                    cell(Text(header[c].uppercased())
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(0.4)
+                            .foregroundStyle(palette.heading),
+                         column: c, cap: caps[c])
+                }
+            }
+            .background(palette.tableHeaderBg)
+
+            ForEach(rows.indices, id: \.self) { r in
+                // A non-GridRow child spans every column.
+                Rectangle().fill(palette.rule).frame(height: 1)
+                GridRow {
+                    ForEach(header.indices, id: \.self) { c in
+                        cell(Text(MarkdownText.Block.inline(rows[r][c], palette))
+                                .lineSpacing(2)
+                                .textSelection(.enabled),
+                             column: c, cap: caps[c])
+                    }
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.codeBorder, lineWidth: 1))
+    }
+
+    private func cell<Content: View>(_ content: Content, column: Int, cap: CGFloat?) -> some View {
+        content
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: cap ?? .infinity, alignment: alignments[column])
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+    }
+
+    /// Width cap per column, or `nil` for "take the remaining space".
+    ///
+    /// Equal columns would spend half a 640pt overlay on a six-character key
+    /// column while its description wraps. So a column whose longest cell is
+    /// short gets capped near its natural width and the prose column absorbs
+    /// the rest. If EVERY column is short there is nothing to absorb the
+    /// slack, so they stay flexible and split the width evenly.
+    static func columnCaps(header: [String], rows: [[String]]) -> [CGFloat?] {
+        let longest = header.indices.map { c -> Int in
+            let cells = [header[c]] + rows.compactMap { c < $0.count ? $0[c] : nil }
+            // Emphasis markers aren't drawn, so don't count them.
+            return cells.map { $0.filter { !"*`_".contains($0) }.count }.max() ?? 0
+        }
+        let isNarrow = longest.map { $0 <= 24 }
+        guard isNarrow.contains(false) else { return longest.map { _ in nil } }
+        return zip(longest, isNarrow).map { width, narrow in
+            // 8.2pt/char approximates 13pt system text with bold key columns.
+            narrow ? min(CGFloat(width) * 8.2, 240) : nil
+        }
     }
 }

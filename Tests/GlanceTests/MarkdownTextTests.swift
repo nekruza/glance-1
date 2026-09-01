@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Glance
 
 /// The renderer previously printed unhandled Markdown syntax verbatim — a `>`
@@ -19,6 +20,8 @@ final class MarkdownTextTests: XCTestCase {
             case .code(let code):                      return "code:\(code)"
             case .quote(let text):                     return "quote:\(text)"
             case .paragraph(let text):                 return "p:\(text)"
+            case .table(let header, let rows, _):
+                return "table:" + ([header] + rows).map { $0.joined(separator: "/") }.joined(separator: ";")
             case .rule:                                return "rule"
             }
         }
@@ -180,5 +183,94 @@ final class MarkdownTextTests: XCTestCase {
         ])
         XCTAssertFalse(blocks.contains { $0.hasPrefix("p:>") || $0 == "p:---" },
                        "Markdown syntax reached the user as literal text")
+    }
+
+    // MARK: - Tables
+
+    private func table(_ md: String) -> (header: [String], rows: [[String]], aligns: [Alignment])? {
+        for block in MarkdownText.parse(md) {
+            if case .table(let h, let r, let a) = block { return (h, r, a) }
+        }
+        return nil
+    }
+
+    func testTableParsesHeaderAndRows() {
+        let t = table("""
+        | Term | Meaning |
+        |---|---|
+        | **mint** | Create + sign a new token |
+        | **revoke** | Invalidate before `exp` |
+        """)
+        XCTAssertEqual(t?.header, ["Term", "Meaning"])
+        XCTAssertEqual(t?.rows, [["**mint**", "Create + sign a new token"],
+                                 ["**revoke**", "Invalidate before `exp`"]])
+    }
+
+    func testTableWithoutOuterPipes() {
+        let t = table("a | b\n--- | ---\n1 | 2")
+        XCTAssertEqual(t?.header, ["a", "b"])
+        XCTAssertEqual(t?.rows, [["1", "2"]])
+    }
+
+    func testColumnAlignmentsFromDelimiterRow() {
+        let t = table("| l | c | r |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |")
+        XCTAssertEqual(t?.aligns, [.leading, .center, .trailing])
+    }
+
+    func testShortRowIsPaddedAndLongRowTruncated() {
+        let t = table("| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |")
+        XCTAssertEqual(t?.rows, [["1", "", ""], ["1", "2", "3"]])
+    }
+
+    func testTableEndsAtFirstNonPipeLine() {
+        XCTAssertEqual(shape("| a | b |\n|---|---|\n| 1 | 2 |\nafter the table"),
+                       ["table:a/b;1/2", "p:after the table"])
+    }
+
+    /// The guard that keeps prose out of the table branch.
+    func testProseWithAPipeFollowedByARuleIsNotATable() {
+        XCTAssertEqual(shape("Some text | with a pipe\n---"),
+                       ["p:Some text | with a pipe", "rule"])
+    }
+
+    func testDelimiterCellCountMustMatchHeader() {
+        XCTAssertEqual(shape("| a | b | c |\n|---|---|\n| 1 | 2 | 3 |"),
+                       ["p:| a | b | c | |---|---| | 1 | 2 | 3 |"])
+    }
+
+    func testTableInsideCodeFenceIsNotParsed() {
+        XCTAssertEqual(shape("```\n| a | b |\n|---|---|\n```"),
+                       ["code:| a | b |\n|---|---|"])
+    }
+
+    func testTableFollowingAParagraphFlushesIt() {
+        XCTAssertEqual(shape("intro line\n| a | b |\n|---|---|\n| 1 | 2 |"),
+                       ["p:intro line", "table:a/b;1/2"])
+    }
+
+    // MARK: - Table column widths
+
+    func testShortKeyColumnIsCappedSoProseAbsorbsTheSlack() {
+        let caps = MarkdownTable.columnCaps(
+            header: ["Term", "Meaning"],
+            rows: [["**verify / validate**", "Check signature, exp, iss and aud on every inbound request"]])
+        XCTAssertNotNil(caps[0], "short key column should be capped")
+        XCTAssertNil(caps[1], "prose column should stay flexible")
+        // Emphasis markers are not drawn, so they must not widen the cap.
+        XCTAssertEqual(caps[0]!, 17 * 8.2, accuracy: 0.01)
+    }
+
+    func testAllShortColumnsStayFlexible() {
+        let caps = MarkdownTable.columnCaps(header: ["a", "b"], rows: [["1", "2"]])
+        XCTAssertEqual(caps.count, 2)
+        XCTAssertTrue(caps.allSatisfy { $0 == nil })
+    }
+
+    func testCapIsClamped() {
+        let caps = MarkdownTable.columnCaps(
+            header: ["k", "v"],
+            rows: [[String(repeating: "x", count: 24), String(repeating: "y", count: 200)]])
+        XCTAssertEqual(caps[0]!, 24 * 8.2, accuracy: 0.01)
+        XCTAssertNil(caps[1])
     }
 }
