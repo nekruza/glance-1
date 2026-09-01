@@ -423,7 +423,9 @@ struct OverlayView: View {
             if !session.turns.isEmpty {
                 clearButton
             }
-            historyButton
+            if session.showsHistory {
+                historyButton
+            }
             attachButton
             transcriptPaneButton
             Button(action: { session.settingsHandler?() }) {

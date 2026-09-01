@@ -335,22 +335,21 @@ struct TaskDetailView: View {
     /// OQ-V2-3: per-task model for agent runs. Default = CLI's own default.
     /// Labels carry the resolved model names once the catalog has probed.
     private var modelPicker: some View {
-        Menu {
-            Button("auto — agent's choice, else opus") {
-                var t = task
-                t.runModel = nil
-                session.store.update(t)
-            }
-            ForEach(["haiku", "sonnet", "opus"], id: \.self) { m in
-                Button(menuLabel(m)) {
+        let provider = session.providerKind
+        let current = ModelCatalog.presentedChoice(for: task.runModel, provider: provider)
+        return Menu {
+            ForEach(ModelCatalog.choices(for: provider), id: \.rawValue) { choice in
+                Button(menuLabel(choice, provider: provider)) {
                     var t = task
-                    t.runModel = m
+                    t.runModel = ModelCatalog.storedModel(afterSelecting: choice,
+                                                          current: t.runModel,
+                                                          provider: provider)
                     session.store.update(t)
                 }
             }
         } label: {
-            pickerChip(nil, isSet: task.runModel != nil) {
-                Label(task.runModel ?? "auto", systemImage: "cpu")
+            pickerChip(nil, isSet: current != .automatic) {
+                Label(menuLabel(current, provider: provider), systemImage: "cpu")
             }
         }
         .menuStyle(.borderlessButton)
@@ -358,11 +357,12 @@ struct TaskDetailView: View {
         .help("Model for AI runs on this task (plan + execution)")
     }
 
-    private func menuLabel(_ alias: String) -> String {
-        if let resolved = ModelCatalog.shared.displayName(for: alias) {
-            return "\(alias) — \(resolved)"
+    private func menuLabel(_ choice: AutomationModelChoice, provider: AskBackendKind) -> String {
+        guard choice != .automatic else { return ModelCatalog.label(for: choice, provider: provider) }
+        if let resolved = ModelCatalog.shared.displayName(for: choice.rawValue) {
+            return "\(choice.rawValue) — \(resolved)"
         }
-        return alias
+        return choice.rawValue
     }
 
     /// Kind is editable so a misclassified task can be flipped to `code`

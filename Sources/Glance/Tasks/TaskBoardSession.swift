@@ -100,12 +100,27 @@ final class TaskBoardSession: ObservableObject {
     }
 
     let store: TaskStore
-    let runner: TaskRunner
-    private let ai: TaskAI
-    private let ingest: ComposioIngest
+    let backendTestSession: BackendTestSession
+    private(set) var runner: TaskRunner
+    private var ai: TaskAI
+    private var ingest: ComposioIngest
     /// Shared last-working-day digests (Granola/Slack/Jira/GitHub) — TTL
     /// cache so prep notes across meetings reuse one fetch per source.
-    private(set) lazy var workContext = WorkContext(ingest: ingest)
+    private(set) var workContext: WorkContext
+    private var providerGeneration: UInt
+    private var pendingConnectionCompletions:
+        [UUID: ([ComposioIngest.Connection]?, String?) -> Void] = [:]
+    /// A single-source pull may sequence provider-neutral work after fresh
+    /// data arrives (currently the scheduled briefing). Provider replacement
+    /// carries these continuations to the new bundle instead of losing them
+    /// with the cancelled CLI callback.
+    private var pendingPullCompletions: [UUID: () -> Void] = [:]
+    private var deferredPullCompletions: [() -> Void] = []
+
+    private struct ProviderToken: Equatable {
+        let generation: UInt
+        let kind: AskBackendKind
+    }
 
     var dismissHandler: (() -> Void)?
     var settingsHandler: (() -> Void)?
@@ -127,17 +142,94 @@ final class TaskBoardSession: ObservableObject {
     /// FR42: at most one automatic reflow per 10 minutes.
     private let reflowInterval: TimeInterval = 10 * 60
 
-    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest) {
+    var providerKind: AskBackendKind { ai.providerKind }
+
+    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
+         providerGeneration: UInt = 0,
+         backendTestSession: BackendTestSession? = nil) {
         self.store = store
+        self.backendTestSession = backendTestSession ?? BackendTestSession()
         self.runner = runner
         self.ai = ai
         self.ingest = ingest
+        self.workContext = WorkContext(ingest: ingest)
+        self.providerGeneration = providerGeneration
     }
 
-    /// Settings ▸ Agents passthrough: Opus designs a profile from a request.
+    /// The board itself survives an AI-provider switch, but none of its old
+    /// asynchronous service callbacks may update the newly selected provider's
+    /// state. Invalidating first makes that true even for callbacks already
+    /// queued on the main actor.
+    func replaceServices(runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
+                         providerGeneration: UInt) {
+        cancelProviderWork(deferPullCompletions: true)
+        self.runner = runner
+        self.ai = ai
+        self.ingest = ingest
+        self.workContext = WorkContext(ingest: ingest)
+        self.providerGeneration = providerGeneration
+        let continuations = deferredPullCompletions
+        deferredPullCompletions.removeAll()
+        continuations.forEach { $0() }
+    }
+
+    /// Invalidate old callbacks immediately while retaining any provider-
+    /// neutral work that must resume once replacement services are installed.
+    func prepareForProviderReplacement() {
+        cancelProviderWork(deferPullCompletions: true)
+    }
+
+    func cancelProviderWork() {
+        cancelProviderWork(deferPullCompletions: false)
+    }
+
+    func cancelSettingsWork() {
+        backendTestSession.cancel()
+    }
+
+    private func cancelProviderWork(deferPullCompletions: Bool) {
+        providerGeneration &+= 1
+        ingest.cancel()
+        let pendingConnections = Array(pendingConnectionCompletions.values)
+        pendingConnectionCompletions.removeAll()
+        let pendingPulls = Array(pendingPullCompletions.values)
+        pendingPullCompletions.removeAll()
+        if deferPullCompletions {
+            deferredPullCompletions.append(contentsOf: pendingPulls)
+        } else {
+            deferredPullCompletions.removeAll()
+        }
+        pullingSource = nil
+        pullAllRemaining = 0
+        pullStatus = nil
+        decomposeBusy = false
+        isPrioritizing = false
+        promptBusyTaskIds.removeAll()
+        prepBusyTaskIds.removeAll()
+        prepPhase = "Gathering context…"
+        draftBusyTaskIds.removeAll()
+        sendBusyTaskIds.removeAll()
+        sendError.removeAll()
+        briefingBusy = false
+        // Some providers suppress callbacks when cancelled. Settle view-owned
+        // spinners synchronously while the old generation is invalidated.
+        pendingConnections.forEach { $0(nil, nil) }
+    }
+
+    private func providerToken() -> ProviderToken {
+        ProviderToken(generation: providerGeneration, kind: providerKind)
+    }
+
+    private func isCurrent(_ token: ProviderToken) -> Bool {
+        token.generation == providerGeneration && token.kind == providerKind
+    }
+
+    /// Settings ▸ Agents passthrough: the selected provider designs a profile.
     func generateAgent(request: String, completion: @escaping (AgentProfile?) -> Void) {
+        let token = providerToken()
         let existing = Preferences.shared.agents.map(\.name)
         ai.generateAgent(request: request, existingNames: existing) { g in
+            guard self.isCurrent(token) else { return }
             guard let g else {
                 completion(nil)
                 return
@@ -160,7 +252,15 @@ final class TaskBoardSession: ObservableObject {
 
     /// Settings ▸ Connections passthrough (ingest is private).
     func listConnections(completion: @escaping ([ComposioIngest.Connection]?, String?) -> Void) {
-        ingest.listConnections(completion: completion)
+        let token = providerToken()
+        let requestID = UUID()
+        pendingConnectionCompletions[requestID] = completion
+        ingest.listConnections { [weak self] connections, error in
+            guard let self, self.isCurrent(token),
+                  let completion = self.pendingConnectionCompletions.removeValue(forKey: requestID)
+            else { return }
+            completion(connections, error)
+        }
     }
 
     // MARK: - Composio pulls (manual, read-only)
@@ -177,12 +277,18 @@ final class TaskBoardSession: ObservableObject {
             completion?()
             return
         }
+        let token = providerToken()
+        let completionID = UUID()
+        if let completion {
+            pendingPullCompletions[completionID] = completion
+        }
         pullingSource = target
         pullStatus = nil
         ingest.pull(target, store: store) { [weak self] result in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
+            let completion = self.pendingPullCompletions.removeValue(forKey: completionID)
             self.pullingSource = nil
-            self.showPullStatus(Self.describe(target, result))
+            self.showPullStatus(Self.describe(target, result), token: token)
             self.autoTriage(result.createdIds)
             if result.created > 0 {
                 self.tab = .inbox
@@ -202,6 +308,7 @@ final class TaskBoardSession: ObservableObject {
     /// show an aggregate status line in the original target order.
     func pullAll() {
         guard !isPulling, ensureComposioConfigured() else { return }
+        let token = providerToken()
         pullStatus = nil
         let targets = Preferences.shared.enabledFetchTargets
         guard !targets.isEmpty else {
@@ -224,7 +331,7 @@ final class TaskBoardSession: ObservableObject {
                 nextIndex += 1
                 active += 1
                 ingest.pull(target, store: store) { [weak self] result in
-                    guard let self else { return }
+                    guard let self, self.isCurrent(token) else { return }
                     active -= 1
                     totalCreated += result.created
                     self.autoTriage(result.createdIds)
@@ -234,7 +341,7 @@ final class TaskBoardSession: ObservableObject {
                     self.pullAllRemaining -= 1
                     if self.pullAllRemaining == 0 {
                         let parts = summary.compactMap { $0 }
-                        self.showPullStatus(parts.joined(separator: " · "))
+                        self.showPullStatus(parts.joined(separator: " · "), token: token)
                         if totalCreated > 0 {
                             self.tab = .inbox
                             self.pullNotifyHandler?("Pull finished: \(totalCreated) new task\(totalCreated == 1 ? "" : "s") in Inbox (\(parts.joined(separator: ", ")))")
@@ -266,10 +373,12 @@ final class TaskBoardSession: ObservableObject {
             + (result.skippedDuplicates > 0 ? ", \(result.skippedDuplicates) known" : "")
     }
 
-    private func showPullStatus(_ text: String) {
+    private func showPullStatus(_ text: String, token: ProviderToken? = nil) {
+        let token = token ?? providerToken()
         pullStatus = text
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
-            self?.pullStatus = nil
+            guard let self, self.isCurrent(token) else { return }
+            self.pullStatus = nil
         }
     }
 
@@ -389,9 +498,10 @@ final class TaskBoardSession: ObservableObject {
     func runDecompose() {
         let text = decomposeText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !decomposeBusy else { return }
+        let token = providerToken()
         decomposeBusy = true
         ai.decompose(prompt: text) { [weak self] result in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             self.decomposeBusy = false
             if result == nil {
                 self.noteAIFailure("Split into tasks failed. Try again.")
@@ -430,6 +540,7 @@ final class TaskBoardSession: ObservableObject {
     /// enriches all new items together instead of one call per item.
     private func enrichBatch(_ batch: [TaskItem]) {
         guard !batch.isEmpty else { return }
+        let token = providerToken()
         let repoNames = Preferences.shared.repos.map(\.name)
         // Dedup candidates: live tasks, newest first, capped — enough to
         // catch the Jira ticket / Slack thread / meeting action for the same
@@ -446,7 +557,7 @@ final class TaskBoardSession: ObservableObject {
         let sentTitles = Dictionary(uniqueKeysWithValues: batch.map { ($0.id, $0.title) })
         let items = batch.map { (id: $0.id, title: $0.title, description: $0.descriptionMD) }
         ai.enrich(items: items, repoNames: repoNames, openTasks: openTasks) { [weak self] results in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             guard let results else {
                 // Background auto-triage: feed-only, no toast (see noteAIFailure).
                 self.noteAIFailure("Auto-enrich failed — \(batch.count) item\(batch.count == 1 ? "" : "s") left raw", toast: false)
@@ -503,10 +614,11 @@ final class TaskBoardSession: ObservableObject {
         guard force else { return } // no automatic reflows
         let board = store.boardTasks()
         guard board.count > 1 else { return }
+        let token = providerToken()
         lastPrioritized = Date()
         isPrioritizing = true
         ai.prioritize(board: board) { [weak self] entries in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             self.isPrioritizing = false
             guard let entries else {
                 self.noteAIFailure("Prioritize failed — board order unchanged. Try again.")
@@ -525,11 +637,12 @@ final class TaskBoardSession: ObservableObject {
     /// prompt; saved on the task so it survives restarts. Failure = no change.
     func generateHandoffPrompt(_ task: TaskItem) {
         guard !promptBusyTaskIds.contains(task.id) else { return }
+        let token = providerToken()
         promptBusyTaskIds.insert(task.id)
         let repoName = Preferences.shared.repos.first { $0.path == task.workspacePath }?.name
         let agent = Preferences.shared.agent(task.agentId)
         ai.handoffPrompt(for: task, repoName: repoName, agent: agent) { [weak self] text in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             self.promptBusyTaskIds.remove(task.id)
             guard let text else {
                 self.noteAIFailure("Prompt failed — \(task.title). Try again.")
@@ -547,6 +660,7 @@ final class TaskBoardSession: ObservableObject {
     /// restarts. Failure = no change.
     func generatePrepNotes(_ task: TaskItem) {
         guard !prepBusyTaskIds.contains(task.id) else { return }
+        let token = providerToken()
         prepBusyTaskIds.insert(task.id)
         // Social events (lunch, drinks, birthday…) get logistics-only notes —
         // don't spend four source fetches on work context the notes must not
@@ -560,31 +674,19 @@ final class TaskBoardSession: ObservableObject {
         prepPhase = "Gathering context…"
         let boardContext = boardDigest(excluding: task.id)
         workContext.digests { [weak self] digests in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             self.prepPhase = "Writing notes…"
-            self.writePrepNotes(task, digests: digests, boardContext: boardContext)
-        }
-    }
-
-    /// Obviously-social calendar events, where prep is logistics, not work.
-    static func isSocialEvent(_ title: String) -> Bool {
-        let t = title.lowercased()
-        let social = ["lunch", "dinner", "breakfast", "coffee", "drinks",
-                      "birthday", "party", "picnic", "bbq", "social", "outing",
-                      "celebration", "happy hour"]
-        return social.contains { t.contains($0) }
-    }
-
-    private func writePrepNotes(_ task: TaskItem,
-                                digests: [WorkContext.Source: String],
-                                boardContext: String) {
-        ai.prepNotes(for: task, workDigests: digests,
-                     boardContext: boardContext) { [weak self] text in
-            guard let self else { return }
-            self.prepBusyTaskIds.remove(task.id)
-            guard let text else {
-                self.noteAIFailure("Prep notes failed — \(task.title). Try again.")
-                return
+            self.ai.prepNotes(for: task, workDigests: digests,
+                              boardContext: boardContext) { [weak self] text in
+                guard let self, self.isCurrent(token) else { return }
+                self.prepBusyTaskIds.remove(task.id)
+                guard let text else {
+                    self.noteAIFailure("Prep notes failed — \(task.title). Try again.")
+                    return
+                }
+                guard var t = self.store.task(task.id) else { return }
+                t.prepNotes = text
+                self.store.update(t)
             }
             guard var t = self.store.task(task.id) else { return }
             t.prepNotes = text
@@ -597,9 +699,10 @@ final class TaskBoardSession: ObservableObject {
     /// survives restarts. Failure = no change.
     func generateHelperDraft(_ task: TaskItem, thenReview: Bool = false) {
         guard !draftBusyTaskIds.contains(task.id) else { return }
+        let token = providerToken()
         draftBusyTaskIds.insert(task.id)
         ai.helperDraft(for: task, helper: task.helper) { [weak self] text in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             self.draftBusyTaskIds.remove(task.id)
             guard let text else {
                 self.noteAIFailure(thenReview
@@ -631,9 +734,10 @@ final class TaskBoardSession: ObservableObject {
     /// notification); manual refresh from the panel skips it.
     func generateBriefing(notify: Bool = false) {
         guard !briefingBusy else { return }
+        let token = providerToken()
         briefingBusy = true
         ai.morningBriefing(context: briefingContext()) { [weak self] text in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             self.briefingBusy = false
             guard let text else {
                 self.noteAIFailure("Morning briefing failed — retry from the ☀️ panel.")
@@ -728,6 +832,7 @@ final class TaskBoardSession: ObservableObject {
     func approveSend(_ task: TaskItem, editedDraft: String?) {
         guard !sendBusyTaskIds.contains(task.id),
               let target = task.outboundTarget else { return }
+        let token = providerToken()
         // Persist the edit up front so the sent text and the saved draft match.
         if let edited = editedDraft, var t = store.task(task.id), t.helperDraft != edited {
             t.helperDraft = edited
@@ -757,7 +862,7 @@ final class TaskBoardSession: ObservableObject {
         sendBusyTaskIds.insert(task.id)
         sendError[task.id] = nil
         ingest.performWrite(instruction: instruction) { [weak self] result in
-            guard let self else { return }
+            guard let self, self.isCurrent(token) else { return }
             self.sendBusyTaskIds.remove(task.id)
             switch result {
             case .success:

@@ -22,9 +22,15 @@ final class TaskStore: ObservableObject {
         var approvals: [ApprovalRecord]
     }
 
-    init() {
-        dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Glance", isDirectory: true)
+    convenience init() {
+        self.init(directory: FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Glance", isDirectory: true))
+    }
+
+    /// Isolated persistence root for tests and preview-style callers. Production
+    /// continues to use the Application Support directory through `init()`.
+    init(directory: URL) {
+        dir = directory
         fileURL = dir.appendingPathComponent("tasks.json")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         load()

@@ -12,7 +12,10 @@ KC_PASS="glance"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-if security find-identity -v -p codesigning "$KC" 2>/dev/null | grep -q "$IDENTITY"; then
+# No -v: a self-signed cert is "untrusted" and -v (valid-only) never lists it,
+# which made this guard miss and re-runs pile up duplicate identities —
+# codesign then fails with "ambiguous".
+if security find-identity -p codesigning "$KC" 2>/dev/null | grep -q "$IDENTITY"; then
     echo "✔ signing identity '$IDENTITY' already exists"
     exit 0
 fi

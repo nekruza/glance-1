@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// FR5: menu-bar presence, styled to 03-menubar-dropdown (app header, Claude CLI
+/// FR5: menu-bar presence, styled to 03-menubar-dropdown (app header, AI provider
 /// status line, Ask / Settings / Quit). No Dock.
 @MainActor
 final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
@@ -18,6 +18,8 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     var statusProvider: (() -> (connected: Bool, label: String))?
     /// Provides hotkey bindings that failed to register (empty = all good).
     var hotkeyWarningProvider: (() -> [String])?
+    /// Re-opens the first-launch welcome tour.
+    var onWelcome: (() -> Void)?
 
     private var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
@@ -28,6 +30,12 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
+            // Stays the `sparkle` symbol, not the app logo (`BrandMark`): a
+            // status item is a template image, so macOS would flatten the
+            // logo's gradient squircle into one solid silhouette. The symbol
+            // also tracks the menu bar's light/dark appearance for free.
+            // The onboarding copy and MenuBarMock illustration both depict
+            // this icon — change all three together or none.
             button.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Glance")
             button.image?.isTemplate = true
         }
@@ -79,6 +87,10 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let welcome = NSMenuItem(title: "Welcome Tour…", action: #selector(welcomeAction), keyEquivalent: "")
+        welcome.target = self
+        menu.addItem(welcome)
+
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
@@ -111,7 +123,7 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     }
 
     private func refreshStatusLine() {
-        let (connected, label) = statusProvider?() ?? (false, "Claude CLI status unknown")
+        let (connected, label) = statusProvider?() ?? (false, "AI provider status unknown")
         let dot = connected ? "● " : "○ "
         let color = connected ? NSColor.systemGreen : NSColor.systemOrange
         statusLineItem?.attributedTitle = attributed([
@@ -137,6 +149,8 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     @objc private func tasksAction() { onTasks?() }
 
     @objc private func toggleTranscription() { onToggleTranscription?() }
+
+    @objc private func welcomeAction() { onWelcome?() }
 
     /// Legacy small Settings window — fallback used only when the task
     /// system (and its in-window settings page) is unavailable.

@@ -5,6 +5,8 @@ import SwiftUI
 /// fallback when the task system is unavailable).
 struct TaskSettingsView: View {
 
+    static let askBackendRowTitle = "AI provider"
+
     enum Section: String, CaseIterable {
         case general = "General"
         case appearance = "Appearance"
@@ -34,9 +36,8 @@ struct TaskSettingsView: View {
     @ObservedObject private var prefs = Preferences.shared
     @State private var section: Section = .general
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
-    @State private var cliStatus: ClaudeLocator.Status = ClaudeLocator.check()
-    @State private var testing = false
-    @State private var testResult: String?
+    @State private var askBackendStatus: AskBackendStatus = .notConnected
+    @ObservedObject private var backendTest: BackendTestSession
 
     @State private var connections: [ComposioIngest.Connection] = []
     @State private var connectionsLoading = false
@@ -46,6 +47,17 @@ struct TaskSettingsView: View {
 
     @ObservedObject var session: TaskBoardSession
     var onClose: () -> Void
+
+    init(session: TaskBoardSession, onClose: @escaping () -> Void) {
+        self.session = session
+        self.onClose = onClose
+        _backendTest = ObservedObject(wrappedValue: session.backendTestSession)
+    }
+
+    private enum AskBackendStatus {
+        case ok(version: String)
+        case notConnected
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,6 +78,7 @@ struct TaskSettingsView: View {
             }
             .frame(maxHeight: .infinity)
         }
+        .onAppear { rescanAskBackend() }
     }
 
     // MARK: - Chrome
@@ -504,20 +517,38 @@ struct TaskSettingsView: View {
 
     private var aiSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            row("Claude CLI", cliSubtitle) {
+            row(Self.askBackendRowTitle, "Local CLI used for Ask, tasks, suggestions, meetings, and Composio") {
+                Picker("", selection: $prefs.askBackend) {
+                    ForEach(AskBackendKind.allCases, id: \.self) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+                .onChange(of: prefs.askBackend) { _, _ in
+                    backendTest.providerDidChange(to: prefs.askBackend)
+                    connectionsLoading = false
+                    connectionsError = nil
+                    connectionsCheckedAt = nil
+                    connections = []
+                    rescanAskBackend()
+                }
+            }
+            Divider().overlay(DS.divider)
+            row(prefs.askBackend.displayName, askBackendSubtitle) {
                 HStack(spacing: DS.Space.xs) {
-                    if case .ok = cliStatus {
+                    if case .ok = askBackendStatus {
                         pill("Connected", DS.success, soft: DS.successSoft)
                     } else {
                         pill("Not connected", DS.warning, soft: DS.warningSoft)
                     }
-                    Button(testing ? "Testing…" : "Test") { runTest() }
+                    Button(backendTest.isTesting ? "Testing…" : "Test") { runTest() }
                         .controlSize(.small)
-                        .disabled(testing)
+                        .disabled(backendTest.isTesting)
                 }
             }
-            if let r = testResult {
-                Text(r).font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
+            if let outcome = backendTest.outcome {
+                Text(testResultText(outcome)).font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
                     .padding(.bottom, DS.Space.xs)
             }
             Divider().overlay(DS.divider)
@@ -671,11 +702,14 @@ struct TaskSettingsView: View {
 
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
-            Text("Glance v1.0").font(DS.Typo.title)
-            Text("Personal AI assistant: ask-anything overlay, meeting transcription, and an AI task board — all running through your local Claude CLI.")
+            HStack(spacing: DS.Space.sm) {
+                BrandMark(size: 48)
+                Text("Glance v1.0").font(DS.Typo.title)
+            }
+            Text("Personal AI assistant: Ask overlay, meeting transcription, and an AI task board — all running through your selected AI provider.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textSecondary)
             Divider().overlay(DS.divider)
-            Text("No API keys for model traffic — everything goes through your local Claude CLI and its auth. Task data stays in ~/Library/Application Support/Glance. The Composio key (Sources) is the one stored credential, used for read-only pulls.")
+            Text("No API keys for model traffic — everything goes through your selected \(prefs.askBackend.displayName) and its auth. Task data stays in ~/Library/Application Support/Glance. The Composio key (Sources) is the one stored credential, used for read-only pulls.")
                 .font(DS.Typo.caption).foregroundStyle(DS.textTertiary)
         }
     }
@@ -714,25 +748,40 @@ struct TaskSettingsView: View {
         .foregroundStyle(color)
     }
 
-    private var cliSubtitle: String {
-        if case .ok(_, let v) = cliStatus {
-            return "claude " + (v.split(separator: " ").first.map(String.init) ?? v)
+    private var askBackendSubtitle: String {
+        if case .ok(let version) = askBackendStatus {
+            return prefs.askBackend.displayName + " " + (version.split(separator: " ").first.map(String.init) ?? version)
         }
-        return "Install/authenticate the Claude CLI to run tasks"
+        return "Install and sign in to \(prefs.askBackend.displayName) to use Glance's AI features"
     }
 
     private func runTest() {
-        testing = true
-        testResult = nil
-        BackendTester.test { outcome in
-            testing = false
-            switch outcome {
-            case .success(let s):
-                testResult = String(format: "Responded in %.1fs — “%@”", s.latency, s.reply)
-            case .failure(let msg):
-                testResult = msg
+        backendTest.start(kind: prefs.askBackend)
+    }
+
+    private func testResultText(_ outcome: BackendTester.Outcome) -> String {
+        switch outcome {
+        case .success(let success):
+            return String(format: "Responded in %.1fs — “%@”", success.latency, success.reply)
+        case .failure(let message):
+            return message
+        }
+    }
+
+    private func rescanAskBackend() {
+        switch prefs.askBackend {
+        case .claude:
+            if case .ok(_, let version) = ClaudeLocator.check() {
+                askBackendStatus = .ok(version: version)
+            } else {
+                askBackendStatus = .notConnected
             }
-            cliStatus = ClaudeLocator.check()
+        case .codex:
+            if case .ok(_, let version) = CodexLocator.check() {
+                askBackendStatus = .ok(version: version)
+            } else {
+                askBackendStatus = .notConnected
+            }
         }
     }
 

@@ -8,15 +8,57 @@ import Combine
 final class AppCoordinator {
 
     private let hotkey = HotkeyManager()
-    private let overlay = OverlayController()
+    private let overlay: OverlayController
     private let prefs = Preferences.shared
 
-    // V2 task system (created in start() once the CLI path is known).
-    let taskStore = TaskStore()
+    // V2 task system. The store outlives a provider switch; only the
+    // provider-owned services below are replaced.
+    let taskStore: TaskStore
     private(set) var taskRunner: TaskRunner?
     private(set) var taskOverlay: TaskOverlayController?
     private var taskAI: TaskAI?
     let taskNotifications = TaskNotifications()
+
+    private struct ProviderServices {
+        let kind: AskBackendKind
+        let generation: UInt
+        let provider: AutomationProvider
+        let taskAI: TaskAI
+        let taskRunner: TaskRunner
+        let ingest: ComposioIngest
+    }
+
+    private let automationProviderFactory: AutomationProviderFactory
+    private let askBackendFactory: AskBackendFactory
+    private var providerServices: ProviderServices?
+    private var providerGeneration: UInt = 0
+    /// Reader extraction has its own visible busy state. Providers are allowed
+    /// to suppress callbacks when cancelled, so keep its completion at the
+    /// lifecycle boundary and settle it explicitly on a provider change.
+    private var pendingMeetingExtractionCompletions: [UUID: (Int) -> Void] = [:]
+    private var taskInfrastructureConfigured = false
+
+    /// The provider used by the current service bundle. Consumers such as the
+    /// meeting transcriber read this dynamically so a provider switch takes
+    /// effect before their next request begins.
+    var currentAutomationProvider: AutomationProvider? {
+        providerServices?.provider
+    }
+
+    /// A provider reference is not sufficient for work that may outlive a
+    /// selection change: a future selection can build the same provider kind
+    /// again. Capture this generation-bound lease and validate it immediately
+    /// before applying any asynchronous result.
+    func currentAutomationProviderLease() -> AutomationProviderLease? {
+        guard let services = providerServices else { return nil }
+        let kind = services.kind
+        let generation = services.generation
+        return AutomationProviderLease(provider: services.provider) { [weak self] in
+            let check = { self?.isCurrentProvider(kind: kind, generation: generation) ?? false }
+            if Thread.isMainThread { return check() }
+            return DispatchQueue.main.sync(execute: check)
+        }
+    }
 
     /// Opens the Settings window (wired to the status-item controller).
     var onOpenSettings: (() -> Void)?
@@ -31,16 +73,52 @@ final class AppCoordinator {
         overlay.session.isTranscribing = recording
     }
 
-    private var backend: ClaudeBackend?
+    private let backendLifecycle: AskBackendLifecycle
+    private var backend: AskBackend? { backendLifecycle.backend }
     private var suggestions: SuggestionService?
     private var pendingImagePNG: Data?
     private var pendingCaptureLabel: String = ""
     private var claudeStatus: ClaudeLocator.Status = .notFound
     private var cancellables = Set<AnyCancellable>()
 
-    func start() {
-        claudeStatus = ClaudeLocator.check()
+    init() {
+        self.taskStore = TaskStore()
+        self.overlay = OverlayController()
+        self.backendLifecycle = AskBackendLifecycle()
+        self.automationProviderFactory = AutomationProviderFactory()
+        self.askBackendFactory = AskBackendFactory()
+    }
 
+    init(backendLifecycle: AskBackendLifecycle) {
+        self.taskStore = TaskStore()
+        self.overlay = OverlayController()
+        self.backendLifecycle = backendLifecycle
+        self.automationProviderFactory = AutomationProviderFactory()
+        self.askBackendFactory = AskBackendFactory()
+    }
+
+    init(backendLifecycle: AskBackendLifecycle, overlay: OverlayController) {
+        self.taskStore = TaskStore()
+        self.overlay = overlay
+        self.backendLifecycle = backendLifecycle
+        self.automationProviderFactory = AutomationProviderFactory()
+        self.askBackendFactory = AskBackendFactory()
+    }
+
+    /// Composition seam for the app's provider factory. It is intentionally
+    /// the same lifecycle path used in production, rather than a test-only
+    /// alternate task stack.
+    init(backendLifecycle: AskBackendLifecycle, overlay: OverlayController,
+         automationProviderFactory: AutomationProviderFactory,
+         askBackendFactory: AskBackendFactory = AskBackendFactory(), taskStore: TaskStore) {
+        self.taskStore = taskStore
+        self.overlay = overlay
+        self.backendLifecycle = backendLifecycle
+        self.automationProviderFactory = automationProviderFactory
+        self.askBackendFactory = askBackendFactory
+    }
+
+    func start() {
         hotkey.onFire = { [weak self] in self?.toggle() }
         hotkey.register(prefs.hotkey)
 
@@ -48,6 +126,18 @@ final class AppCoordinator {
         prefs.$hotkey
             .dropFirst()
             .sink { [weak self] combo in self?.hotkey.register(combo) }
+            .store(in: &cancellables)
+
+        // A conversation belongs to one provider. Switching providers drops
+        // the live process and transcript instead of mixing their context.
+        prefs.$askBackend
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] kind in
+                guard let self else { return }
+                self.replaceProviderServices(for: kind)
+                self.overlay.session.resetForBackendChange(to: kind)
+            }
             .store(in: &cancellables)
 
         // A hotkey grab lost at launch (combo held by an app that later quit)
@@ -58,13 +148,18 @@ final class AppCoordinator {
             .sink { [weak self] _ in self?.hotkey.retryFailedRegistrations() }
             .store(in: &cancellables)
 
-        setupTasks()
+        // NFR13: mark runs orphaned by a previous quit only once. Provider
+        // switches retain these local records rather than recreating the store.
+        taskStore.failOrphanedRuns()
+        replaceProviderServices(for: prefs.askBackend)
+        configureTaskInfrastructureIfNeeded()
 
         overlay.onDismiss = { [weak self] in self?.endSession() }
 
         // Warm ScreenCaptureKit's shareable-content cache so the first capture
-        // isn't slow (helps FR2). Best-effort.
-        Task { _ = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) }
+        // isn't slow (helps FR2), and record whether capture actually works —
+        // the TCC preflight lies for dev-signed builds (see hasPermission).
+        Task { await ScreenCaptureService.probePermission() }
     }
 
     /// Menu-driven summon (same as the hotkey).
@@ -90,51 +185,167 @@ final class AppCoordinator {
 
     // MARK: - V2 task system
 
-    private func setupTasks() {
-        // NFR13: mark runs orphaned by the previous quit.
-        taskStore.failOrphanedRuns()
+    /// A provider change is a hard async boundary. Increment the generation
+    /// before any cancellation so every callback captured from the old bundle
+    /// becomes stale immediately, even when a CLI finishes while it is being
+    /// terminated.
+    func replaceProviderServices(for kind: AskBackendKind) {
+        providerGeneration &+= 1
+        ModelCatalog.shared.providerDidChange()
+        backendLifecycle.shutdown()
+        suggestions?.cancel()
+        taskRunner?.cancelAll(reason: "AI provider changed.")
+        taskOverlay?.session.prepareForProviderReplacement()
+        settlePendingMeetingExtractions()
+        providerServices?.provider.cancelAll()
+        setupTasks(for: kind, generation: providerGeneration)
+    }
 
-        // The task system needs the CLI; degrade silently if absent (the ask
-        // overlay already surfaces CLI problems on use).
-        guard case .ok(let path, let version) = ClaudeLocator.check() else { return }
-        ModelCatalog.shared.refresh(binaryPath: path, cliVersion: version)
-        let ai = TaskAI(binaryPath: path)
+    private func setupTasks(for kind: AskBackendKind, generation: UInt) {
+        let provider: AutomationProvider
+        switch automationProviderFactory.make(kind: kind) {
+        case .success(let selected):
+            provider = selected
+        case .failure(let status):
+            // Keep the existing local task data and board available, but make
+            // each new AI operation fail with the selected provider's exact
+            // diagnostic rather than falling back to the previously selected CLI.
+            provider = UnavailableAutomationProvider(
+                kind: kind,
+                message: AutomationProviderFactory.unavailableMessage(kind: kind, status: status)
+            )
+        }
+
+        let ai = TaskAI(provider: provider)
+        let runner = TaskRunner(store: taskStore, provider: provider)
+        let ingest = ComposioIngest(provider: provider)
+        let services = ProviderServices(kind: kind, generation: generation,
+                                        provider: provider, taskAI: ai,
+                                        taskRunner: runner, ingest: ingest)
+        if let binaryPath = provider.descriptor.binaryPath {
+            ModelCatalog.shared.refresh(for: kind, binaryPath: binaryPath,
+                                        cliVersion: provider.descriptor.version)
+        }
+        providerServices = services
         taskAI = ai
-        let runner = TaskRunner(store: taskStore, binaryPath: path)
-        let ingest = ComposioIngest(binaryPath: path)
-        let overlayCtl = TaskOverlayController(store: taskStore, runner: runner, ai: ai, ingest: ingest)
-        overlayCtl.onOpenSettings = { [weak self] in self?.onOpenSettings?() }
+        taskRunner = runner
+        suggestions = SuggestionService(provider: provider)
+
+        let overlayCtl: TaskOverlayController
+        if let existing = taskOverlay {
+            existing.replaceServices(runner: runner, ai: ai, ingest: ingest,
+                                     generation: generation)
+            overlayCtl = existing
+        } else {
+            overlayCtl = TaskOverlayController(store: taskStore, runner: runner,
+                                               ai: ai, ingest: ingest,
+                                               providerGeneration: generation)
+            taskOverlay = overlayCtl
+        }
+
+        wireTaskCallbacks(services: services, overlay: overlayCtl)
+    }
+
+    private func isCurrentProvider(kind: AskBackendKind, generation: UInt) -> Bool {
+        providerGeneration == generation
+            && providerServices?.kind == kind
+            && providerServices?.generation == generation
+    }
+
+    private func wireTaskCallbacks(services: ProviderServices, overlay: TaskOverlayController) {
+        let kind = services.kind
+        let generation = services.generation
+        let runner = services.taskRunner
+
+        overlay.onOpenSettings = { [weak self] in self?.onOpenSettings?() }
         runner.onEvent = { [weak self] message, taskId in
-            self?.taskNotifications.post(message: message, taskId: taskId)
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.taskNotifications.post(message: message, taskId: taskId)
         }
         runner.onGate = { [weak self] gate, message, taskId, runId in
-            self?.taskNotifications.postGate(gate, message: message,
-                                             taskId: taskId, runId: runId)
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.taskNotifications.postGate(gate, message: message, taskId: taskId, runId: runId)
         }
-        runner.onTaskCompleted = { [weak overlayCtl] in
-            overlayCtl?.session.boardCompositionChanged()
+        runner.onTaskCompleted = { [weak self, weak overlay] in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            overlay?.session.boardCompositionChanged()
         }
-        taskNotifications.setup()
-        taskNotifications.onOpenTask = { [weak overlayCtl] taskId in
-            overlayCtl?.reveal(taskId: taskId)
+
+        taskNotifications.onOpenTask = { [weak self, weak overlay] taskId in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            overlay?.reveal(taskId: taskId)
         }
-        // One-click gate actions from the notification itself. Approving a
-        // review never releases boundary actions (push/PR) — those stay in-app.
-        taskNotifications.onApprovePlan = { [weak runner] runId in
+        // One-click gate actions from a stale notification must never revive
+        // a run owned by a provider that is no longer selected.
+        taskNotifications.onApprovePlan = { [weak self, weak runner] runId in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
             runner?.approvePlan(runId: runId)
         }
-        taskNotifications.onRejectPlan = { [weak runner] runId, reason in
+        taskNotifications.onRejectPlan = { [weak self, weak runner] runId, reason in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
             runner?.rejectPlan(runId: runId, reason: reason)
         }
-        taskNotifications.onApproveReview = { [weak runner] runId in
+        taskNotifications.onApproveReview = { [weak self, weak runner] runId in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
             runner?.approveReview(runId: runId, releaseBoundary: false)
         }
-        taskNotifications.onRejectReview = { [weak runner] runId, reason in
+        taskNotifications.onRejectReview = { [weak self, weak runner] runId, reason in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
             runner?.rejectReview(runId: runId, reason: reason)
         }
-        taskRunner = runner
-        taskOverlay = overlayCtl
 
+        overlay.session.openAskHandler = { [weak self] in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.summon()
+        }
+        overlay.session.pullNotifyHandler = { [weak self] message in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.taskNotifications.post(message: message,
+                                        taskId: self.taskStore.inboxTasks().first?.id ?? UUID())
+        }
+        overlay.session.sendNotifyHandler = { [weak self] message, taskId in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.taskNotifications.post(message: message, taskId: taskId)
+        }
+        overlay.session.draftReadyNotifyHandler = { [weak self] message, taskId in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            let canSend = self.taskStore.task(taskId)?.outboundTarget != nil
+            self.taskNotifications.postDraft(message: message, taskId: taskId, canSend: canSend)
+        }
+        taskNotifications.onApproveSendDraft = { [weak self, weak overlay] taskId in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation),
+                  let task = self.taskStore.task(taskId), task.status == .awaitingReview,
+                  task.outboundTarget != nil else { return }
+            overlay?.session.approveSend(task, editedDraft: nil)
+        }
+        overlay.session.briefingNotifyHandler = { [weak self] message in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.taskNotifications.postBriefing(message: message)
+        }
+        taskNotifications.onOpenBriefing = { [weak self, weak overlay] in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation),
+                  let overlay else { return }
+            overlay.session.showSettings = false
+            overlay.session.showAgents = false
+            overlay.session.tab = .board
+            overlay.session.showBriefing = true
+            overlay.present()
+        }
+
+        TranscriptPanelModel.shared.summarizeHandler = { [weak self] entry in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.summarizeMeeting(entry)
+        }
+        TranscriptPanelModel.shared.extractTasksHandler = { [weak self] entry, done in
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            self.extractMeetingTasks(entry, completion: done)
+        }
+    }
+
+    private func configureTaskInfrastructureIfNeeded() {
+        guard !taskInfrastructureConfigured else { return }
+        taskInfrastructureConfigured = true
+        taskNotifications.setup()
         hotkey.register(prefs.taskHotkey, for: .tasks) { [weak self] in
             self?.taskOverlay?.toggle()
         }
@@ -144,59 +355,7 @@ final class AppCoordinator {
                 self?.hotkey.register(combo, for: .tasks)
             }
             .store(in: &cancellables)
-
-        overlayCtl.session.openAskHandler = { [weak self] in
-            self?.summon()
-        }
-
-        // Scheduled pulls: notify even when the overlay is closed.
-        overlayCtl.session.pullNotifyHandler = { [weak self] message in
-            self?.taskNotifications.post(message: message,
-                                         taskId: self?.taskStore.inboxTasks().first?.id ?? UUID())
-        }
-        // Approved outbound send succeeded — notify + deep-link to the task.
-        overlayCtl.session.sendNotifyHandler = { [weak self] message, taskId in
-            self?.taskNotifications.post(message: message, taskId: taskId)
-        }
-        // Autopilot draft parked in Review — the notification carries
-        // "Approve & send" when the task has an outbound target, so routine
-        // replies clear without opening the board.
-        overlayCtl.session.draftReadyNotifyHandler = { [weak self] message, taskId in
-            let canSend = self?.taskStore.task(taskId)?.outboundTarget != nil
-            self?.taskNotifications.postDraft(message: message, taskId: taskId,
-                                              canSend: canSend)
-        }
-        // The action is still one explicit user click per item — the same
-        // trust boundary as the in-app button, minus the app-open cost.
-        // Re-check the gate: the user may have edited/sent/rejected meanwhile.
-        taskNotifications.onApproveSendDraft = { [weak self, weak overlayCtl] taskId in
-            guard let task = self?.taskStore.task(taskId),
-                  task.status == .awaitingReview,
-                  task.outboundTarget != nil else { return }
-            overlayCtl?.session.approveSend(task, editedDraft: nil)
-        }
-        // Morning briefing (A1): notify when it lands; click-through opens
-        // the briefing panel on the board.
-        overlayCtl.session.briefingNotifyHandler = { [weak self] message in
-            self?.taskNotifications.postBriefing(message: message)
-        }
-        taskNotifications.onOpenBriefing = { [weak overlayCtl] in
-            guard let overlayCtl else { return }
-            overlayCtl.session.showSettings = false
-            overlayCtl.session.showAgents = false
-            overlayCtl.session.tab = .board
-            overlayCtl.session.showBriefing = true
-            overlayCtl.present()
-        }
         startPullScheduler()
-
-        // Transcript-pane reader actions.
-        TranscriptPanelModel.shared.summarizeHandler = { [weak self] entry in
-            self?.summarizeMeeting(entry)
-        }
-        TranscriptPanelModel.shared.extractTasksHandler = { [weak self] entry, done in
-            self?.extractMeetingTasks(entry, completion: done)
-        }
     }
 
     // MARK: - Scheduled pulls
@@ -216,11 +375,15 @@ final class AppCoordinator {
     }
 
     private func schedulerTick() {
+        let generation = providerGeneration
+        let kind = providerServices?.kind
         // Meeting prep autopilot rides the same tick but has its own pref,
         // independent of scheduled pulls.
         if let session = taskOverlay?.session {
             autopilot.tick(session: session) { [weak self] message, taskId in
-                self?.taskNotifications.post(message: message, taskId: taskId)
+                guard let self, let kind,
+                      self.isCurrentProvider(kind: kind, generation: generation) else { return }
+                self.taskNotifications.post(message: message, taskId: taskId)
             }
         }
 
@@ -275,13 +438,15 @@ final class AppCoordinator {
     /// unlike the reader's explicit "Add my tasks", which goes straight to
     /// ready.
     func autoIngestMeeting(notesURL: URL) {
-        guard let taskAI,
+        guard let taskAI, let kind = providerServices?.kind,
               let text = try? String(contentsOf: notesURL, encoding: .utf8),
               text.count > 200 else { return } // skip empty/junk recordings
+        let generation = providerGeneration
         let filename = notesURL.lastPathComponent
         let title = notesURL.deletingPathExtension().lastPathComponent
         taskAI.extractActionItems(meetingText: text) { [weak self] items in
-            guard let self, let items, !items.isEmpty else { return }
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation),
+                  let items, !items.isEmpty else { return }
             // Dedupe on sourceRef so re-processing the same transcript adds
             // nothing (I/O matrix: re-extraction skips existing keys).
             let existingKeys = Set(self.taskStore.tasks.compactMap { $0.sourceRef?.key })
@@ -325,13 +490,22 @@ final class AppCoordinator {
     /// Extract the user's action items from saved notes → task board.
     private func extractMeetingTasks(_ entry: MeetingHistory.Entry,
                                      completion: @escaping (Int) -> Void) {
-        guard let taskAI,
+        guard let taskAI, let kind = providerServices?.kind,
               let text = try? String(contentsOf: entry.url, encoding: .utf8) else {
             completion(0)
             return
         }
+        let generation = providerGeneration
+        let extractionID = UUID()
+        pendingMeetingExtractionCompletions[extractionID] = completion
         taskAI.extractActionItems(meetingText: text) { [weak self] items in
-            guard let self else { return }
+            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else {
+                // The reader button owns this completion. A provider switch
+                // must not apply the old result, but it still has to settle
+                // the visible extracting state.
+                self?.completeMeetingExtraction(extractionID, count: 0)
+                return
+            }
             let items = items ?? []
             for d in items {
                 var t = TaskItem(title: d.title, source: .granola)
@@ -344,8 +518,19 @@ final class AppCoordinator {
                 let added = self.taskStore.add(t)
                 self.taskNotifications.post(message: "Task added: \(added.title)", taskId: added.id)
             }
-            completion(items.count)
+            self.completeMeetingExtraction(extractionID, count: items.count)
         }
+    }
+
+    private func settlePendingMeetingExtractions() {
+        let completions = Array(pendingMeetingExtractionCompletions.values)
+        pendingMeetingExtractionCompletions.removeAll()
+        completions.forEach { $0(0) }
+    }
+
+    private func completeMeetingExtraction(_ id: UUID, count: Int) {
+        guard let completion = pendingMeetingExtractionCompletions.removeValue(forKey: id) else { return }
+        completion(count)
     }
 
     /// Hotkey bindings that failed to register, for the menu warning line.
@@ -355,11 +540,18 @@ final class AppCoordinator {
 
     /// Current backend status for the menu's status line.
     func backendStatusLine() -> (connected: Bool, label: String) {
-        let s = ClaudeLocator.check()
-        if case .ok(_, let v) = s {
-            return (true, "Claude CLI connected · " + shortVersion(v))
+        let kind = prefs.askBackend
+        switch kind {
+        case .claude:
+            if case .ok(_, let version) = ClaudeLocator.check() {
+                return (true, connectionLabel(for: kind, version: version))
+            }
+        case .codex:
+            if case .ok(_, let version) = CodexLocator.check() {
+                return (true, connectionLabel(for: kind, version: version))
+            }
         }
-        return (false, "Claude CLI not connected")
+        return (false, "\(kind.displayName) not connected")
     }
 
     // MARK: - Invocation
@@ -373,46 +565,79 @@ final class AppCoordinator {
     }
 
     private func present() {
-        // FR16: refuse clearly if the CLI can't serve as a backend.
-        claudeStatus = ClaudeLocator.check()
-        guard case .ok(let path, _) = claudeStatus else {
-            PermissionOnboarding.reportClaudeStatus(claudeStatus)
-            return
-        }
-
+        let kind = prefs.askBackend
+        let generation = providerGeneration
         // FR15 warm path: spawn the backend now so start/auth overlaps with the
-        // user reading the overlay and typing. Reuse the live backend when
-        // re-summoning — the conversation persists across dismissals.
+        // user reading the overlay and typing.
         if backend == nil {
-            let backend = ClaudeBackend(binaryPath: path)
-            backend.firstTokenTimeout = 30 // FR13
-            backend.appendSystemPrompt = TaskCapture.systemPrompt
-            backend.startWarm()
-            self.backend = backend
+            guard let made = makeSelectedBackend() else { return }
+            backendLifecycle.install(made.backend)
+            overlay.session.backendConnected = true
+            overlay.session.backendLabel = made.statusLabel
         }
+        guard let backend,
+              let lease = backendLifecycle.lease(for: backend) else { return }
 
         // Attachment defaults off, so don't block on Screen Recording — capture
         // opportunistically (FR8: before the overlay is shown) and open the
         // overlay either way. Permission is prompted only if the user attaches.
         Task { [weak self] in
             guard let self else { return }
-            if ScreenCaptureService.hasPermission {
-                if let shot = try? await ScreenCaptureService.captureActiveDisplay() {
-                    self.pendingImagePNG = shot.pngData
-                    self.pendingCaptureLabel = shot.displayLabel
-                }
+            // Silent when Screen Recording isn't granted: capturing here would
+            // raise the system TCC prompt on EVERY invocation. The prompt
+            // belongs to the user-initiated attach path (FR7).
+            let shot = await ScreenCaptureService.captureActiveDisplayIfPermitted()
+            guard self.backendLifecycle.isCurrent(lease),
+                  self.isCurrentProvider(kind: kind, generation: generation) else { return }
+            if let shot {
+                self.pendingImagePNG = shot.pngData
+                self.pendingCaptureLabel = shot.displayLabel
             }
             self.showOverlay()
         }
     }
 
-    /// "2.1.197 (Claude Code)" → "claude 2.1.197".
-    private func shortVersion(_ raw: String) -> String {
+    /// Provider version output → a compact footer label.
+    private func shortVersion(_ raw: String, kind: AskBackendKind) -> String {
         let num = raw.split(separator: " ").first.map(String.init) ?? raw
-        return "claude \(num)"
+        switch kind {
+        case .claude:
+            return "claude \(num)"
+        case .codex:
+            return raw.lowercased().hasPrefix("codex") ? raw : "codex \(num)"
+        }
+    }
+
+    private func connectionLabel(for kind: AskBackendKind, version: String) -> String {
+        "\(kind.displayName) connected · \(shortVersion(version, kind: kind))"
+    }
+
+    /// Construct only the selected ask provider and return the status text that
+    /// describes that exact binary. Task automation is built separately from
+    /// the same selected provider in `replaceProviderServices(for:)`.
+    private func makeSelectedBackend() -> (backend: AskBackend, statusLabel: String)? {
+        let kind = prefs.askBackend
+        let selection: AskBackendFactory.Selection
+        switch askBackendFactory.make(kind: kind) {
+        case .success(let selected):
+            selection = selected
+        case .failure(let status):
+            PermissionOnboarding.reportAskProvider(kind: kind, availability: status)
+            return nil
+        }
+
+        let backend = selection.backend
+        backend.configure(systemPrompt: TaskCapture.systemPrompt)
+        backend.firstTokenTimeout = 30 // FR13
+        backend.startWarm()
+        return (backend, connectionLabel(for: kind, version: selection.version))
     }
 
     private func showOverlay() {
+        let kind = prefs.askBackend
+        let generation = providerGeneration
+        let showsHistory = kind == .claude
+        overlay.session.showsHistory = showsHistory
         overlay.present()
         // Reflect CLI connection in the footer (present() only reaches here when
         // the CLI is OK, so show the connected version).
@@ -421,28 +646,30 @@ final class AppCoordinator {
             self.overlay.dismiss()
             self.summonTaskSettings()
         }
-        overlay.session.historyHandler = { [weak self] summary in
-            self?.resumeHistorySession(summary)
+        if showsHistory {
+            overlay.session.historyHandler = { [weak self] summary in
+                self?.resumeHistorySession(summary)
+            }
+        } else {
+            overlay.session.historyHandler = nil
+            overlay.session.historySessions = []
         }
         overlay.session.clearHandler = { [weak self] in
             self?.clearSession()
         }
-        // Populate the History dropdown off the main thread (directory scan +
-        // head parse of each candidate file).
-        Task { [weak self] in
-            let sessions = await Task.detached(priority: .utility) {
-                SessionHistoryStore.recentSessions()
-            }.value
-            self?.overlay.session.historySessions = sessions
+        if showsHistory {
+            // Populate the Claude History dropdown off the main thread
+            // (directory scan + head parse of each candidate file).
+            Task { [weak self] in
+                let sessions = await Task.detached(priority: .utility) {
+                    SessionHistoryStore.recentSessions()
+                }.value
+                guard let self, self.prefs.askBackend == .claude,
+                      self.isCurrentProvider(kind: kind, generation: generation) else { return }
+                self.overlay.session.historySessions = sessions
+            }
         }
         overlay.session.captureLabel = pendingCaptureLabel
-        if case .ok(_, let version) = claudeStatus {
-            overlay.session.backendConnected = true
-            overlay.session.backendLabel = "Claude CLI connected · \(shortVersion(version))"
-        } else {
-            overlay.session.backendConnected = false
-            overlay.session.backendLabel = "Claude CLI not connected"
-        }
         overlay.onSubmit { [weak self] question in
             self?.handleSubmit(question)
         }
@@ -453,12 +680,10 @@ final class AppCoordinator {
     private func clearSession() {
         teardownBackend()
         overlay.session.clearTranscript()
-        guard case .ok(let path, _) = claudeStatus else { return }
-        let backend = ClaudeBackend(binaryPath: path)
-        backend.firstTokenTimeout = 30
-        backend.appendSystemPrompt = TaskCapture.systemPrompt
-        backend.startWarm()
-        self.backend = backend
+        guard let made = makeSelectedBackend() else { return }
+        backendLifecycle.install(made.backend)
+        overlay.session.backendConnected = true
+        overlay.session.backendLabel = made.statusLabel
     }
 
     // MARK: - History resume
@@ -466,39 +691,50 @@ final class AppCoordinator {
     /// Swap the backend for one that resumes the picked Claude CLI session and
     /// show its past transcript; follow-ups continue that conversation.
     private func resumeHistorySession(_ summary: SessionSummary) {
+        guard prefs.askBackend == .claude else { return }
+        let currentProviderGeneration = providerGeneration
+        claudeStatus = ClaudeLocator.check()
         guard case .ok(let path, _) = claudeStatus else { return }
         teardownBackend()
 
         let backend = ClaudeBackend(binaryPath: path,
                                     resumeSessionId: summary.id,
                                     resumeCwd: summary.cwd)
+        backend.configure(systemPrompt: TaskCapture.systemPrompt)
         // Resuming a large session (long transcript, project hooks) can take
         // far longer to first token than a fresh one.
         backend.firstTokenTimeout = 120
         backend.startWarm()
-        self.backend = backend
+        backendLifecycle.install(backend)
 
         let url = summary.fileURL
+        let generation = overlay.session.transcriptGeneration
+        guard let lease = backendLifecycle.lease(for: backend) else { return }
         Task { [weak self] in
             let turns = await Task.detached(priority: .userInitiated) {
                 SessionHistoryStore.loadTurns(from: url)
             }.value
-            self?.overlay.session.loadTranscript(turns)
+            guard let self, self.prefs.askBackend == .claude,
+                  self.isCurrentProvider(kind: .claude, generation: currentProviderGeneration),
+                  self.backendLifecycle.isCurrent(lease) else { return }
+            self.overlay.session.loadTranscript(turns, ifGeneration: generation)
         }
     }
 
     // MARK: - Q&A
 
     private func handleSubmit(_ question: String) {
+        let kind = prefs.askBackend
         guard let backend else {
-            overlay.session.failTurn("Backend unavailable.")
+            overlay.session.failTurn("\(kind.displayName) unavailable.")
             return
         }
+        let generation = providerGeneration
         let attach = overlay.session.attachImage
 
         // Text-only (the default) — send immediately.
         guard attach else {
-            send(question, image: nil, via: backend)
+            send(question, image: nil, via: backend, kind: kind, generation: generation)
             return
         }
 
@@ -506,7 +742,7 @@ final class AppCoordinator {
         // text-only this turn.
         guard ScreenCaptureService.hasPermission else {
             PermissionOnboarding.promptForScreenRecording()
-            send(question, image: nil, via: backend)
+            send(question, image: nil, via: backend, kind: kind, generation: generation)
             return
         }
 
@@ -514,19 +750,22 @@ final class AppCoordinator {
         if let firstShot = pendingImagePNG {
             pendingImagePNG = nil
             overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: firstShot))
-            send(question, image: firstShot, via: backend)
+            send(question, image: firstShot, via: backend, kind: kind, generation: generation)
             return
         }
 
         // Follow-up: grab a FRESH shot of the current screen, hiding the overlay
         // so it isn't in the image (FR8).
+        guard let lease = backendLifecycle.lease(for: backend) else { return }
         Task { [weak self] in
             guard let self else { return }
             let png = await self.captureExcludingOverlay()
+            guard self.backendLifecycle.isCurrent(lease),
+                  self.isCurrentProvider(kind: kind, generation: generation) else { return }
             if let png {
                 self.overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: png))
             }
-            self.send(question, image: png, via: backend)
+            self.send(question, image: png, via: backend, kind: kind, generation: generation)
         }
     }
 
@@ -540,7 +779,12 @@ final class AppCoordinator {
         return png
     }
 
-    private func send(_ question: String, image: Data?, via backend: ClaudeBackend) {
+    private func send(_ question: String, image: Data?, via backend: AskBackend,
+                      kind: AskBackendKind? = nil, generation: UInt? = nil) {
+        guard let lease = backendLifecycle.lease(for: backend),
+              backendLifecycle.isCurrent(lease) else { return }
+        let kind = kind ?? prefs.askBackend
+        let generation = generation ?? providerGeneration
         // Real-time ask-about-the-call: while transcribing, the recent
         // transcript rides along invisibly (the overlay shows only the
         // question the user typed).
@@ -561,7 +805,8 @@ final class AppCoordinator {
             """
         }
         backend.ask(question: composed, imagePNG: image) { [weak self] event in
-            guard let self else { return }
+            guard let self, self.backendLifecycle.isCurrent(lease),
+                  self.isCurrentProvider(kind: kind, generation: generation) else { return }
             switch event {
             case .token(let text): self.overlay.session.appendToken(text)
             case .completed:
@@ -588,16 +833,16 @@ final class AppCoordinator {
     }
 
     /// Fill the suggestion chips from the just-finished turn (cheap one-shot
-    /// haiku call, separate from the conversation).
+    /// provider call, separate from the conversation).
     private func generateSuggestions() {
-        guard case .ok(let path, _) = claudeStatus,
+        guard let suggestions, let kind = providerServices?.kind,
               let turn = overlay.session.turns.last, !turn.failed, !turn.answer.isEmpty
         else { return }
-
-        if suggestions == nil { suggestions = SuggestionService(binaryPath: path) }
+        let generation = providerGeneration
         let turnId = turn.id
-        suggestions?.suggest(question: turn.question, answer: turn.answer) { [weak self] list in
+        suggestions.suggest(question: turn.question, answer: turn.answer) { [weak self] list in
             guard let self,
+                  self.isCurrentProvider(kind: kind, generation: generation),
                   // Stale guard: still the same last turn, nothing in flight.
                   self.overlay.session.turns.last?.id == turnId,
                   !self.overlay.session.isWorking
@@ -608,13 +853,16 @@ final class AppCoordinator {
 
     // MARK: - Teardown
 
-    /// Overlay dismissed. Keep the backend and transcript — the conversation
-    /// survives until the user clears it (trash) — but drop the screenshot
-    /// bytes (FR9); the next summon captures a fresh one.
-    private func endSession() {
+    /// Overlay dismissed. Stop the selected CLI immediately and invalidate any
+    /// capture/backend callbacks that were suspended or queued for this session.
+    func endSession() {
+        teardownBackend()
         pendingImagePNG = nil
-        // Attaching is an explicit, per-summon opt-in — never carry it over.
-        overlay.session.attachImage = false
+        pendingCaptureLabel = ""
+        // A new invocation gets a new backend, so it must also start with an
+        // empty visible conversation and no per-turn UI state.
+        overlay.session.clearTranscript()
+        overlay.session.captureLabel = ""
     }
 
     /// App is quitting: don't leave orphaned claude processes behind, and
@@ -623,12 +871,57 @@ final class AppCoordinator {
     func shutdown() {
         teardownBackend()
         taskRunner?.cancelAll()
+        taskOverlay?.session.cancelProviderWork()
+        providerServices?.provider.cancelAll()
         taskStore.flush()
     }
 
     private func teardownBackend() {
-        backend?.shutdown()
-        backend = nil
+        backendLifecycle.shutdown()
         suggestions?.cancel()
+    }
+}
+
+/// Keeps the task board usable when the selected CLI is unavailable. It never
+/// launches the other provider; each attempted operation receives the selected
+/// provider's diagnostic and local task data remains intact.
+private final class UnavailableAutomationProvider: AutomationProvider {
+    private final class FailureState {
+        var cancelled = false
+    }
+
+    let descriptor: AutomationProviderDescriptor
+    private let message: String
+
+    init(kind: AskBackendKind, message: String) {
+        descriptor = AutomationProviderDescriptor(kind: kind, version: "unavailable")
+        self.message = message
+    }
+
+    func runText(_ request: AutomationRequest,
+                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        fail(onEvent)
+    }
+
+    func startRun(_ request: AutomationRunRequest,
+                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        fail(onEvent)
+    }
+
+    func runComposio(_ request: ComposioAutomationRequest, token: String,
+                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        fail(onEvent)
+    }
+
+    func cancelAll() {}
+
+    private func fail(_ onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
+        let state = FailureState()
+        let cancellation = AutomationCancellation { state.cancelled = true }
+        DispatchQueue.main.async {
+            guard !state.cancelled else { return }
+            onEvent(.failed(self.message))
+        }
+        return cancellation
     }
 }

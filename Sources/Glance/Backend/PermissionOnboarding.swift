@@ -1,6 +1,6 @@
 import AppKit
 
-/// FR7 (Screen Recording TCC) and FR16 (Claude CLI health) onboarding dialogs.
+/// FR7 (Screen Recording TCC) and FR16 (local CLI health) onboarding dialogs.
 /// These are rare error paths, so a standard NSAlert is the clearest UX. Never
 /// fail silently.
 @MainActor
@@ -40,20 +40,65 @@ enum PermissionOnboarding {
         case .ok:
             return
         case .notFound:
-            alert.messageText = "Claude CLI not found"
+            alert.messageText = "\(AskBackendKind.claude.displayName) not found"
             alert.informativeText = """
-            Glance uses your local Claude Code CLI as its backend. It isn't on \
+            Glance uses your local \(AskBackendKind.claude.displayName) as its AI provider. It isn't on \
             this Mac (or not in a standard location).
 
             Install it from claude.com/code and sign in with `claude` in a \
             terminal, then try again.
             """
         case .unusable(let path, let reason):
-            alert.messageText = "Claude CLI isn't usable"
+            alert.messageText = "\(AskBackendKind.claude.displayName) isn't usable"
             alert.informativeText = """
-            Found Claude at \(path) but couldn't run it (\(reason)).
+            Found \(AskBackendKind.claude.displayName) at \(path) but couldn't run it (\(reason)).
 
             Open a terminal and confirm `claude --version` works, then try again.
+            """
+        }
+        alert.addButton(withTitle: "OK")
+        activateForDialog()
+        alert.runModal()
+    }
+
+    /// Report the selected conversational provider's unified discovery result
+    /// while retaining the provider-specific installation guidance above.
+    static func reportAskProvider(kind: AskBackendKind, availability: AutomationAvailability) {
+        switch (kind, availability) {
+        case (_, .available):
+            return
+        case (.claude, .notFound):
+            reportClaudeStatus(.notFound)
+        case (.claude, .unusable(let path, let reason)):
+            reportClaudeStatus(.unusable(path: path, reason: reason))
+        case (.codex, .notFound):
+            reportCodexStatus(.notFound)
+        case (.codex, .unusable(let path, let reason)):
+            reportCodexStatus(.unusable(path: path, reason: reason))
+        }
+    }
+
+    /// Selected-provider diagnostics for Codex CLI missing / unusable.
+    static func reportCodexStatus(_ status: CodexLocator.Status) {
+        let alert = NSAlert()
+        switch status {
+        case .ok:
+            return
+        case .notFound:
+            alert.messageText = "\(AskBackendKind.codex.displayName) not found"
+            alert.informativeText = """
+            Glance uses your local \(AskBackendKind.codex.displayName) as its AI provider. It isn't on this \
+            Mac (or not in a standard location).
+
+            Install Codex CLI, run `codex` in a terminal, and sign in with \
+            ChatGPT, then try again.
+            """
+        case .unusable(let path, let reason):
+            alert.messageText = "\(AskBackendKind.codex.displayName) isn't usable"
+            alert.informativeText = """
+            Found \(AskBackendKind.codex.displayName) at \(path) but couldn't run it (\(reason)).
+
+            Open a terminal and confirm `codex --version` works, then try again.
             """
         }
         alert.addButton(withTitle: "OK")

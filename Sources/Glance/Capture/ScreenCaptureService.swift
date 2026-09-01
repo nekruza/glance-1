@@ -40,8 +40,57 @@ enum CaptureError: Error, LocalizedError {
 enum ScreenCaptureService {
 
     /// FR7: is Screen Recording (TCC) currently granted?
-    /// `CGPreflightScreenCaptureAccess` checks without prompting.
-    static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
+    /// On macOS 15+ `CGPreflightScreenCaptureAccess` always reports false for
+    /// builds without a trusted Developer ID signature (our self-signed dev
+    /// cert), even when the grant is real — so a successful ScreenCaptureKit
+    /// probe or capture is the truthful signal and overrides the preflight.
+    static var hasPermission: Bool { preflight() || probedGranted }
+
+    /// `CGPreflightScreenCaptureAccess`, injectable in tests because the real
+    /// call's answer depends on the host's TCC state and signature trust.
+    /// nonisolated(unsafe): reassigned only from single-threaded tests.
+    nonisolated(unsafe) static var preflight: () -> Bool = { CGPreflightScreenCaptureAccess() }
+
+    /// Latest real ScreenCaptureKit outcome, recorded by `probePermission()`
+    /// and `captureActiveDisplay()`. Internal (not private) for tests.
+    /// nonisolated(unsafe): a lone Bool flag — a racy read can only be stale,
+    /// never torn, and the next probe/capture corrects it.
+    nonisolated(unsafe) static var probedGranted = false {
+        didSet {
+            // Mirrored to defaults purely as a diagnostic: headless verify
+            // runs assert permission state via `defaults read` (AX-free).
+            UserDefaults.standard.set(probedGranted, forKey: "diag.captureProbeGranted")
+        }
+    }
+
+    /// Ask ScreenCaptureKit whether capture actually works and cache the
+    /// answer for `hasPermission`. Doubles as the shareable-content cache
+    /// warmer at launch (FR2). Shows no UI of its own.
+    ///
+    /// This is the ONLY place allowed to call ScreenCaptureKit speculatively:
+    /// an unauthorized call raises the system Screen Recording prompt, so it
+    /// runs at most once per launch. Every other caller must gate on
+    /// `hasPermission` (see `captureActiveDisplayIfPermitted()`).
+    @discardableResult
+    static func probePermission() async -> Bool {
+        let preflightSaid = preflight()
+        // Diagnostic: lets a headless verify run tell "TCC really denies us"
+        // apart from "the preflight lies about our dev signature" (`defaults
+        // read com.h57q3wq0c.glance diag.capturePreflight`).
+        UserDefaults.standard.set(preflightSaid, forKey: "diag.capturePreflight")
+        if preflightSaid {
+            probedGranted = true
+            return true
+        }
+        do {
+            _ = try await SCShareableContent.excludingDesktopWindows(false,
+                                                                     onScreenWindowsOnly: true)
+            probedGranted = true
+        } catch {
+            probedGranted = false
+        }
+        return probedGranted
+    }
 
     /// Ask the system to prompt for Screen Recording once. Returns immediately;
     /// the grant takes effect after the app is relaunched. The guided-prompt UI
@@ -49,21 +98,35 @@ enum ScreenCaptureService {
     @discardableResult
     static func requestPermission() -> Bool { CGRequestScreenCaptureAccess() }
 
+    /// FR8 pre-overlay grab: capture only when Screen Recording is known to be
+    /// granted, and return nil without ever touching ScreenCaptureKit when it
+    /// isn't. An unauthorized SCShareableContent call raises the system TCC
+    /// prompt, and the overlay opens far more often than anyone attaches a
+    /// screenshot (attachment is off by default) — probing on every invocation
+    /// turns a missing grant into a modal dialog on every hotkey press.
+    /// Recovery without a relaunch still works: `probePermission()` runs once
+    /// at launch, and `preflight()` flips to true as soon as the grant lands.
+    static func captureActiveDisplayIfPermitted() async -> CaptureResult? {
+        guard hasPermission else { return nil }
+        return try? await captureActiveDisplay()
+    }
+
     /// Capture a still of the display containing the mouse cursor (FR6).
     /// Alternative "keyboard-focus display" reading rejected in PRD as less
     /// predictable; revisit per FR6 assumption if it feels wrong in use.
     static func captureActiveDisplay() async throws -> CaptureResult {
-        guard hasPermission else { throw CaptureError.permissionDenied }
-
         let targetDisplayID = displayIDUnderCursor()
 
-        // Enumerate shareable displays. Throws if permission is (unexpectedly)
-        // missing — treat that as permissionDenied so onboarding can kick in.
+        // Enumerate shareable displays — the authoritative permission check
+        // (no preflight guard; see hasPermission). Throws if TCC denies —
+        // treat that as permissionDenied so onboarding can kick in.
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false,
                                                                            onScreenWindowsOnly: true)
+            probedGranted = true
         } catch {
+            probedGranted = false
             throw CaptureError.permissionDenied
         }
 

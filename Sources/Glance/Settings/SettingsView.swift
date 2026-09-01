@@ -1,18 +1,19 @@
 import SwiftUI
 
 /// Settings built to 04-settings.html: General (hotkey, launch-at-login) and
-/// Status (Screen Recording, Claude CLI backend) cards + privacy footnote.
+/// Status (Screen Recording, selected local CLI backend) cards + privacy footnote.
 /// No model picker / BYOK / MCP — out of scope (FR14/FR19).
 struct SettingsView: View {
+    static let aiProviderRowTitle = "AI provider"
+
     @ObservedObject private var prefs = Preferences.shared
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
-    @State private var status: ClaudeLocator.Status = ClaudeLocator.check()
+    @State private var status: BackendStatus = .notConnected
     @State private var hasScreenPermission = ScreenCaptureService.hasPermission
-    @State private var testing = false
-    @State private var testResult: TestResult?
+    @StateObject private var backendTest = BackendTestSession()
 
-    private enum TestResult { case ok(String), fail(String) }
+    private enum BackendStatus { case ok(String), notConnected }
 
     var body: some View {
         Form {
@@ -31,6 +32,17 @@ struct SettingsView: View {
                         .onChange(of: launchAtLogin) { _, v in LaunchAtLogin.set(v) }
                 } label: {
                     settingLabel("Launch at login", "Start in the menu bar when you sign in")
+                }
+                LabeledContent {
+                    Picker("", selection: $prefs.askBackend) {
+                        ForEach(AskBackendKind.allCases, id: \.self) { kind in
+                            Text(kind.displayName).tag(kind)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                } label: {
+                    settingLabel(Self.aiProviderRowTitle, "Local CLI used for Ask, tasks, suggestions, meetings, and Composio")
                 }
                 LabeledContent {
                     HStack(spacing: 8) {
@@ -157,7 +169,7 @@ struct SettingsView: View {
 
                 LabeledContent {
                     HStack(spacing: 10) {
-                        if case .ok(_, let v) = status {
+                        if case .ok(let v) = status {
                             Text(shortVersion(v)).font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.secondary)
                             pill("Connected", DS.success)
@@ -166,22 +178,22 @@ struct SettingsView: View {
                         }
                     }
                 } label: {
-                    settingLabel("Claude CLI backend", "Local Claude Code — reuses its own auth")
+                    settingLabel("AI provider: \(prefs.askBackend.displayName)", backendSubtitle)
                 }
 
-                if let r = testResult { resultRow(r) }
+                if let outcome = backendTest.outcome { resultRow(outcome) }
 
                 HStack {
-                    Button(testing ? "Testing…" : "Test") { runTest() }
-                        .disabled(testing || !isOK)
-                    if testing { ProgressView().controlSize(.small) }
+                    Button(backendTest.isTesting ? "Testing…" : "Test") { runTest() }
+                        .disabled(backendTest.isTesting || !isOK)
+                    if backendTest.isTesting { ProgressView().controlSize(.small) }
                     Spacer()
                     Button("Rescan") { rescan() }
                 }
             }
 
             Section {
-                Text("No API keys stored. All model traffic goes through your local Claude CLI. Screenshots may persist in Claude Code session transcripts under ~/.claude/projects/ — see README.")
+                Text(privacyNote)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -190,8 +202,11 @@ struct SettingsView: View {
         .frame(width: 460, height: 400)
         .navigationTitle("Glance Settings")
         .onAppear {
-            status = ClaudeLocator.check()
-            hasScreenPermission = ScreenCaptureService.hasPermission
+            rescan()
+        }
+        .onChange(of: prefs.askBackend) { _, _ in
+            backendTest.providerDidChange(to: prefs.askBackend)
+            rescan()
         }
     }
 
@@ -214,30 +229,47 @@ struct SettingsView: View {
         .foregroundStyle(color)
     }
 
-    @ViewBuilder private func resultRow(_ r: TestResult) -> some View {
+    @ViewBuilder private func resultRow(_ r: BackendTester.Outcome) -> some View {
         switch r {
-        case .ok(let m):
-            Label(m, systemImage: "checkmark.circle.fill").foregroundStyle(DS.success).font(.callout)
-        case .fail(let m):
-            Label(m, systemImage: "exclamationmark.circle.fill").foregroundStyle(DS.warning).font(.callout)
+        case .success(let success):
+            Label(String(format: "Responded in %.1fs — \u{201C}%@\u{201D}",
+                         success.latency, success.reply),
+                  systemImage: "checkmark.circle.fill")
+                .foregroundStyle(DS.success).font(.callout)
+        case .failure(let message):
+            Label(message, systemImage: "exclamationmark.circle.fill")
+                .foregroundStyle(DS.warning).font(.callout)
+        }
+    }
+
+    private var backendSubtitle: String {
+        switch prefs.askBackend {
+        case .claude: return "Local \(prefs.askBackend.displayName) — reuses its own auth"
+        case .codex: return "Local \(prefs.askBackend.displayName) — reuses its own auth"
+        }
+    }
+
+    private var privacyNote: String {
+        switch prefs.askBackend {
+        case .claude:
+            return "No API keys stored. AI-provider traffic goes through your local \(prefs.askBackend.displayName). Screenshots may persist in Claude Code session transcripts under ~/.claude/projects/ — see README."
+        case .codex:
+            return "No API keys stored by Glance. Attached screenshots use a private temporary PNG during the \(prefs.askBackend.displayName) turn and are deleted on completion or cancellation. Codex may retain its own session data — see README."
         }
     }
 
     private func shortVersion(_ raw: String) -> String {
-        "claude " + (raw.split(separator: " ").first.map(String.init) ?? raw)
+        let first = raw.split(separator: " ").first.map(String.init) ?? raw
+        switch prefs.askBackend {
+        case .claude:
+            return "claude " + first
+        case .codex:
+            return raw.lowercased().hasPrefix("codex") ? raw : "codex " + first
+        }
     }
 
     private func runTest() {
-        testing = true; testResult = nil
-        BackendTester.test { outcome in
-            testing = false
-            switch outcome {
-            case .success(let s):
-                testResult = .ok(String(format: "Responded in %.1fs — \u{201C}%@\u{201D}", s.latency, s.reply))
-            case .failure(let msg):
-                testResult = .fail(msg)
-            }
-        }
+        backendTest.start(kind: prefs.askBackend)
     }
 
     /// Bridges "minutes since midnight" to a DatePicker time.
@@ -268,8 +300,20 @@ struct SettingsView: View {
     }
 
     private func rescan() {
-        status = ClaudeLocator.check()
+        switch prefs.askBackend {
+        case .claude:
+            if case .ok(_, let version) = ClaudeLocator.check() {
+                status = .ok(version)
+            } else {
+                status = .notConnected
+            }
+        case .codex:
+            if case .ok(_, let version) = CodexLocator.check() {
+                status = .ok(version)
+            } else {
+                status = .notConnected
+            }
+        }
         hasScreenPermission = ScreenCaptureService.hasPermission
-        testResult = nil
     }
 }

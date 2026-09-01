@@ -25,9 +25,9 @@ final class OverlaySession: ObservableObject {
     /// Live meeting-transcription state (footer record button).
     @Published var isTranscribing: Bool = false
 
-    /// Claude CLI connection state, shown in the overlay footer.
+    /// Selected ask-backend connection state, shown in the overlay footer.
     @Published var backendConnected: Bool = false
-    @Published var backendLabel: String = "Checking Claude CLI…"
+    @Published var backendLabel: String = "Checking \(AskBackendKind.defaultValue.displayName)…"
 
     /// Captured-display label for the context strip, e.g. "Display 1 · 2560×1440".
     @Published var captureLabel: String = ""
@@ -39,6 +39,8 @@ final class OverlaySession: ObservableObject {
 
     /// Past Claude CLI sessions for the footer History dropdown.
     @Published var historySessions: [SessionSummary] = []
+    @Published var showsHistory: Bool = true
+    private(set) var transcriptGeneration: UInt = 0
 
     /// Context-based follow-up prompts, shown as clickable chips after an
     /// answer completes. Clicking one submits it as the next message.
@@ -81,6 +83,7 @@ final class OverlaySession: ObservableObject {
 
     /// Wipe the conversation back to the idle prompt (Clear button).
     func clearTranscript() {
+        transcriptGeneration &+= 1
         turns = []
         input = ""
         isWorking = false
@@ -88,11 +91,28 @@ final class OverlaySession: ObservableObject {
         suggestions = []
     }
 
-    /// Replace the transcript with a resumed session's past turns (History).
-    func loadTranscript(_ pairs: [(question: String, answer: String)]) {
+    /// End the visible conversation when its provider changes. A fresh summon
+    /// will construct and wire the newly selected backend.
+    func resetForBackendChange(to kind: AskBackendKind) {
+        dismissHandler?()
+        clearTranscript()
+        showsHistory = kind == .claude
+        historyHandler = nil
+        historySessions = []
+        backendConnected = false
+        backendLabel = "Checking \(kind.displayName)…"
+    }
+
+    /// Replace the transcript with a resumed Claude session only if no clear or
+    /// provider change occurred while its file was loading.
+    @discardableResult
+    func loadTranscript(_ pairs: [(question: String, answer: String)],
+                        ifGeneration generation: UInt) -> Bool {
+        guard generation == transcriptGeneration, showsHistory else { return false }
         turns = pairs.map { Turn(question: $0.question, answer: $0.answer) }
         isWorking = false
         input = ""
+        return true
     }
 
     /// Attach the screenshot preview to the turn that was just submitted.

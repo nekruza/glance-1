@@ -11,7 +11,7 @@ import Speech
 ///
 /// Recognition is Apple's on-device Speech framework (no audio leaves the
 /// machine). On stop, the transcript is written to ~/Documents/Glance Meetings/
-/// and summarized into notes via a one-shot `claude -p` call.
+/// and summarized into notes through the currently selected AI provider.
 /// Debug breadcrumbs → /tmp/glance-meeting.log (NSLog was invisible in the
 /// unified log for this app).
 func meetingLog(_ msg: String) {
@@ -165,6 +165,14 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
     var onLiveSegment: ((Segment) -> Void)?
     var onLiveReplaceLast: ((Segment) -> Void)?
     var onLivePartial: ((String) -> Void)?
+    /// The app delegate supplies the coordinator's current provider. Keeping
+    /// this as a closure means summaries follow a provider switch instead of
+    /// locating and launching Claude independently.
+    var summaryProvider: (() -> AutomationProvider?)?
+    /// The app's coordinator supplies a generation-bound provider lease for
+    /// summaries. A late callback from a cancelled provider must never edit
+    /// notes or trigger downstream action-item ingestion after a switch.
+    var summaryProviderLease: (() -> AutomationProviderLease?)?
 
     // MARK: - Permissions
 
@@ -360,17 +368,51 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
         return url
     }
 
-    /// One-shot `claude -p` → Granola-style notes prepended to the file. Fires
-    /// `onSummarized` when the file is finalized, whether or not notes landed
-    /// (so downstream action-item extraction always runs once).
+    /// One-shot provider request → Granola-style notes prepended to the file.
+    /// Fires `onSummarized` when the file is finalized, whether or not notes
+    /// landed (so downstream action-item extraction always runs once).
     private func summarize(transcript: String, into url: URL) {
-        guard case .ok(let binary, _) = ClaudeLocator.check() else {
-            DispatchQueue.main.async { [weak self] in self?.onSummarized?(url) }
+        guard let lease = summaryProviderLease?()
+                ?? summaryProvider?().map({ AutomationProviderLease(provider: $0, isCurrent: { true }) }) else {
+            finishSummary(at: url)
             return
         }
 
+        let state = SummaryState()
+        lease.provider.runText(AutomationRequest(prompt: summaryPrompt(transcript: transcript))) { [weak self] event in
+            switch event {
+            case .text(let text):
+                guard lease.isCurrent() else { return }
+                state.append(text)
+            case .completed:
+                guard lease.isCurrent(), let notes = state.finish() else { return }
+                self?.finishSummary(notes: notes, at: url, isCurrent: lease.isCurrent)
+            case .failed:
+                guard lease.isCurrent(), state.finish() != nil else { return }
+                self?.finishSummary(at: url, isCurrent: lease.isCurrent)
+            case .sessionID:
+                break
+            }
+        }
+    }
+
+    /// Test seam for the provider boundary: it exercises the exact summary
+    /// prompt without creating a file in the user's meetings directory.
+    func summarizeForTesting(_ transcript: String) {
+        guard let provider = summaryProvider?() else { return }
+        provider.runText(AutomationRequest(prompt: summaryPrompt(transcript: transcript))) { _ in }
+    }
+
+    /// Test seam for a delayed provider callback. This intentionally uses the
+    /// production finalization path so tests cover both note writes and the
+    /// `onSummarized` auto-ingest trigger.
+    func summarizeForTesting(_ transcript: String, into url: URL) {
+        summarize(transcript: transcript, into: url)
+    }
+
+    private func summaryPrompt(transcript: String) -> String {
         let body = String(transcript.suffix(60_000)) // bound the prompt
-        let prompt = """
+        return """
         This is an automatic meeting transcript (speech-to-text, expect some \
         mis-heard words; speakers are not labeled). Write concise meeting \
         notes in Markdown with these sections: ## Summary (2-4 sentences), \
@@ -380,31 +422,49 @@ final class MeetingTranscriber: NSObject, SCStreamOutput, SCStreamDelegate {
 
         \(body)
         """
+    }
 
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = ["-p", prompt]
-        proc.currentDirectoryURL = FileManager.default.temporaryDirectory
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardError = Pipe()
-        proc.terminationHandler = { [weak self] p in
-            let data = out.fileHandleForReading.readDataToEndOfFile()
-            if p.terminationStatus == 0,
-               let notes = String(data: data, encoding: .utf8)?
-                   .trimmingCharacters(in: .whitespacesAndNewlines),
+    private func finishSummary(notes: String? = nil, at url: URL,
+                               isCurrent: @escaping () -> Bool = { true }) {
+        let finalize = { [weak self] in
+            // Run finalization on main, where provider replacement also runs.
+            // This makes the generation check and file/auto-ingest handoff an
+            // ordered operation rather than a background callback race.
+            guard isCurrent() else { return }
+            if let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines),
                !notes.isEmpty,
                let existing = try? String(contentsOf: url, encoding: .utf8) {
                 let combined = notes + "\n\n---\n\n" + existing
                 try? combined.write(to: url, atomically: true, encoding: .utf8)
             }
-            DispatchQueue.main.async { self?.onSummarized?(url) }
+            self?.onSummarized?(url)
         }
-        do {
-            try proc.run()
-        } catch {
-            DispatchQueue.main.async { [weak self] in self?.onSummarized?(url) }
+        if Thread.isMainThread {
+            finalize()
+        } else {
+            DispatchQueue.main.async(execute: finalize)
         }
+    }
+}
+
+private final class SummaryState {
+    private let lock = NSLock()
+    private var text = ""
+    private var isFinished = false
+
+    func append(_ value: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isFinished else { return }
+        text += value
+    }
+
+    func finish() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isFinished else { return nil }
+        isFinished = true
+        return text
     }
 }
 

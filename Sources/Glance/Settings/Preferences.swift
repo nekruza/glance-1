@@ -39,6 +39,8 @@ final class Preferences: ObservableObject {
         static let completionSound = "tasks.completionSound"
         static let completionSoundName = "tasks.completionSoundName"
         static let confetti = "tasks.confetti"
+        static let askBackend = "ask.backend"
+        static let onboardingCompleted = "onboarding.completed"
     }
 
     enum ScheduleMode: String, CaseIterable {
@@ -69,6 +71,13 @@ final class Preferences: ObservableObject {
             defaults.set(Int(taskHotkey.keyCode), forKey: Keys.taskHotkeyKeyCode)
             defaults.set(Int(taskHotkey.modifiers), forKey: Keys.taskHotkeyModifiers)
         }
+    }
+
+    /// First-run tour: set once the user finishes or closes the welcome
+    /// window. Not @Published — nothing observes it live.
+    var onboardingCompleted: Bool {
+        get { defaults.bool(forKey: Keys.onboardingCompleted) }
+        set { defaults.set(newValue, forKey: Keys.onboardingCompleted) }
     }
 
     /// Repo registry (V2 FR60) — used by enrichment mapping + workspace picker.
@@ -243,6 +252,11 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(confettiEnabled, forKey: Keys.confetti) }
     }
 
+    /// Preferred local CLI backend for ask-overlay requests.
+    @Published var askBackend: AskBackendKind {
+        didSet { defaults.set(askBackend.rawValue, forKey: Keys.askBackend) }
+    }
+
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
     @Published var overlayOpacity: Double {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
@@ -355,6 +369,8 @@ final class Preferences: ObservableObject {
         completionSoundName = defaults.string(forKey: Keys.completionSoundName) ?? "Glass"
         confettiEnabled = defaults.object(forKey: Keys.confetti) == nil
             ? true : defaults.bool(forKey: Keys.confetti)
+        askBackend = AskBackendKind(rawValue: defaults.string(forKey: Keys.askBackend) ?? "")
+            ?? .claude
     }
 }
 

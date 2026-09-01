@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = StatusItemController()
     private let coordinator = AppCoordinator()
     private let transcriber = MeetingTranscriber()
+    private let onboarding = OnboardingWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // FR5 / FR3: menu-bar app, no Dock, no App Switcher entry.
@@ -20,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.onSettings = { [weak coordinator] in coordinator?.summonTaskSettings() }
         coordinator.onOpenSettings = { [weak statusItem] in statusItem?.showSettings() }
         statusItem.statusProvider = { [weak coordinator] in
-            coordinator?.backendStatusLine() ?? (false, "Claude CLI status unknown")
+            coordinator?.backendStatusLine() ?? (false, "AI provider status unknown")
         }
         statusItem.hotkeyWarningProvider = { [weak coordinator] in
             coordinator?.hotkeyWarnings() ?? []
@@ -33,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transcriber.onLiveSegment = { seg in panel.append(text: seg.text, at: seg.start) }
         transcriber.onLiveReplaceLast = { seg in panel.replaceLast(text: seg.text, at: seg.start) }
         transcriber.onLivePartial = { text in panel.updatePartial(text) }
+        transcriber.summaryProviderLease = { [weak coordinator] in
+            coordinator?.currentAutomationProviderLease()
+        }
         // FR31: once the summary lands, mine the transcript for MY action items
         // → Inbox (deduped on sourceRef so a re-processed meeting adds nothing).
         transcriber.onSummarized = { [weak self] url in
@@ -52,8 +56,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.statusItem.refreshTranscribeState()
             self.coordinator.setTranscribing(self.transcriber.isRecording)
         }
+        statusItem.onWelcome = { [weak self] in self?.onboarding.present() }
         statusItem.install()
         coordinator.start()
+
+        // First launch only: the welcome tour. Deferred a turn — ordering the
+        // window in the same runloop turn as the accessory-policy setup loses
+        // it when AppActivation flips the policy to .regular mid-launch.
+        DispatchQueue.main.async { [weak self] in
+            self?.onboarding.presentIfNeeded()
+        }
     }
 
     private func toggleTranscription() {

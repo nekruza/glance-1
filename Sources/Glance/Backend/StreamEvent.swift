@@ -39,4 +39,16 @@ struct StreamLine: Decodable {
     }
 
     var isResult: Bool { type == "result" }
+
+    /// The shared event for successful stream messages. Result errors remain
+    /// mapped by `ClaudeBackend` so its existing friendly error text is kept.
+    var askBackendEvent: AskBackendEvent? {
+        if let text = streamedText, !text.isEmpty {
+            return .token(text)
+        }
+        if isResult, isError != true {
+            return .completed
+        }
+        return nil
+    }
 }

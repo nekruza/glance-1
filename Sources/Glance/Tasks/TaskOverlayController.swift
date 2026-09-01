@@ -14,9 +14,13 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
     var isVisible: Bool { window?.isVisible ?? false }
     var onOpenSettings: (() -> Void)?
 
-    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest) {
+    init(store: TaskStore, runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
+         providerGeneration: UInt = 0,
+         backendTestSession: BackendTestSession? = nil) {
         self.store = store
-        session = TaskBoardSession(store: store, runner: runner, ai: ai, ingest: ingest)
+        session = TaskBoardSession(store: store, runner: runner, ai: ai, ingest: ingest,
+                                   providerGeneration: providerGeneration,
+                                   backendTestSession: backendTestSession)
         super.init()
         session.dismissHandler = { [weak self] in self?.dismiss() }
         session.settingsHandler = { [weak self] in
@@ -52,6 +56,14 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
         present()
     }
 
+    /// Keep the existing board window/session (and its local UI state) while
+    /// replacing only the provider-owned task services.
+    func replaceServices(runner: TaskRunner, ai: TaskAI, ingest: ComposioIngest,
+                         generation: UInt) {
+        session.replaceServices(runner: runner, ai: ai, ingest: ingest,
+                                providerGeneration: generation)
+    }
+
     // MARK: - Window
 
     private func ensureWindow() -> NSWindow {
@@ -77,6 +89,7 @@ final class TaskOverlayController: NSObject, NSWindowDelegate {
     // Traffic-light close: window hides (isReleasedWhenClosed = false); drop
     // the app's dock presence with it.
     func windowWillClose(_ notification: Notification) {
+        session.cancelSettingsWork()
         AppActivation.release("tasks")
     }
 }
