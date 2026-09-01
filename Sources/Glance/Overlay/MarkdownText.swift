@@ -156,6 +156,14 @@ struct MarkdownText: View {
                     .padding(14)
                     .background(RoundedRectangle(cornerRadius: 10).fill(palette.codeBg))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.codeBorder, lineWidth: 1))
+                    .overlay(alignment: .topTrailing) {
+                        CopyChip(helpText: "Copy code", palette: palette) {
+                            // Code is code: plain text only, exactly as written.
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(code, forType: .string)
+                        }
+                        .padding(6)
+                    }
 
             case .quote(let t):
                 // A quote reads as quoted material because of the rail and the
