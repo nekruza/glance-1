@@ -86,6 +86,10 @@ struct MarkdownText: View {
         case ordered(depth: Int, number: String, text: String)
         case code(String)
         case quote(String)
+        /// Paste-ready deliverable the model wrapped in a ```glance-draft
+        /// fence (see TaskCapture.systemPrompt). Content is raw markdown,
+        /// rendered by DraftCard as prose with its own Copy.
+        case draft(String)
         case paragraph(String)
         case table(header: [String], rows: [[String]], alignments: [Alignment])
         case rule
@@ -164,6 +168,9 @@ struct MarkdownText: View {
                             .frame(width: 3)
                     }
 
+            case .draft(let t):
+                MarkdownText(text: t, palette: palette)
+
             case .paragraph(let t):
                 Text(Self.inline(t, palette))
                     .lineSpacing(3)
@@ -232,6 +239,7 @@ struct MarkdownText: View {
     static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var inCode = false
+        var fenceIsDraft = false
         var codeLines: [String] = []
         var paragraph: [String] = []
         var quote: [String] = []
@@ -240,7 +248,8 @@ struct MarkdownText: View {
         var indents: [Int] = []
 
         func flushCode() {
-            blocks.append(.code(codeLines.joined(separator: "\n")))
+            let body = codeLines.joined(separator: "\n")
+            blocks.append(fenceIsDraft ? .draft(body) : .code(body))
             codeLines.removeAll()
         }
         func flushParagraph() {
@@ -269,8 +278,15 @@ struct MarkdownText: View {
             defer { i += 1 }
 
             if trimmed.hasPrefix("```") {
-                if inCode { flushCode(); inCode = false }
-                else { flushText(); indents.removeAll(); inCode = true }
+                if inCode { flushCode(); inCode = false; fenceIsDraft = false }
+                else {
+                    flushText(); indents.removeAll(); inCode = true
+                    // The info string picks the block kind: `glance-draft`
+                    // marks a paste-ready deliverable; anything else stays a
+                    // code block.
+                    fenceIsDraft = trimmed.dropFirst(3)
+                        .trimmingCharacters(in: .whitespaces) == "glance-draft"
+                }
                 continue
             }
             if inCode { codeLines.append(rawLine); continue }

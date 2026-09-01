@@ -19,6 +19,7 @@ final class MarkdownTextTests: XCTestCase {
             case .ordered(let depth, let number, let text): return "ol\(depth):\(number):\(text)"
             case .code(let code):                      return "code:\(code)"
             case .quote(let text):                     return "quote:\(text)"
+            case .draft(let text):                     return "draft:\(text)"
             case .paragraph(let text):                 return "p:\(text)"
             case .table(let header, let rows, _):
                 return "table:" + ([header] + rows).map { $0.joined(separator: "/") }.joined(separator: ";")
@@ -128,6 +129,34 @@ final class MarkdownTextTests: XCTestCase {
     }
 
     // MARK: - Code fences (streaming)
+
+    // MARK: - glance-draft fences (suggested-message cards)
+
+    func testGlanceDraftFenceParsesToDraftBlock() {
+        XCTAssertEqual(shape("```glance-draft\nHi team!\n\nSee you at 4:30.\n```"),
+                       ["draft:Hi team!\n\nSee you at 4:30."])
+    }
+
+    func testUnclosedDraftFenceStillRendersAsDraft() {
+        // Streaming: the card must appear as soon as the fence opens.
+        XCTAssertEqual(shape("```glance-draft\nHi tea"), ["draft:Hi tea"])
+    }
+
+    func testPlainAndLanguageTaggedFencesAreStillCode() {
+        XCTAssertEqual(shape("```\nlet x = 1\n```"), ["code:let x = 1"])
+        XCTAssertEqual(shape("```swift\nlet x = 1\n```"), ["code:let x = 1"])
+    }
+
+    func testDraftKeepsInnerMarkdownVerbatim() {
+        let md = "```glance-draft\nHi **team** — see [the doc](https://x.y)!\n\n- not\n- parsed here\n```"
+        XCTAssertEqual(shape(md),
+                       ["draft:Hi **team** — see [the doc](https://x.y)!\n\n- not\n- parsed here"])
+    }
+
+    func testProseAroundADraftStaysSeparate() {
+        XCTAssertEqual(shape("Here you go:\n```glance-draft\nHi!\n```\nWhat I changed: tone."),
+                       ["p:Here you go:", "draft:Hi!", "p:What I changed: tone."])
+    }
 
     func testFencedCodeKeepsIndentationAndNewlines() {
         XCTAssertEqual(shape("```swift\nlet x = 1\n    let y = 2\n```"),
