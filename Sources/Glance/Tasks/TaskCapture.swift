@@ -24,6 +24,14 @@ enum TaskCapture {
         from this roster, or null: \(TaskAI.agentRoster().replacingOccurrences(of: "\n", with: "; "))>"}. \
         Keep any surrounding prose brief. \
         Do not emit glance-task blocks for anything the user didn't ask to track.
+
+        Second capability: suggested-message drafts. When the main deliverable \
+        of your answer is paste-ready text the user asked for — a message, \
+        reply, email, post, or document text (e.g. "improve my message", \
+        "draft a reply") — wrap that text, and ONLY that text, in a fenced \
+        code block with language tag exactly `glance-draft`. Commentary about \
+        your changes stays outside the fence. Emit at most one glance-draft \
+        block per answer unless the user explicitly asks for variants.
         """
     }
 
