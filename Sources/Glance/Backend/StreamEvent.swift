@@ -9,6 +9,7 @@ struct StreamLine: Decodable {
     let subtype: String?
     let isError: Bool?
     let result: String?
+    let model: String?
     let event: Inner?
 
     struct Inner: Decodable {
@@ -26,6 +27,7 @@ struct StreamLine: Decodable {
         case subtype
         case isError = "is_error"
         case result
+        case model
         case event
     }
 
@@ -40,11 +42,21 @@ struct StreamLine: Decodable {
 
     var isResult: Bool { type == "result" }
 
+    /// The model id announced on the `system/init` line. Hook-related
+    /// `system` lines carry no `model`, so they yield nil.
+    var announcedModel: String? {
+        guard type == "system", let model, !model.isEmpty else { return nil }
+        return model
+    }
+
     /// The shared event for successful stream messages. Result errors remain
     /// mapped by `ClaudeBackend` so its existing friendly error text is kept.
     var askBackendEvent: AskBackendEvent? {
         if let text = streamedText, !text.isEmpty {
             return .token(text)
+        }
+        if let model = announcedModel {
+            return .model(model)
         }
         if isResult, isError != true {
             return .completed

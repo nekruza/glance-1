@@ -28,6 +28,15 @@ final class OverlaySession: ObservableObject {
     /// Selected ask-backend connection state, shown in the overlay footer.
     @Published var backendConnected: Bool = false
     @Published var backendLabel: String = "Checking \(AskBackendKind.defaultValue.displayName)…"
+    /// Human model name reported by the backend once it answers ("Fable 5.1").
+    /// Nil until the first reply of a spawned process.
+    @Published var modelName: String?
+
+    /// Footer text: the connection label, plus the model once known.
+    var footerLabel: String {
+        guard let modelName, !modelName.isEmpty else { return backendLabel }
+        return "\(backendLabel) · \(modelName)"
+    }
 
     /// Captured-display label for the context strip, e.g. "Display 1 · 2560×1440".
     @Published var captureLabel: String = ""
@@ -101,6 +110,7 @@ final class OverlaySession: ObservableObject {
         historySessions = []
         backendConnected = false
         backendLabel = "Checking \(kind.displayName)…"
+        modelName = nil
     }
 
     /// Replace the transcript with a resumed Claude session only if no clear or

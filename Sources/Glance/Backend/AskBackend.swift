@@ -18,6 +18,9 @@ enum AskBackendEvent {
     case token(String)
     case completed
     case failed(String)
+    /// The model id the CLI reports on its `system/init` line, e.g.
+    /// "claude-fable-5-1". Informational; arrives once per spawned process.
+    case model(String)
 }
 
 protocol AskBackend: AnyObject {

@@ -208,7 +208,7 @@ final class ClaudeBackend: AskBackend {
                     sawTokenThisTurn = true
                     timeoutWork?.cancel() // first token arrived (FR13)
                 }
-            case .completed, .failed:
+            case .completed, .failed, .model:
                 break
             }
             emit(event)
@@ -280,7 +280,7 @@ final class ClaudeBackend: AskBackend {
         switch event {
         case .failed:
             currentHandler = nil
-        case .completed, .token:
+        case .completed, .token, .model:
             break
         }
         DispatchQueue.main.async { handler?(event) }

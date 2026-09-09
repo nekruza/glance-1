@@ -3,6 +3,27 @@ import XCTest
 
 final class OverlaySessionTests: XCTestCase {
     @MainActor
+    func testFooterLabelAppendsModelNameWhenKnown() {
+        let session = OverlaySession()
+        session.backendLabel = "Claude CLI connected · claude 2.1.266"
+
+        XCTAssertEqual(session.footerLabel, "Claude CLI connected · claude 2.1.266")
+
+        session.modelName = "Fable 5.1"
+        XCTAssertEqual(session.footerLabel, "Claude CLI connected · claude 2.1.266 · Fable 5.1")
+    }
+
+    @MainActor
+    func testBackendChangeClearsModelName() {
+        let session = OverlaySession()
+        session.modelName = "Fable 5.1"
+
+        session.resetForBackendChange(to: .codex)
+
+        XCTAssertNil(session.modelName)
+    }
+
+    @MainActor
     func testBackendChangeDismissesAndResetsSession() {
         let session = OverlaySession()
         var dismissed = false

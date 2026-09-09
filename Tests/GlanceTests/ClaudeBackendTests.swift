@@ -10,6 +10,8 @@ extension AskBackendEvent: Equatable {
             return true
         case let (.failed(lhsMessage), .failed(rhsMessage)):
             return lhsMessage == rhsMessage
+        case let (.model(lhsID), .model(rhsID)):
+            return lhsID == rhsID
         default:
             return false
         }
@@ -30,6 +32,36 @@ final class ClaudeBackendTests: XCTestCase {
 
         let line = try JSONDecoder().decode(StreamLine.self, from: fixture)
         XCTAssertEqual(line.askBackendEvent, .token("hello"))
+    }
+
+    func testMapsInitLineModelToModelEvent() throws {
+        let fixture = #"""
+        {
+          "type": "system",
+          "subtype": "init",
+          "session_id": "abc",
+          "model": "claude-fable-5-1",
+          "claude_code_version": "2.1.266"
+        }
+        """#.data(using: .utf8)!
+
+        let line = try JSONDecoder().decode(StreamLine.self, from: fixture)
+        XCTAssertEqual(line.askBackendEvent, .model("claude-fable-5-1"))
+    }
+
+    func testHookSystemLineWithoutModelProducesNoEvent() throws {
+        let fixture = #"""
+        { "type": "system", "subtype": "hook_started", "session_id": "abc", "hook_name": "x" }
+        """#.data(using: .utf8)!
+
+        let line = try JSONDecoder().decode(StreamLine.self, from: fixture)
+        XCTAssertNil(line.askBackendEvent)
+    }
+
+    func testPrettifyKnownModelIDs() {
+        XCTAssertEqual(ModelCatalog.prettify("claude-fable-5-1"), "Fable 5.1")
+        XCTAssertEqual(ModelCatalog.prettify("claude-opus-4-8"), "Opus 4.8")
+        XCTAssertEqual(ModelCatalog.prettify("claude-haiku-4-5-20251001"), "Haiku 4.5")
     }
 
     func testShutdownForceKillsClaudeProcessThatIgnoresTermination() throws {

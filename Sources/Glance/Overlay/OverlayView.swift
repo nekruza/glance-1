@@ -433,7 +433,7 @@ struct OverlayView: View {
                 .fill(session.backendConnected ? Theme.success : Theme.danger)
                 .frame(width: 6, height: 6)
                 .shadow(color: session.backendConnected ? Theme.success : .clear, radius: 4)
-            Text(session.backendLabel)
+            Text(session.footerLabel)
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.muted)
             Spacer()

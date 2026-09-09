@@ -814,6 +814,7 @@ final class AppCoordinator {
                 self.captureTasksFromAnswer()
                 self.generateSuggestions()
             case .failed(let msg):  self.overlay.session.failTurn(msg)
+            case .model(let id):    self.overlay.session.modelName = ModelCatalog.prettify(id)
             }
         }
     }
