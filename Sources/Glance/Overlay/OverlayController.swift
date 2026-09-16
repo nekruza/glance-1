@@ -13,6 +13,7 @@ final class OverlayController {
     private var sizeCancellable: AnyCancellable?
     private var heightCancellable: AnyCancellable?
     private var paneCancellable: AnyCancellable?
+    private var keyMonitor: Any?
 
     /// Deterministic window heights — no SwiftUI/window auto-sizing feedback
     /// loop (that raced and clipped the input + footer).
@@ -80,6 +81,25 @@ final class OverlayController {
         positionPanel()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(host)
+        installKeyMonitor()
+    }
+
+    /// ⌘J toggles the screenshot attachment while the overlay is up. A local
+    /// monitor rather than performKeyEquivalent/.keyboardShortcut: the panel is
+    /// non-activating, so AppKit skips key-equivalent dispatch while the app is
+    /// inactive — which is the normal case for the overlay. Scoped to events
+    /// aimed at the panel so Settings and the task board are unaffected, and it
+    /// swallows the event so the focused field editor doesn't beep at it.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.panel.isVisible, event.window === self.panel,
+                  OverlayPanel.isAttachShortcut(characters: event.charactersIgnoringModifiers,
+                                                modifiers: event.modifierFlags)
+            else { return event }
+            self.session.toggleAttachImage()
+            return nil
+        }
     }
 
     /// Wire the submit action (set by the coordinator).
@@ -96,6 +116,10 @@ final class OverlayController {
 
     func dismiss() {
         guard panel.isVisible else { return }
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
         panel.orderOut(nil)
         onDismiss?()
     }

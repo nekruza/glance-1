@@ -78,6 +78,22 @@ final class OverlayPanel: NSPanel {
         }
     }
 
+    /// ⌘J — toggle the screenshot attachment (FR8) without reaching for the
+    /// footer button. Exactly ⌘ (no ⌥/⌃/⇧) plus "j", matched on the character
+    /// rather than a virtual key code so it lands on the J key of any keyboard
+    /// layout; only the intent-carrying modifiers are compared, since Caps Lock
+    /// and fn ride along in the flags and must not veto the shortcut.
+    ///
+    /// Dispatch happens in OverlayController's local event monitor, not in
+    /// performKeyEquivalent: the panel is non-activating, so while the app is
+    /// inactive AppKit never runs key-equivalent dispatch for it (verified
+    /// live — Esc arrives, ⌘J never did).
+    static func isAttachShortcut(characters: String?, modifiers: NSEvent.ModifierFlags) -> Bool {
+        let meaningful: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        return modifiers.intersection(meaningful) == .command
+            && characters?.lowercased() == "j"
+    }
+
     override func cancelOperation(_ sender: Any?) {
         onCancel?() // Esc via responder chain too
     }

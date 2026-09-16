@@ -83,6 +83,12 @@ final class OverlaySession: ObservableObject {
         submitHandler?(q)
     }
 
+    /// Flip the screenshot attachment for the next message. Shared by the
+    /// footer photo button and the ⌘J shortcut (OverlayController's key monitor).
+    func toggleAttachImage() {
+        attachImage.toggle()
+    }
+
     /// Submit a suggestion chip as the next message.
     func submitSuggestion(_ text: String) {
         guard !isWorking else { return }

@@ -304,14 +304,14 @@ struct OverlayView: View {
     }
 
     private var attachButton: some View {
-        Button(action: { session.attachImage.toggle() }) {
+        Button(action: { session.toggleAttachImage() }) {
             Image(systemName: session.attachImage ? "photo.fill" : "photo")
                 .font(.system(size: 17))
                 .foregroundStyle(session.attachImage ? Theme.accent : Theme.muted)
         }
         .buttonStyle(.plain)
-        .help(session.attachImage ? "Screenshot will be sent — click for text-only"
-                                  : "Text-only — click to attach the current screen")
+        .help(session.attachImage ? "⌘J — screenshot will be sent; press to go text-only"
+                                  : "⌘J — text-only; press to attach the current screen")
     }
 
     private var closeButton: some View {
