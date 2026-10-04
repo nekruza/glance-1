@@ -69,8 +69,14 @@ PLIST
 # (`--sign -`) changes identity every rebuild and orphans the grant, so prefer a
 # STABLE self-signed identity (create it once with Scripts/dev-sign-setup.sh).
 SIGN_KC="$HOME/Library/Keychains/glance-signing.keychain-db"
+SIGN_KC_PASS="glance"   # matches KC_PASS in Scripts/dev-sign-setup.sh
 SIGN_ID="Glance Dev"
 if security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "$SIGN_ID"; then
+    # The keychain relocks at logout/reboot. Without this codesign can't reach
+    # the private key: it puts up a GUI password prompt and, unanswered, fails
+    # with errSecInternalComponent.
+    security unlock-keychain -p "$SIGN_KC_PASS" "$SIGN_KC" 2>/dev/null \
+        || echo "⚠ could not unlock $SIGN_KC — codesign may prompt"
     echo "▶ codesign with stable identity '$SIGN_ID'"
     codesign --force --deep --sign "$SIGN_ID" --keychain "$SIGN_KC" "$APP"
 else
