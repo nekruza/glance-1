@@ -8,7 +8,7 @@ set -euo pipefail
 
 CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/build/Glance.app"
+FINAL_APP="$ROOT/build/Glance.app"
 BUNDLE_ID="com.h57q3wq0c.glance"
 VERSION="1.0"
 
@@ -17,8 +17,11 @@ echo "▶ swift build -c $CONFIG"
 swift build -c "$CONFIG"
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/Glance"
 
-echo "▶ assembling $APP"
-rm -rf "$APP"
+mkdir -p "$ROOT/build"
+STAGING="$(mktemp -d "$ROOT/build/.glance-build.XXXXXX")"
+trap 'rm -rf "$STAGING"' EXIT
+APP="$STAGING/Glance.app"
+echo "▶ assembling $FINAL_APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Glance"
 
@@ -60,6 +63,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <!-- FR5/FR3: menu-bar accessory, no Dock icon, no App Switcher entry. -->
     <key>LSUIElement</key>               <true/>
     <key>NSHighResolutionCapable</key>   <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Glance captures a screenshot when you attach your screen to a question.</string>
     <key>NSHumanReadableCopyright</key>  <string>Personal tool.</string>
 </dict>
 </plist>
@@ -68,24 +73,46 @@ PLIST
 # TCC (Screen Recording) ties the grant to the code-signing identity. Ad-hoc
 # (`--sign -`) changes identity every rebuild and orphans the grant, so prefer a
 # STABLE self-signed identity (create it once with Scripts/dev-sign-setup.sh).
-SIGN_KC="$HOME/Library/Keychains/glance-signing.keychain-db"
-SIGN_KC_PASS="glance"   # matches KC_PASS in Scripts/dev-sign-setup.sh
+SIGN_KC="${GLANCE_SIGNING_KEYCHAIN:-$HOME/Library/Keychains/glance-signing.keychain-db}"
+# The local path override lets a forgotten signing password be recovered with
+# a separate keychain while preserving the original keys and saved passwords.
+SIGN_CONFIG="$HOME/Library/Application Support/Glance/signing-keychain"
+if [ -z "${GLANCE_SIGNING_KEYCHAIN:-}" ] && [ -f "$SIGN_CONFIG" ]; then
+    IFS= read -r SIGN_KC < "$SIGN_CONFIG"
+fi
+SIGN_KC_PASS="${GLANCE_SIGNING_KEYCHAIN_PASSWORD:-glance}"
 SIGN_ID="Glance Dev"
-if security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "$SIGN_ID"; then
+# Several preserved keychains can contain the same certificate name. Use the
+# fingerprint from this keychain so codesign selects the intended private key.
+if SIGN_HASH="$(security find-identity -p codesigning "$SIGN_KC" 2>/dev/null \
+    | awk '/"Glance Dev"/ { print $2; exit }')" && [ -n "$SIGN_HASH" ]; then
     # The keychain relocks at logout/reboot. Without this codesign can't reach
     # the private key: it puts up a GUI password prompt and, unanswered, fails
     # with errSecInternalComponent.
     security unlock-keychain -p "$SIGN_KC_PASS" "$SIGN_KC" 2>/dev/null \
         || echo "⚠ could not unlock $SIGN_KC — codesign may prompt"
     echo "▶ codesign with stable identity '$SIGN_ID'"
-    codesign --force --deep --sign "$SIGN_ID" --keychain "$SIGN_KC" "$APP"
+    codesign --force --deep --sign "$SIGN_HASH" --keychain "$SIGN_KC" "$APP"
 else
     echo "▶ ad-hoc codesign (run Scripts/dev-sign-setup.sh for a persistent Screen Recording grant)"
     codesign --force --deep --sign - "$APP"
 fi
 
-echo "✔ built $APP"
-echo "  run: open \"$APP\""
+# Publish only a complete, verified bundle. A locked signing keychain must
+# never replace the working app with an unsigned executable and lose TCC access.
+codesign --verify --deep --strict "$APP"
+if [ -e "$FINAL_APP" ]; then
+    mv "$FINAL_APP" "$STAGING/previous.app"
+fi
+if ! mv "$APP" "$FINAL_APP"; then
+    if [ -e "$STAGING/previous.app" ]; then
+        mv "$STAGING/previous.app" "$FINAL_APP"
+    fi
+    exit 1
+fi
+
+echo "✔ built $FINAL_APP"
+echo "  run: open \"$FINAL_APP\""
 
 # ── Distribution (NFR7), not automated here ───────────────────────────────
 # 1. codesign --force --options runtime --sign "Developer ID Application: …" \

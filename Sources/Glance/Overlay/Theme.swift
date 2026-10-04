@@ -9,8 +9,13 @@ enum Theme {
 
     // Dark-glass surface
     static let glassTint = Color(red: 22/255, green: 24/255, blue: 29/255)     // rgba(22,24,29,·)
+    /// Top of the glass gradient — a touch lighter so the panel reads as lit
+    /// from above rather than a flat slab.
+    static let glassLift = Color(red: 31/255, green: 34/255, blue: 41/255)
     static let glassBorder = Color.white.opacity(0.12)
     static let glassBorderHi = Color.white.opacity(0.22)
+    /// Quiet separator for interior section edges (header, footer).
+    static let hairline = Color.white.opacity(0.07)
     static let field = Color.white.opacity(0.06)
     static let codeBg = Color(red: 10/255, green: 12/255, blue: 16/255).opacity(0.7)
 
@@ -24,7 +29,7 @@ enum Theme {
     static let danger = Color(red: 0xff/255, green: 0x6b/255, blue: 0x6b/255)
 
     // Geometry / motion
-    static let radius: CGFloat = 18
+    static let radius: CGFloat = 20
     static let overlayWidth: CGFloat = 640
     static let popAnimation = Animation.spring(response: 0.28, dampingFraction: 0.82)
 }

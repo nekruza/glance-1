@@ -17,7 +17,7 @@ final class MarkdownTextTests: XCTestCase {
                 let box = checked.map { $0 ? "[x]" : "[ ]" } ?? ""
                 return "ul\(depth)\(box):\(text)"
             case .ordered(let depth, let number, let text): return "ol\(depth):\(number):\(text)"
-            case .code(let code):                      return "code:\(code)"
+            case .code(_, let code):                   return "code:\(code)"
             case .quote(let text):                     return "quote:\(text)"
             case .draft(let text):                     return "draft:\(text)"
             case .paragraph(let text):                 return "p:\(text)"

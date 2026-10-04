@@ -48,6 +48,9 @@ final class AppCoordinator {
     private var suggestions: SuggestionService?
     private var pendingImagePNG: Data?
     private var pendingCaptureLabel: String = ""
+    private var captureDisplay: () async throws -> CaptureResult = {
+        try await ScreenCaptureService.captureActiveDisplay()
+    }
     private var claudeStatus: ClaudeLocator.Status = .notFound
     private var cancellables = Set<AnyCancellable>()
 
@@ -80,12 +83,16 @@ final class AppCoordinator {
     /// alternate task stack.
     init(backendLifecycle: AskBackendLifecycle, overlay: OverlayController,
          automationProviderFactory: AutomationProviderFactory,
-         askBackendFactory: AskBackendFactory = AskBackendFactory(), taskStore: TaskStore) {
+         askBackendFactory: AskBackendFactory = AskBackendFactory(), taskStore: TaskStore,
+         captureDisplay: @escaping () async throws -> CaptureResult = {
+             try await ScreenCaptureService.captureActiveDisplay()
+         }) {
         self.taskStore = taskStore
         self.overlay = overlay
         self.backendLifecycle = backendLifecycle
         self.automationProviderFactory = automationProviderFactory
         self.askBackendFactory = askBackendFactory
+        self.captureDisplay = captureDisplay
     }
 
     func start() {
@@ -579,14 +586,6 @@ final class AppCoordinator {
             return
         }
 
-        // Attach requested but no Screen Recording permission → prompt, send
-        // text-only this turn.
-        guard ScreenCaptureService.hasPermission else {
-            PermissionOnboarding.promptForScreenRecording()
-            send(question, image: nil, via: backend, kind: kind, generation: generation)
-            return
-        }
-
         // First question: use the still captured at invocation (already clean).
         if let firstShot = pendingImagePNG {
             pendingImagePNG = nil
@@ -595,29 +594,35 @@ final class AppCoordinator {
             return
         }
 
-        // Follow-up: grab a FRESH shot of the current screen, hiding the overlay
-        // so it isn't in the image (FR8).
+        // An explicit attachment request can retry ScreenCaptureKit even when
+        // the cached permission result is false (for example after granting
+        // access in Settings). Speculative captures remain permission-gated.
+        // Hide the overlay so it isn't in the fresh image (FR8).
         guard let lease = backendLifecycle.lease(for: backend) else { return }
         Task { [weak self] in
             guard let self else { return }
-            let png = await self.captureExcludingOverlay()
-            guard self.backendLifecycle.isCurrent(lease),
-                  self.isCurrentProvider(kind: kind, generation: generation) else { return }
-            if let png {
+            do {
+                let png = try await self.captureExcludingOverlay()
+                guard self.backendLifecycle.isCurrent(lease),
+                      self.isCurrentProvider(kind: kind, generation: generation) else { return }
                 self.overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: png))
+                self.send(question, image: png, via: backend, kind: kind, generation: generation)
+            } catch {
+                guard self.backendLifecycle.isCurrent(lease),
+                      self.isCurrentProvider(kind: kind, generation: generation) else { return }
+                self.overlay.session.failTurn("Screenshot couldn't be attached. \(error.localizedDescription) Your question was not sent; try again or turn off the screenshot attachment.")
+                self.overlay.session.input = question
             }
-            self.send(question, image: png, via: backend, kind: kind, generation: generation)
         }
     }
 
     /// Hide the overlay from capture, take a still, restore it.
-    private func captureExcludingOverlay() async -> Data? {
+    private func captureExcludingOverlay() async throws -> Data {
         overlay.setHiddenForCapture(true)
+        defer { overlay.setHiddenForCapture(false) }
         // Let the compositor drop the now-transparent panel before capturing.
-        try? await Task.sleep(nanoseconds: 30_000_000) // 30 ms
-        let png = try? await ScreenCaptureService.captureActiveDisplay().pngData
-        overlay.setHiddenForCapture(false)
-        return png
+        try await Task.sleep(nanoseconds: 30_000_000) // 30 ms
+        return try await captureDisplay().pngData
     }
 
     private func send(_ question: String, image: Data?, via backend: AskBackend,

@@ -7,8 +7,12 @@
 set -euo pipefail
 
 IDENTITY="Glance Dev"
-KC="$HOME/Library/Keychains/glance-signing.keychain-db"
-KC_PASS="glance"
+KC="${GLANCE_SIGNING_KEYCHAIN:-$HOME/Library/Keychains/glance-signing.keychain-db}"
+SIGN_CONFIG="$HOME/Library/Application Support/Glance/signing-keychain"
+if [ -z "${GLANCE_SIGNING_KEYCHAIN:-}" ] && [ -f "$SIGN_CONFIG" ]; then
+    IFS= read -r KC < "$SIGN_CONFIG"
+fi
+KC_PASS="${GLANCE_SIGNING_KEYCHAIN_PASSWORD:-glance}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

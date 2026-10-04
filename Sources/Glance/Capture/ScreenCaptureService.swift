@@ -27,7 +27,7 @@ enum CaptureError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .permissionDenied:
-            return "Screen Recording permission is required."
+            return "macOS denied screen capture for this build of Glance. If Glance is already enabled in System Settings, the saved permission may belong to a previous signing identity."
         case .noDisplay:
             return "Couldn't find a display to capture."
         case .captureFailed(let m):

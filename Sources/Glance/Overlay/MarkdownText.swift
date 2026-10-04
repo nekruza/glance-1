@@ -21,11 +21,17 @@ struct MarkdownPalette {
     /// Border and fill of a suggested-message draft card.
     let draftBorder: Color
     let draftBg: Color
+    /// Token colours inside fenced code.
+    let syntax: SyntaxTheme
+    /// Section headings (## and deeper): full-strength sentence case in the
+    /// overlay, muted tracked caps on the light task surfaces.
+    let title: Color
+    let uppercaseLabels: Bool
 
     static let dark = MarkdownPalette(
         bullet: Theme.accent,
         heading: Theme.muted,
-        codeFg: Color(red: 0xdf/255, green: 0xe4/255, blue: 0xf0/255),
+        codeFg: SyntaxTheme.dark.plain,
         codeBg: Theme.codeBg,
         codeBorder: Theme.glassBorder,
         quoteBar: Theme.accent.opacity(0.6),
@@ -34,7 +40,10 @@ struct MarkdownPalette {
         inlineCodeBg: Color.white.opacity(0.09),
         tableHeaderBg: Color.white.opacity(0.05),
         draftBorder: Theme.accent.opacity(0.45),
-        draftBg: Theme.accent.opacity(0.07))
+        draftBg: Theme.accent.opacity(0.07),
+        syntax: .dark,
+        title: Theme.fg,
+        uppercaseLabels: false)
 
     static let light = MarkdownPalette(
         bullet: DS.accentText,
@@ -48,7 +57,10 @@ struct MarkdownPalette {
         inlineCodeBg: DS.surfaceHover,
         tableHeaderBg: DS.surface,
         draftBorder: DS.accentText.opacity(0.4),
-        draftBg: DS.accentText.opacity(0.06))
+        draftBg: DS.accentText.opacity(0.06),
+        syntax: .light,
+        title: DS.textSecondary,
+        uppercaseLabels: true)
 }
 
 /// FR11 subset Markdown renderer for streamed answers. Required: fenced code
@@ -91,7 +103,7 @@ struct MarkdownText: View {
         case heading(level: Int, text: String)
         case bullet(depth: Int, checked: Bool?, text: String)
         case ordered(depth: Int, number: String, text: String)
-        case code(String)
+        case code(language: String?, text: String)
         case quote(String)
         /// Paste-ready deliverable the model wrapped in a ```glance-draft
         /// fence (see TaskCapture.systemPrompt). Content is raw markdown,
@@ -108,16 +120,24 @@ struct MarkdownText: View {
         @ViewBuilder func view(_ palette: MarkdownPalette) -> some View {
             switch self {
             case .heading(let level, let t):
-                if level >= 2 {
-                    // Design: uppercase, tracked, muted section labels.
+                if level >= 2 && palette.uppercaseLabels {
+                    // Light task surfaces: uppercase, tracked, muted labels.
                     Text(t.uppercased())
                         .font(.system(size: 11, weight: .semibold))
                         .tracking(0.4)
                         .foregroundStyle(palette.heading)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if level >= 2 {
+                    // Overlay: sentence case at full strength, so a numbered
+                    // step ("1. Schema") reads as a title, not a footnote.
+                    Text(Self.inline(t, palette))
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(palette.title)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(Self.inline(t, palette))
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
+                        .tracking(-0.2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -134,7 +154,7 @@ struct MarkdownText: View {
                             .foregroundStyle(palette.bullet)
                     }
                     Text(Self.inline(t, palette))
-                        .lineSpacing(2)
+                        .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, CGFloat(depth) * Self.indentStep)
@@ -143,27 +163,13 @@ struct MarkdownText: View {
                 HStack(alignment: .top, spacing: 8) {
                     Text("\(n).").foregroundStyle(palette.bullet).monospacedDigit()
                     Text(Self.inline(t, palette))
-                        .lineSpacing(2)
+                        .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, CGFloat(depth) * Self.indentStep)
 
-            case .code(let code):
-                Text(code)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(palette.codeFg)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.codeBg))
-                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.codeBorder, lineWidth: 1))
-                    .overlay(alignment: .topTrailing) {
-                        CopyChip(helpText: "Copy code", palette: palette) {
-                            // Code is code: plain text only, exactly as written.
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(code, forType: .string)
-                        }
-                        .padding(6)
-                    }
+            case .code(let language, let code):
+                CodeBlockView(language: language, code: code, palette: palette)
 
             case .quote(let t):
                 // A quote reads as quoted material because of the rail and the
@@ -188,7 +194,7 @@ struct MarkdownText: View {
 
             case .paragraph(let t):
                 Text(Self.inline(t, palette))
-                    .lineSpacing(3)
+                    .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
 
             case .table(let header, let rows, let aligns):
@@ -217,7 +223,7 @@ struct MarkdownText: View {
                 (run.inlinePresentationIntent?.contains(.code) ?? false) ? run.range : nil
             }
             for range in codeRuns {
-                out[range].font = .system(size: 12.5, design: .monospaced)
+                out[range].font = .system(size: 12, design: .monospaced)
                 out[range].backgroundColor = palette.inlineCodeBg
             }
             return out
@@ -235,9 +241,9 @@ struct MarkdownText: View {
              (.bullet, .ordered), (.ordered, .bullet):
             return 5
         case (_, .heading(let level, _)):
-            return level >= 2 ? 20 : 16
+            return level >= 2 ? 22 : 18
         case (.heading, _):
-            return 8
+            return 7
         case (_, .rule), (.rule, _):
             return 16
         case (_, .code), (.code, _),
@@ -256,6 +262,7 @@ struct MarkdownText: View {
         var blocks: [Block] = []
         var inCode = false
         var fenceIsDraft = false
+        var fenceLanguage: String?
         var codeLines: [String] = []
         var paragraph: [String] = []
         var quote: [String] = []
@@ -265,7 +272,7 @@ struct MarkdownText: View {
 
         func flushCode() {
             let body = codeLines.joined(separator: "\n")
-            blocks.append(fenceIsDraft ? .draft(body) : .code(body))
+            blocks.append(fenceIsDraft ? .draft(body) : .code(language: fenceLanguage, text: body))
             codeLines.removeAll()
         }
         func flushParagraph() {
@@ -294,14 +301,17 @@ struct MarkdownText: View {
             defer { i += 1 }
 
             if trimmed.hasPrefix("```") {
-                if inCode { flushCode(); inCode = false; fenceIsDraft = false }
+                if inCode { flushCode(); inCode = false; fenceIsDraft = false; fenceLanguage = nil }
                 else {
                     flushText(); indents.removeAll(); inCode = true
                     // The info string picks the block kind: `glance-draft`
                     // marks a paste-ready deliverable; anything else stays a
                     // code block.
-                    fenceIsDraft = trimmed.dropFirst(3)
-                        .trimmingCharacters(in: .whitespaces) == "glance-draft"
+                    let info = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+                    fenceIsDraft = info == "glance-draft"
+                    // First word of the info string is the language tag.
+                    fenceLanguage = fenceIsDraft ? nil
+                        : info.split(separator: " ").first.map(String.init)
                 }
                 continue
             }
@@ -547,6 +557,7 @@ struct CopyChip: View {
     let palette: MarkdownPalette
     let copyAction: () -> Void
     @State private var copied = false
+    @State private var hovering = false
 
     var body: some View {
         Button {
@@ -559,16 +570,20 @@ struct CopyChip: View {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     .font(.system(size: 9, weight: .semibold))
                 Text(copied ? "Copied" : "Copy")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 10.5, weight: .medium))
             }
-            .foregroundStyle(copied ? palette.bullet : palette.heading)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: 5).fill(palette.inlineCodeBg))
+            .foregroundStyle(copied ? palette.bullet : (hovering ? palette.title : palette.heading))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(hovering ? palette.inlineCodeBg.opacity(1.6) : palette.inlineCodeBg))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(helpText)
+        .onHover { hovering = $0 }
+        .pointerCursor()
         .animation(.easeOut(duration: 0.15), value: copied)
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
