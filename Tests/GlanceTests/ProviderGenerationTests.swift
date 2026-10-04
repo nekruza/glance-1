@@ -117,14 +117,6 @@ final class ProviderGenerationTests: XCTestCase {
             connectionsFinished.fulfill()
         }
 
-        let transcriber = MeetingTranscriber()
-        transcriber.summaryProviderLease = { [weak coordinator = harness.coordinator] in
-            coordinator?.currentAutomationProviderLease()
-        }
-        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
-        try "Meeting transcript".write(to: notesURL, atomically: true, encoding: .utf8)
-        transcriber.summarizeForTesting("Discussed the selected provider.", into: notesURL)
-
         wait(for: [connectionsFinished], timeout: 1)
 
         XCTAssertEqual(launches.count(for: .claude), 0,
@@ -133,7 +125,7 @@ final class ProviderGenerationTests: XCTestCase {
         XCTAssertEqual(launches.count(for: .codex, role: .askConstruction), 1)
         XCTAssertEqual(launches.count(for: .codex, role: .askWarm), 1)
         XCTAssertEqual(launches.count(for: .codex, role: .askTurn), 1)
-        for context in ["taskAI", "suggestions", "composio", "meetingSummary"] {
+        for context in ["taskAI", "suggestions", "composio"] {
             XCTAssertEqual(launches.count(for: .codex, role: .automation, context: context), 1,
                            "\(context) must launch Codex exactly once: \(launches.summary())")
             XCTAssertEqual(launches.count(for: .claude, role: .automation, context: context), 0,
@@ -141,62 +133,6 @@ final class ProviderGenerationTests: XCTestCase {
         }
     }
 
-    func testMeetingSummaryUsesCurrentCodexProvider() {
-        let provider = SummaryAutomationProvider(kind: .codex)
-        let transcriber = MeetingTranscriber()
-        transcriber.summaryProvider = { provider }
-
-        transcriber.summarizeForTesting("Meeting text")
-
-        XCTAssertTrue(provider.requestedPrompts.first?.contains("Meeting text") == true)
-    }
-
-    func testProviderSwitchDropsQueuedMeetingSummaryBeforeItWritesOrAutoIngests() throws {
-        let harness = try CoordinatorProviderHarness()
-        defer { harness.removeStore() }
-        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
-        let originalNotes = "# Meeting\n\nTranscript"
-        try originalNotes.write(to: notesURL, atomically: true, encoding: .utf8)
-        let transcriber = MeetingTranscriber()
-        transcriber.summaryProviderLease = { harness.coordinator.currentAutomationProviderLease() }
-        var summarizedURLs: [URL] = []
-        transcriber.onSummarized = { summarizedURLs.append($0) }
-
-        harness.coordinator.replaceProviderServices(for: .claude)
-        transcriber.summarizeForTesting("Meeting text", into: notesURL)
-        waitUntil { harness.claude.textRequestCount == 1 }
-
-        harness.coordinator.replaceProviderServices(for: .codex)
-        // The harness intentionally reuses its Claude double. This catches a
-        // mere provider-identity check: an old callback must remain stale even
-        // after the user selects the same provider kind again.
-        harness.coordinator.replaceProviderServices(for: .claude)
-        harness.claude.emitText([.text("## Summary\nOld Claude notes"), .completed])
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-
-        XCTAssertEqual(try String(contentsOf: notesURL, encoding: .utf8), originalNotes)
-        XCTAssertTrue(summarizedURLs.isEmpty)
-    }
-
-    func testCurrentProviderMeetingSummaryWritesNotesAndTriggersAutoIngest() throws {
-        let harness = try CoordinatorProviderHarness()
-        defer { harness.removeStore() }
-        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
-        try "# Meeting\n\nTranscript".write(to: notesURL, atomically: true, encoding: .utf8)
-        let transcriber = MeetingTranscriber()
-        transcriber.summaryProviderLease = { harness.coordinator.currentAutomationProviderLease() }
-        var summarizedURLs: [URL] = []
-        transcriber.onSummarized = { summarizedURLs.append($0) }
-
-        harness.coordinator.replaceProviderServices(for: .claude)
-        transcriber.summarizeForTesting("Meeting text", into: notesURL)
-        waitUntil { harness.claude.textRequestCount == 1 }
-        harness.claude.emitText([.text("## Summary\nCurrent Claude notes"), .completed])
-        waitUntil { summarizedURLs == [notesURL] }
-
-        let saved = try String(contentsOf: notesURL, encoding: .utf8)
-        XCTAssertTrue(saved.hasPrefix("## Summary\nCurrent Claude notes\n\n---\n\n# Meeting"))
-    }
 
     func testCoordinatorExposesCurrentCodexProviderForMeetingSummary() throws {
         let harness = try CoordinatorProviderHarness()
@@ -334,51 +270,6 @@ final class ProviderGenerationTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         XCTAssertTrue(harness.coordinator.taskOverlay?.session.decomposePreview.isEmpty == true)
-    }
-
-    func testProviderSwitchSettlesStaleMeetingExtractionWithoutAddingTasks() throws {
-        let harness = try CoordinatorProviderHarness()
-        defer {
-            harness.removeStore()
-            TranscriptPanelModel.shared.extractTasksHandler = nil
-        }
-        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
-        try "Follow up with the team.".write(to: notesURL, atomically: true, encoding: .utf8)
-        let entry = MeetingHistory.Entry(url: notesURL, title: "Meeting",
-                                         modified: Date(), snippet: "Follow up")
-        var completions: [Int] = []
-
-        harness.coordinator.replaceProviderServices(for: .claude)
-        TranscriptPanelModel.shared.extractTasksHandler?(entry) { completions.append($0) }
-        waitUntil { harness.claude.textRequestCount == 1 }
-
-        harness.coordinator.replaceProviderServices(for: .codex)
-        harness.claude.emitText([.text("[{\"title\":\"stale Claude task\"}]"), .completed])
-        waitUntil { completions == [0] }
-
-        XCTAssertTrue(harness.store.tasks.isEmpty)
-    }
-
-    func testProviderSwitchSettlesMeetingExtractionWhenCancellationSuppressesCallback() throws {
-        let harness = try CoordinatorProviderHarness(suppressClaudeCallbacksOnCancel: true)
-        defer {
-            harness.removeStore()
-            TranscriptPanelModel.shared.extractTasksHandler = nil
-        }
-        let notesURL = harness.storeDirectory.appendingPathComponent("meeting.md")
-        try "Follow up with the team.".write(to: notesURL, atomically: true, encoding: .utf8)
-        let entry = MeetingHistory.Entry(url: notesURL, title: "Meeting",
-                                         modified: Date(), snippet: "Follow up")
-        var completions: [Int] = []
-
-        harness.coordinator.replaceProviderServices(for: .claude)
-        TranscriptPanelModel.shared.extractTasksHandler?(entry) { completions.append($0) }
-        waitUntil { harness.claude.textRequestCount == 1 }
-
-        harness.coordinator.replaceProviderServices(for: .codex)
-
-        waitUntil { completions == [0] }
-        XCTAssertTrue(harness.store.tasks.isEmpty)
     }
 
     func testProviderServiceRebuildRefreshesModelsForClaudeButNotCodex() throws {
@@ -646,35 +537,6 @@ private final class HoldingAutomationProvider: AutomationProvider {
     }
 }
 
-private final class SummaryAutomationProvider: AutomationProvider {
-    let descriptor: AutomationProviderDescriptor
-    private(set) var requestedPrompts: [String] = []
-
-    init(kind: AskBackendKind) {
-        descriptor = AutomationProviderDescriptor(kind: kind, version: "test")
-    }
-
-    func runText(_ request: AutomationRequest,
-                 onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        requestedPrompts.append(request.prompt)
-        onEvent(.text("## Summary\nDone"))
-        onEvent(.completed)
-        return AutomationCancellation()
-    }
-
-    func startRun(_ request: AutomationRunRequest,
-                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
-    }
-
-    func runComposio(_ request: ComposioAutomationRequest, token: String,
-                     onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
-        runText(AutomationRequest(prompt: request.prompt), onEvent: onEvent)
-    }
-
-    func cancelAll() {}
-}
-
 @MainActor
 private final class CoordinatorProviderCoverageHarness {
     let storeDirectory: URL
@@ -808,8 +670,8 @@ private final class RecordingAutomationProvider: AutomationProvider {
             output = "What changed?\nWhat should I do next?"
             context = "suggestions"
         } else {
-            output = "## Summary\nCodex produced the notes."
-            context = "meetingSummary"
+            output = "{}"
+            context = "other"
         }
         recorder.record(kind: descriptor.kind, role: .automation, context: context)
         onEvent(.text(output))

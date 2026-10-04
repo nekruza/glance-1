@@ -6,7 +6,6 @@ import SwiftUI
 struct OverlayView: View {
     @ObservedObject var session: OverlaySession
     @ObservedObject private var prefs = Preferences.shared
-    @ObservedObject private var liveTranscript = TranscriptPanelModel.shared
     @FocusState private var inputFocused: Bool
     @State private var showHistory = false
     // "Viewport is at the bottom" — streaming auto-scroll runs only while
@@ -16,45 +15,35 @@ struct OverlayView: View {
     @State private var pinAtBottom = true
 
     /// True while the panel height should track its content (idle prompt row).
-    /// The transcript pane stretches content to the full window height, so it
-    /// forces the flexible layout too.
     private var growsWithContent: Bool {
-        session.turns.isEmpty && !liveTranscript.isVisible
+        session.turns.isEmpty
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                if session.turns.isEmpty {
-                    promptRow
-                } else {
-                    transcript
-                    if !session.suggestions.isEmpty && !session.isWorking {
-                        suggestionChips
-                    }
-                    followUpBar
+        VStack(alignment: .leading, spacing: 0) {
+            if session.turns.isEmpty {
+                promptRow
+            } else {
+                transcript
+                if !session.suggestions.isEmpty && !session.isWorking {
+                    suggestionChips
                 }
-                footer
+                followUpBar
             }
-            .frame(width: Theme.overlayWidth)
-            // Idle mode: refuse the window's proposed height and report the
-            // TRUE ideal height instead. Without this the hosting view forces
-            // the column into the window's current (short) bounds, SwiftUI
-            // compresses the growing TextField to fit, and the height we
-            // measure below is just the window height we were handed — a
-            // circular constraint that pins the panel at one row forever.
-            // fixedSize breaks the cycle: content height depends only on the
-            // text, so the controller's resize settles in one step.
-            // Conversation mode keeps the flexible layout (fixed 560pt window,
-            // scrolling transcript in the middle).
-            .fixedSize(horizontal: false, vertical: growsWithContent)
-            if liveTranscript.isVisible {
-                Divider().overlay(Theme.glassBorder)
-                TranscriptPaneView(model: liveTranscript)
-                    .frame(width: Theme.transcriptPaneWidth)
-            }
+            footer
         }
-        .frame(width: Theme.overlayWidth + (liveTranscript.isVisible ? Theme.transcriptPaneWidth + 1 : 0))
+        .frame(width: Theme.overlayWidth)
+        // Idle mode: refuse the window's proposed height and report the
+        // TRUE ideal height instead. Without this the hosting view forces
+        // the column into the window's current (short) bounds, SwiftUI
+        // compresses the growing TextField to fit, and the height we
+        // measure below is just the window height we were handed — a
+        // circular constraint that pins the panel at one row forever.
+        // fixedSize breaks the cycle: content height depends only on the
+        // text, so the controller's resize settles in one step.
+        // Conversation mode keeps the flexible layout (fixed 560pt window,
+        // scrolling transcript in the middle).
+        .fixedSize(horizontal: false, vertical: growsWithContent)
         .background(GeometryReader { geo in
             Color.clear
                 .onAppear { session.contentHeight = geo.size.height }
@@ -327,29 +316,6 @@ struct OverlayView: View {
         .help("Close overlay")
     }
 
-    /// Opens/closes the live-transcript side pane (next to the gear).
-    private var transcriptPaneButton: some View {
-        Button(action: { liveTranscript.isVisible.toggle() }) {
-            Image(systemName: liveTranscript.isVisible ? "sidebar.right" : "sidebar.right")
-                .font(.system(size: 15))
-                .foregroundStyle(liveTranscript.isVisible ? Theme.accent
-                                 : (liveTranscript.isRecording ? Theme.danger : Theme.muted))
-        }
-        .buttonStyle(.plain)
-        .help(liveTranscript.isVisible ? "Hide live transcript" : "Show live transcript")
-    }
-
-    private var transcribeButton: some View {
-        Button(action: { session.transcribeHandler?() }) {
-            Image(systemName: session.isTranscribing ? "record.circle.fill" : "waveform.circle")
-                .font(.system(size: 15))
-                .foregroundStyle(session.isTranscribing ? Theme.danger : Theme.muted)
-        }
-        .buttonStyle(.plain)
-        .help(session.isTranscribing ? "Stop meeting transcription and save notes"
-                                     : "Start meeting transcription (Granola-style notes)")
-    }
-
     private var clearButton: some View {
         Button(action: { session.clearHandler?() }) {
             Image(systemName: "trash")
@@ -437,7 +403,6 @@ struct OverlayView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(Theme.muted)
             Spacer()
-            transcribeButton
             if !session.turns.isEmpty {
                 clearButton
             }
@@ -445,7 +410,6 @@ struct OverlayView: View {
                 historyButton
             }
             attachButton
-            transcriptPaneButton
             Button(action: { session.settingsHandler?() }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 15))

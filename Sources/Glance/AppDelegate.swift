@@ -4,7 +4,6 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = StatusItemController()
     private let coordinator = AppCoordinator()
-    private let transcriber = MeetingTranscriber()
     private let onboarding = OnboardingWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -26,36 +25,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.hotkeyWarningProvider = { [weak coordinator] in
             coordinator?.hotkeyWarnings() ?? []
         }
-        statusItem.onToggleTranscription = { [weak self] in self?.toggleTranscription() }
-        statusItem.isTranscribing = { [weak self] in self?.transcriber.isRecording ?? false }
-
-        // Live transcript pane (V2): transcriber → shared panel model.
-        let panel = TranscriptPanelModel.shared
-        transcriber.onLiveSegment = { seg in panel.append(text: seg.text, at: seg.start) }
-        transcriber.onLiveReplaceLast = { seg in panel.replaceLast(text: seg.text, at: seg.start) }
-        transcriber.onLivePartial = { text in panel.updatePartial(text) }
-        transcriber.summaryProviderLease = { [weak coordinator] in
-            coordinator?.currentAutomationProviderLease()
-        }
-        // FR31: once the summary lands, mine the transcript for MY action items
-        // → Inbox (deduped on sourceRef so a re-processed meeting adds nothing).
-        transcriber.onSummarized = { [weak self] url in
-            self?.coordinator.autoIngestMeeting(notesURL: url)
-        }
-        panel.startHandler = { [weak self] in
-            guard let self, !self.transcriber.isRecording else { return }
-            self.toggleTranscription()
-        }
-        panel.stopHandler = { [weak self] in
-            guard let self, self.transcriber.isRecording else { return }
-            self.toggleTranscription()
-        }
-        coordinator.onToggleTranscription = { [weak self] in self?.toggleTranscription() }
-        transcriber.onStateChange = { [weak self] in
-            guard let self else { return }
-            self.statusItem.refreshTranscribeState()
-            self.coordinator.setTranscribing(self.transcriber.isRecording)
-        }
         statusItem.onWelcome = { [weak self] in self?.onboarding.present() }
         statusItem.install()
         coordinator.start()
@@ -66,46 +35,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.onboarding.presentIfNeeded()
         }
-    }
-
-    private func toggleTranscription() {
-        if transcriber.isRecording {
-            Task { [weak self] in
-                guard let self else { return }
-                TranscriptPanelModel.shared.recordingStopped()
-                if let url = await self.transcriber.stop() {
-                    // Show the notes; the AI summary is prepended when ready.
-                    // Action-item extraction runs from onSummarized once the
-                    // summary lands (see applicationDidFinishLaunching).
-                    NSWorkspace.shared.open(url)
-                }
-            }
-            return
-        }
-        MeetingTranscriber.requestPermissions { [weak self] ok, message in
-            guard let self else { return }
-            guard ok else {
-                if let message { self.alert("Can't start transcription", message) }
-                return
-            }
-            Task {
-                do {
-                    try await self.transcriber.start()
-                    TranscriptPanelModel.shared.recordingStarted()
-                } catch {
-                    self.alert("Transcription failed to start", error.localizedDescription)
-                }
-            }
-        }
-    }
-
-    private func alert(_ title: String, _ text: String) {
-        let a = NSAlert()
-        a.messageText = title
-        a.informativeText = text
-        a.alertStyle = .warning
-        NSApp.activate(ignoringOtherApps: true)
-        a.runModal()
     }
 
     private func installMainMenu() {

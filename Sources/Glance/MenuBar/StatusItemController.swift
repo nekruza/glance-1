@@ -11,9 +11,6 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     /// Summons the V2 task board.
     var onTasks: (() -> Void)?
     var onSettings: (() -> Void)?
-    /// Toggles meeting transcription; provider reports the live state.
-    var onToggleTranscription: (() -> Void)?
-    var isTranscribing: (() -> Bool)?
     /// Provides the live backend status for the status line.
     var statusProvider: (() -> (connected: Bool, label: String))?
     /// Provides hotkey bindings that failed to register (empty = all good).
@@ -25,7 +22,6 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     private var settingsWindow: NSWindow?
     private var statusLineItem: NSMenuItem?
     private var hotkeyWarningItem: NSMenuItem?
-    private var transcribeItem: NSMenuItem?
 
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -79,12 +75,6 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
         tasks.target = self
         menu.addItem(tasks)
 
-        let transcribe = NSMenuItem(title: "Start Meeting Transcription",
-                                    action: #selector(toggleTranscription), keyEquivalent: "")
-        transcribe.target = self
-        transcribeItem = transcribe
-        menu.addItem(transcribe)
-
         menu.addItem(.separator())
 
         let welcome = NSMenuItem(title: "Welcome Tour…", action: #selector(welcomeAction), keyEquivalent: "")
@@ -107,19 +97,6 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         refreshStatusLine()
-        refreshTranscribeState()
-    }
-
-    /// Menu title + menu-bar icon reflect the recording state.
-    func refreshTranscribeState() {
-        let recording = isTranscribing?() ?? false
-        transcribeItem?.title = recording ? "Stop Transcription & Save Notes"
-                                          : "Start Meeting Transcription"
-        if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: recording ? "record.circle" : "sparkle",
-                                   accessibilityDescription: "Glance")
-            button.image?.isTemplate = true
-        }
     }
 
     private func refreshStatusLine() {
@@ -147,8 +124,6 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSMenuDelegate {
     @objc private func askAction() { onAsk?() }
 
     @objc private func tasksAction() { onTasks?() }
-
-    @objc private func toggleTranscription() { onToggleTranscription?() }
 
     @objc private func welcomeAction() { onWelcome?() }
 

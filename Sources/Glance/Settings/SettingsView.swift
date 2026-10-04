@@ -42,7 +42,7 @@ struct SettingsView: View {
                     .labelsHidden()
                     .frame(width: 150)
                 } label: {
-                    settingLabel(Self.aiProviderRowTitle, "Local CLI used for Ask, tasks, suggestions, meetings, and Composio")
+                    settingLabel(Self.aiProviderRowTitle, "Local CLI used for Ask, tasks, suggestions, and Composio")
                 }
                 LabeledContent {
                     HStack(spacing: 8) {

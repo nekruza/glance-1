@@ -32,46 +32,16 @@ final class AppCoordinator {
     private let askBackendFactory: AskBackendFactory
     private var providerServices: ProviderServices?
     private var providerGeneration: UInt = 0
-    /// Reader extraction has its own visible busy state. Providers are allowed
-    /// to suppress callbacks when cancelled, so keep its completion at the
-    /// lifecycle boundary and settle it explicitly on a provider change.
-    private var pendingMeetingExtractionCompletions: [UUID: (Int) -> Void] = [:]
     private var taskInfrastructureConfigured = false
 
-    /// The provider used by the current service bundle. Consumers such as the
-    /// meeting transcriber read this dynamically so a provider switch takes
-    /// effect before their next request begins.
+    /// The provider used by the current service bundle, read dynamically so a
+    /// provider switch takes effect before the next request begins.
     var currentAutomationProvider: AutomationProvider? {
         providerServices?.provider
     }
 
-    /// A provider reference is not sufficient for work that may outlive a
-    /// selection change: a future selection can build the same provider kind
-    /// again. Capture this generation-bound lease and validate it immediately
-    /// before applying any asynchronous result.
-    func currentAutomationProviderLease() -> AutomationProviderLease? {
-        guard let services = providerServices else { return nil }
-        let kind = services.kind
-        let generation = services.generation
-        return AutomationProviderLease(provider: services.provider) { [weak self] in
-            let check = { self?.isCurrentProvider(kind: kind, generation: generation) ?? false }
-            if Thread.isMainThread { return check() }
-            return DispatchQueue.main.sync(execute: check)
-        }
-    }
-
     /// Opens the Settings window (wired to the status-item controller).
     var onOpenSettings: (() -> Void)?
-
-    /// Toggles meeting transcription (wired to the app delegate's transcriber).
-    var onToggleTranscription: (() -> Void)? {
-        didSet { overlay.session.transcribeHandler = onToggleTranscription }
-    }
-
-    /// Reflect transcription state in the overlay's record button.
-    func setTranscribing(_ recording: Bool) {
-        overlay.session.isTranscribing = recording
-    }
 
     private let backendLifecycle: AskBackendLifecycle
     private var backend: AskBackend? { backendLifecycle.backend }
@@ -196,7 +166,6 @@ final class AppCoordinator {
         suggestions?.cancel()
         taskRunner?.cancelAll(reason: "AI provider changed.")
         taskOverlay?.session.prepareForProviderReplacement()
-        settlePendingMeetingExtractions()
         providerServices?.provider.cancelAll()
         setupTasks(for: kind, generation: providerGeneration)
     }
@@ -331,15 +300,6 @@ final class AppCoordinator {
             overlay.session.showBriefing = true
             overlay.present()
         }
-
-        TranscriptPanelModel.shared.summarizeHandler = { [weak self] entry in
-            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
-            self.summarizeMeeting(entry)
-        }
-        TranscriptPanelModel.shared.extractTasksHandler = { [weak self] entry, done in
-            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else { return }
-            self.extractMeetingTasks(entry, completion: done)
-        }
     }
 
     private func configureTaskInfrastructureIfNeeded() {
@@ -412,125 +372,6 @@ final class AppCoordinator {
         } else {
             session.pullAll()
         }
-    }
-
-    // MARK: - Meeting reader actions
-
-    /// Summarize saved meeting notes into the main overlay conversation: the
-    /// visible turn is a short question; the notes ride along invisibly.
-    private func summarizeMeeting(_ entry: MeetingHistory.Entry) {
-        guard let backend,
-              let text = try? String(contentsOf: entry.url, encoding: .utf8) else { return }
-        overlay.session.turns.append(OverlaySession.Turn(question: "Summarize “\(entry.title)”"))
-        overlay.session.isWorking = true
-        overlay.session.suggestions = []
-        let composed = """
-        Saved meeting notes/transcript follow. Give a tight summary: 2-3 sentence \
-        overview, key decisions, action items (with owners when identifiable).
-        ---
-        \(String(text.prefix(50_000)))
-        """
-        send(composed, image: nil, via: backend)
-    }
-
-    /// FR31 auto-ingest: after a transcription stops, extract the user's
-    /// action items into the INBOX (ambient ingestion → accept gate, FR34) —
-    /// unlike the reader's explicit "Add my tasks", which goes straight to
-    /// ready.
-    func autoIngestMeeting(notesURL: URL) {
-        guard let taskAI, let kind = providerServices?.kind,
-              let text = try? String(contentsOf: notesURL, encoding: .utf8),
-              text.count > 200 else { return } // skip empty/junk recordings
-        let generation = providerGeneration
-        let filename = notesURL.lastPathComponent
-        let title = notesURL.deletingPathExtension().lastPathComponent
-        taskAI.extractActionItems(meetingText: text) { [weak self] items in
-            guard let self, self.isCurrentProvider(kind: kind, generation: generation),
-                  let items, !items.isEmpty else { return }
-            // Dedupe on sourceRef so re-processing the same transcript adds
-            // nothing (I/O matrix: re-extraction skips existing keys).
-            let existingKeys = Set(self.taskStore.tasks.compactMap { $0.sourceRef?.key })
-            var created = 0
-            for d in items {
-                // Slugged title, not a positional index — re-extraction that
-                // reorders or inserts items must still dedupe per item.
-                let key = "\(filename)#\(Self.actionItemSlug(d.title))"
-                guard !existingKeys.contains(key) else { continue }
-                var t = TaskItem(title: d.title, source: .granola)
-                t.status = .inbox
-                t.descriptionMD = (d.description ?? "") + "\n\n_From: \(title)_"
-                t.labels = d.labels ?? []
-                t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
-                t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
-                t.agentId = AgentProfile.idFor(name: d.agent)
-                t.sourceRef = SourceRef(key: key, url: nil)
-                t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
-                _ = self.taskStore.add(t)
-                created += 1
-            }
-            guard created > 0 else { return }
-            self.taskNotifications.post(
-                message: "\(created) action item\(created == 1 ? "" : "s") from the meeting — review in Inbox",
-                taskId: self.taskStore.inboxTasks().first?.id ?? UUID())
-        }
-    }
-
-    /// Stable per-item dedupe slug: lowercased alphanumerics with dashes,
-    /// capped — the same action item re-extracted maps to the same key.
-    private static func actionItemSlug(_ title: String) -> String {
-        let slug = title.lowercased()
-            .map { $0.isLetter || $0.isNumber ? $0 : "-" }
-            .reduce(into: "") { out, ch in
-                if ch != "-" || out.last != "-" { out.append(ch) }
-            }
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return String(slug.prefix(60))
-    }
-
-    /// Extract the user's action items from saved notes → task board.
-    private func extractMeetingTasks(_ entry: MeetingHistory.Entry,
-                                     completion: @escaping (Int) -> Void) {
-        guard let taskAI, let kind = providerServices?.kind,
-              let text = try? String(contentsOf: entry.url, encoding: .utf8) else {
-            completion(0)
-            return
-        }
-        let generation = providerGeneration
-        let extractionID = UUID()
-        pendingMeetingExtractionCompletions[extractionID] = completion
-        taskAI.extractActionItems(meetingText: text) { [weak self] items in
-            guard let self, self.isCurrentProvider(kind: kind, generation: generation) else {
-                // The reader button owns this completion. A provider switch
-                // must not apply the old result, but it still has to settle
-                // the visible extracting state.
-                self?.completeMeetingExtraction(extractionID, count: 0)
-                return
-            }
-            let items = items ?? []
-            for d in items {
-                var t = TaskItem(title: d.title, source: .granola)
-                t.descriptionMD = (d.description ?? "") + "\n\n_From: \(entry.title)_"
-                t.labels = d.labels ?? []
-                t.taskKind = TaskKind(rawValue: d.taskKind ?? "") ?? .other
-                t.estimate = TaskEstimate(rawValue: d.estimate ?? "")
-                t.agentId = AgentProfile.idFor(name: d.agent)
-                t.aiFilledFields = ["description", "labels", "taskKind", "estimate", "agent"]
-                let added = self.taskStore.add(t)
-                self.taskNotifications.post(message: "Task added: \(added.title)", taskId: added.id)
-            }
-            self.completeMeetingExtraction(extractionID, count: items.count)
-        }
-    }
-
-    private func settlePendingMeetingExtractions() {
-        let completions = Array(pendingMeetingExtractionCompletions.values)
-        pendingMeetingExtractionCompletions.removeAll()
-        completions.forEach { $0(0) }
-    }
-
-    private func completeMeetingExtraction(_ id: UUID, count: Int) {
-        guard let completion = pendingMeetingExtractionCompletions.removeValue(forKey: id) else { return }
-        completion(count)
     }
 
     /// Hotkey bindings that failed to register, for the menu warning line.
@@ -785,26 +626,7 @@ final class AppCoordinator {
               backendLifecycle.isCurrent(lease) else { return }
         let kind = kind ?? prefs.askBackend
         let generation = generation ?? providerGeneration
-        // Real-time ask-about-the-call: while transcribing, the recent
-        // transcript rides along invisibly (the overlay shows only the
-        // question the user typed).
-        var composed = question
-        let excerpt = TranscriptPanelModel.shared.isRecording
-            ? TranscriptPanelModel.shared.contextExcerpt() : ""
-        if !excerpt.isEmpty {
-            composed = """
-            Live meeting transcript so far (automatic speech-to-text, may contain \
-            mis-heard words; timestamps are HH:mm):
-            ---
-            \(excerpt)
-            ---
-            Answer the user's question. Use the transcript when the question \
-            refers to the conversation/meeting; ignore it otherwise.
-
-            Question: \(question)
-            """
-        }
-        backend.ask(question: composed, imagePNG: image) { [weak self] event in
+        backend.ask(question: question, imagePNG: image) { [weak self] event in
             guard let self, self.backendLifecycle.isCurrent(lease),
                   self.isCurrentProvider(kind: kind, generation: generation) else { return }
             switch event {

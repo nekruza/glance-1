@@ -55,10 +55,7 @@ final class OnboardingTests: XCTestCase {
             "task board",        // V2 task system
             "jira", "slack", "gmail", "composio", // integrations
             "briefing",          // morning briefing
-            "meeting",           // meetings
-            "transcri",          // transcription/transcribed
             "screen recording",  // TCC permission
-            "microphone",        // TCC permission
             "approval",          // human-in-the-loop sending
             "network",           // privacy posture
         ]

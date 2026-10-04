@@ -1,8 +1,8 @@
 # Glance
 
 A macOS menu-bar assistant that answers questions about whatever is on your
-screen, runs tasks for you with human gates, pulls work in from your connected
-tools, and takes meeting notes — without breaking flow. Choose your **locally
+screen, runs tasks for you with human gates, and pulls work in from your
+connected tools — without breaking flow. Choose your **locally
 installed and signed-in Claude Code CLI or Codex CLI** in Settings; Glance
 reuses that CLI's existing sign-in — no API keys, no Glance account, no
 Glance-hosted subscription backend.
@@ -32,10 +32,6 @@ mindmap
       GitHub / Gmail opt-in
       Read-only → Inbox accept gate
       Via your Composio account
-    Meeting notes
-      Mic + system audio
-      On-device transcription
-      AI summaries
     One AI provider
       Claude Code CLI
       Codex CLI
@@ -88,15 +84,6 @@ MCP account. Pulls only land suggestions in the local Inbox behind an accept
 gate — the prompt hard-forbids any create/update/delete/send action. Composio
 requires its separately configured endpoint and API key.
 
-### Meeting notes
-
-Granola-style transcription: system audio (Meet/Zoom/Slack output, via the
-Screen Recording permission the app already has) and your microphone are
-captured, mixed, and transcribed **on-device** with Apple's Speech framework —
-no audio leaves the machine. On stop, the transcript is written to
-`~/Documents/Glance Meetings/` and summarized into notes by the selected
-provider.
-
 ### First launch
 
 A short onboarding tour covers the hotkeys, permissions, and provider choice.
@@ -106,8 +93,8 @@ The copy always reflects your current hotkey bindings.
 
 The locally signed-in CLI selected in Settings is the provider for every
 AI-driven feature: Ask and its follow-ups, task planning and automation,
-one-shot task enrichment and suggestions, Composio connected-app requests,
-and meeting summaries. Switching between Claude Code and Codex cancels
+one-shot task enrichment and suggestions, and Composio connected-app
+requests. Switching between Claude Code and Codex cancels
 in-flight work from the previous selection before new requests begin.
 
 When Codex is selected, Glance passes the Composio MCP settings only to the
@@ -138,8 +125,6 @@ footprint negligible. Codex runs use `--ignore-user-config` so your global
   working in your terminal). Select the installed provider in Settings.
 - **Screen Recording** permission (System Settings → Privacy & Security →
   Screen Recording). Glance guides you there on first use.
-- **Microphone** and **Speech Recognition** permissions if you use meeting
-  transcription.
 
 ## Settings
 
@@ -164,10 +149,6 @@ This is a personal tool with deliberate, documented trade-offs (PRD NFR6):
   success/error, the process exits or times out, or the session/app shuts down.
   Glance cannot control provider-owned local storage, so review and prune that
   CLI's local data if needed.
-- **Meeting audio never leaves the machine** — recognition is Apple's
-  on-device Speech framework. Transcripts and notes are plain files under
-  `~/Documents/Glance Meetings/`; the summary step sends the transcript text
-  through the selected provider like any other query.
 - **Queries use the selected provider account** and may count against its plan
   usage or provider-managed billing, depending on how that CLI is signed in.
 - Glance makes **no network calls of its own** — traffic, if any, goes through
@@ -202,7 +183,6 @@ flowchart TB
     subgraph UI [Feature UIs]
         OV["Overlay<br/>(Ask)"]
         TB["Tasks<br/>(board + runner)"]
-        TR["Transcribe<br/>(meeting notes)"]
     end
     subgraph Coord [App coordination]
         AC["AppCoordinator / AppDelegate"]
@@ -222,10 +202,9 @@ flowchart TB
     HK --> AC
     MB --> AC
     ST -->|"provider switch<br/>rebuilds services"| AC
-    AC --> OV & TB & TR
+    AC --> OV & TB
     OV --> CAP
-    TR --> CAP
-    OV & TB & TR --> AP
+    OV & TB --> AP
     AP --> CL --> CLI1
     AP --> CX --> CLI2
 ```
@@ -239,7 +218,6 @@ directly. `Sources/Glance/` is grouped by feature:
 | `Overlay/` | Ask overlay: non-activating panel, session state, Markdown streaming |
 | `Capture/` | ScreenCaptureKit still capture |
 | `Tasks/` | Task board, canvas, `TaskRunner` pipeline, Composio ingest/catalog, review queue, notifications |
-| `Transcribe/` | Meeting transcription: audio mixing, on-device recognition, history, summaries |
 | `Hotkey/` | Carbon `RegisterEventHotKey` global hotkeys |
 | `Settings/` | Preferences, hotkey recorder, launch-at-login (SMAppService) |
 | `Onboarding/` | First-launch tour (pure-data pages, tested for coverage) |
@@ -250,16 +228,15 @@ target root. The provider factory rebuilds all AI services when the selected
 provider changes, and provider generations gate late callbacks from cancelled
 work.
 
-Linked frameworks: Carbon (hotkeys), ScreenCaptureKit (capture + system
-audio), ServiceManagement (launch at login), Speech + AVFoundation
-(transcription).
+Linked frameworks: Carbon (hotkeys), ScreenCaptureKit (capture),
+ServiceManagement (launch at login).
 
 ### Testing
 
 XCTest suites live in `Tests/GlanceTests/` (`@testable import Glance`) and
 cover the provider adapters, stream-event decoding, Composio argument wiring,
 overlay/backend lifecycles, provider-generation gating, and the onboarding
-catalog. Run `swift test` before every PR. Screen capture, microphone,
+catalog. Run `swift test` before every PR. Screen capture,
 hotkeys, launch-at-login, and signing behavior must be exercised manually in
 the bundled app — they depend on macOS permissions.
 
