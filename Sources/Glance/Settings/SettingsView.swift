@@ -63,6 +63,23 @@ struct SettingsView: View {
                 }
                 LabeledContent {
                     HStack(spacing: 8) {
+                        Slider(value: $prefs.chatTextScale, in: Preferences.chatTextScaleRange, step: 0.05)
+                            .frame(width: 140)
+                        Text("\(Int((prefs.chatTextScale * 100).rounded()))%")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                        Button("Reset") {
+                            prefs.chatTextScale = Preferences.defaultChatTextScale
+                        }
+                        .controlSize(.small)
+                        .disabled(prefs.chatTextScale == Preferences.defaultChatTextScale)
+                    }
+                } label: {
+                    settingLabel("Chat text size", "Size of your questions and the answers in the overlay")
+                }
+                LabeledContent {
+                    HStack(spacing: 8) {
                         ColorPicker("", selection: $prefs.accentColor, supportsOpacity: false)
                             .labelsHidden()
                         Button("Reset") {

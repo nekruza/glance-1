@@ -503,6 +503,19 @@ struct TaskSettingsView: View {
                 }
             }
             Divider().overlay(DS.divider)
+            row("Chat text size", "Size of your questions and the answers in the ask overlay") {
+                HStack(spacing: DS.Space.xs) {
+                    Slider(value: $prefs.chatTextScale, in: Preferences.chatTextScaleRange, step: 0.05)
+                        .frame(width: 130)
+                    Text("\(Int((prefs.chatTextScale * 100).rounded()))%")
+                        .font(DS.Typo.mono)
+                        .foregroundStyle(DS.textSecondary).frame(width: 32, alignment: .trailing)
+                    Button("Reset") { prefs.chatTextScale = Preferences.defaultChatTextScale }
+                        .controlSize(.small)
+                        .disabled(prefs.chatTextScale == Preferences.defaultChatTextScale)
+                }
+            }
+            Divider().overlay(DS.divider)
             row("Accent color", "Buttons, badges and highlights") {
                 HStack(spacing: DS.Space.xs) {
                     ColorPicker("", selection: $prefs.accentColor, supportsOpacity: false)

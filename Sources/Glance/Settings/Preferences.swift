@@ -11,6 +11,7 @@ final class Preferences: ObservableObject {
         static let hotkeyKeyCode = "hotkey.keyCode"
         static let hotkeyModifiers = "hotkey.modifiers"
         static let overlayOpacity = "overlay.opacity"
+        static let chatTextScale = "overlay.chatTextScale"
         static let accentHex = "overlay.accentHex"
         static let taskHotkeyKeyCode = "taskHotkey.keyCode"
         static let taskHotkeyModifiers = "taskHotkey.modifiers"
@@ -51,6 +52,11 @@ final class Preferences: ObservableObject {
 
     /// Default dark-tint opacity of the overlay background.
     static let defaultOverlayOpacity: Double = 0.7
+
+    /// Chat text size multiplier for the ask overlay (your question and the
+    /// answer). 1.0 = the designed size.
+    static let defaultChatTextScale: Double = 1.0
+    static let chatTextScaleRange: ClosedRange<Double> = 0.8...1.6
 
     /// Default accent — mint green (DS light design). Existing installs keep
     /// their saved color until Reset.
@@ -262,6 +268,11 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
     }
 
+    /// Chat text size multiplier (see `chatTextScaleRange`).
+    @Published var chatTextScale: Double {
+        didSet { defaults.set(chatTextScale, forKey: Keys.chatTextScale) }
+    }
+
     /// Accent color as an RRGGBB hex string (drives Theme.accent everywhere).
     @Published var accentHex: String {
         didSet { defaults.set(accentHex, forKey: Keys.accentHex) }
@@ -285,6 +296,12 @@ final class Preferences: ObservableObject {
             overlayOpacity = min(max(defaults.double(forKey: Keys.overlayOpacity), 0.2), 1.0)
         } else {
             overlayOpacity = Self.defaultOverlayOpacity
+        }
+        if defaults.object(forKey: Keys.chatTextScale) != nil {
+            let r = Self.chatTextScaleRange
+            chatTextScale = min(max(defaults.double(forKey: Keys.chatTextScale), r.lowerBound), r.upperBound)
+        } else {
+            chatTextScale = Self.defaultChatTextScale
         }
         accentHex = defaults.string(forKey: Keys.accentHex) ?? Self.defaultAccentHex
         if defaults.object(forKey: Keys.taskHotkeyKeyCode) != nil {

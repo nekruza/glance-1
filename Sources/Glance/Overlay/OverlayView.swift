@@ -14,6 +14,9 @@ struct OverlayView: View {
     // re-engages.
     @State private var pinAtBottom = true
 
+    /// Chat text size multiplier from Settings (your text + the answer).
+    private var textScale: CGFloat { CGFloat(prefs.chatTextScale) }
+
     /// True while the panel height should track its content (idle prompt row).
     private var growsWithContent: Bool {
         session.turns.isEmpty
@@ -117,7 +120,7 @@ struct OverlayView: View {
             TextField("", text: $session.input, prompt: Text(placeholder).foregroundColor(Theme.faint),
                       axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14))
+                .font(.system(size: 14 * textScale))
                 .lineLimit(1...6)
                 .tint(Theme.accent)
                 .focused($inputFocused)
@@ -210,7 +213,7 @@ struct OverlayView: View {
         HStack(alignment: .center, spacing: 12) {
             sparkBadge(size: 26)
             Text(turn.question)
-                .font(.system(size: 14.5, weight: .medium))
+                .font(.system(size: 14.5 * textScale, weight: .medium))
                 .lineSpacing(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let thumb = turn.thumbnail {
@@ -230,7 +233,7 @@ struct OverlayView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13))
                 Text(turn.answer)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13 * textScale))
                     .lineSpacing(3)
                     .foregroundStyle(Theme.fg.opacity(0.92))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -242,8 +245,9 @@ struct OverlayView: View {
                 .strokeBorder(Theme.danger.opacity(0.28), lineWidth: 1))
         } else {
             MarkdownText(text: turn.answer)
-                .font(.system(size: 13))
+                .font(.system(size: 13 * textScale))
                 .foregroundStyle(Theme.fg.opacity(0.92))
+                .environment(\.chatTextScale, textScale)
         }
     }
 
@@ -251,7 +255,7 @@ struct OverlayView: View {
         HStack(spacing: 10) {
             BouncingDots()
             Text(session.attachImage ? "Reading your screen…" : "Thinking…")
-                .foregroundStyle(Theme.muted).font(.system(size: 13))
+                .foregroundStyle(Theme.muted).font(.system(size: 13 * textScale))
         }
     }
 
@@ -279,7 +283,7 @@ struct OverlayView: View {
                       prompt: Text(placeholder).foregroundColor(Theme.faint),
                       axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13.5))
+                .font(.system(size: 13.5 * textScale))
                 .lineLimit(1...6)
                 .tint(Theme.accent)
                 .focused($inputFocused)

@@ -1,5 +1,18 @@
 import SwiftUI
 
+private struct ChatTextScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
+extension EnvironmentValues {
+    /// User's chat text size multiplier (Settings). Only the ask overlay sets
+    /// it; every other Markdown surface stays at 1.
+    var chatTextScale: CGFloat {
+        get { self[ChatTextScaleKey.self] }
+        set { self[ChatTextScaleKey.self] = newValue }
+    }
+}
+
 /// Colors for MarkdownText rendering. `.dark` matches the overlay's original
 /// values exactly; `.light` maps to the DS tokens for the task surfaces.
 struct MarkdownPalette {
@@ -75,6 +88,7 @@ struct MarkdownText: View {
     /// Rendering palette — defaults to the overlay's dark glass; the light
     /// task surfaces pass `.light`.
     var palette: MarkdownPalette = .dark
+    @Environment(\.chatTextScale) private var scale
 
     var body: some View {
         let blocks = Self.parse(text)
@@ -82,7 +96,7 @@ struct MarkdownText: View {
         // sit tight together while headings and quotes get real breathing room.
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
-                block.view(palette)
+                block.view(palette, scale)
                     .padding(.top, Self.gap(from: i > 0 ? blocks[i - 1] : nil, to: block))
             }
         }
@@ -117,26 +131,26 @@ struct MarkdownText: View {
         private static let indentStep: CGFloat = 16
         private static let glyphs = ["•", "◦", "▪", "·"]
 
-        @ViewBuilder func view(_ palette: MarkdownPalette) -> some View {
+        @ViewBuilder func view(_ palette: MarkdownPalette, _ scale: CGFloat) -> some View {
             switch self {
             case .heading(let level, let t):
                 if level >= 2 && palette.uppercaseLabels {
                     // Light task surfaces: uppercase, tracked, muted labels.
                     Text(t.uppercased())
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11 * scale, weight: .semibold))
                         .tracking(0.4)
                         .foregroundStyle(palette.heading)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if level >= 2 {
                     // Overlay: sentence case at full strength, so a numbered
                     // step ("1. Schema") reads as a title, not a footnote.
-                    Text(Self.inline(t, palette))
-                        .font(.system(size: 13.5, weight: .semibold))
+                    Text(Self.inline(t, palette, scale: scale))
+                        .font(.system(size: 13.5 * scale, weight: .semibold))
                         .foregroundStyle(palette.title)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(Self.inline(t, palette))
-                        .font(.system(size: 16, weight: .semibold))
+                    Text(Self.inline(t, palette, scale: scale))
+                        .font(.system(size: 16 * scale, weight: .semibold))
                         .tracking(-0.2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -153,7 +167,7 @@ struct MarkdownText: View {
                         Text(Self.glyphs[min(depth, Self.glyphs.count - 1)])
                             .foregroundStyle(palette.bullet)
                     }
-                    Text(Self.inline(t, palette))
+                    Text(Self.inline(t, palette, scale: scale))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -162,7 +176,7 @@ struct MarkdownText: View {
             case .ordered(let depth, let n, let t):
                 HStack(alignment: .top, spacing: 8) {
                     Text("\(n).").foregroundStyle(palette.bullet).monospacedDigit()
-                    Text(Self.inline(t, palette))
+                    Text(Self.inline(t, palette, scale: scale))
                         .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -176,7 +190,7 @@ struct MarkdownText: View {
                 // colour — never because we printed a ">" at the user.
                 // The rail is an overlay, not an HStack sibling: a sibling with
                 // maxHeight .infinity collapses under fixedSize, leaving a stub.
-                Text(Self.inline(t, palette))
+                Text(Self.inline(t, palette, scale: scale))
                     .lineSpacing(3)
                     .foregroundStyle(palette.quoteFg)
                     .fixedSize(horizontal: false, vertical: true)
@@ -193,7 +207,7 @@ struct MarkdownText: View {
                 DraftCard(markdown: t, palette: palette)
 
             case .paragraph(let t):
-                Text(Self.inline(t, palette))
+                Text(Self.inline(t, palette, scale: scale))
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -212,7 +226,7 @@ struct MarkdownText: View {
         /// single block so streaming can't corrupt block structure. Runs tagged
         /// `.code` get a monospaced face and a chip background, which Text does
         /// not apply on its own.
-        static func inline(_ s: String, _ palette: MarkdownPalette) -> AttributedString {
+        static func inline(_ s: String, _ palette: MarkdownPalette, scale: CGFloat = 1) -> AttributedString {
             var out = (try? AttributedString(
                 markdown: s,
                 options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
@@ -223,7 +237,7 @@ struct MarkdownText: View {
                 (run.inlinePresentationIntent?.contains(.code) ?? false) ? run.range : nil
             }
             for range in codeRuns {
-                out[range].font = .system(size: 12, design: .monospaced)
+                out[range].font = .system(size: 12 * scale, design: .monospaced)
                 out[range].backgroundColor = palette.inlineCodeBg
             }
             return out
@@ -488,6 +502,7 @@ struct MarkdownTable: View {
     let rows: [[String]]
     let alignments: [Alignment]
     let palette: MarkdownPalette
+    @Environment(\.chatTextScale) private var scale
 
     var body: some View {
         let caps = Self.columnCaps(header: header, rows: rows)
@@ -495,7 +510,7 @@ struct MarkdownTable: View {
             GridRow {
                 ForEach(header.indices, id: \.self) { c in
                     cell(Text(header[c].uppercased())
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 10 * scale, weight: .semibold))
                             .tracking(0.4)
                             .foregroundStyle(palette.heading),
                          column: c, cap: caps[c])
@@ -508,7 +523,7 @@ struct MarkdownTable: View {
                 Rectangle().fill(palette.rule).frame(height: 1)
                 GridRow {
                     ForEach(header.indices, id: \.self) { c in
-                        cell(Text(MarkdownText.Block.inline(rows[r][c], palette))
+                        cell(Text(MarkdownText.Block.inline(rows[r][c], palette, scale: scale))
                                 .lineSpacing(2),
                              column: c, cap: caps[c])
                     }

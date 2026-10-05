@@ -8,7 +8,9 @@ struct CodeBlockView: View {
     let code: String
     let palette: MarkdownPalette
 
-    private static let monoSize: CGFloat = 11.5
+    @Environment(\.chatTextScale) private var scale
+
+    private var monoSize: CGFloat { 11.5 * scale }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,8 +31,8 @@ struct CodeBlockView: View {
             Rectangle().fill(palette.rule).frame(height: 1)
 
             Text(SyntaxHighlighter.highlight(code, language: language,
-                                             theme: palette.syntax, monoSize: Self.monoSize))
-                .font(.system(size: Self.monoSize, design: .monospaced))
+                                             theme: palette.syntax, monoSize: monoSize))
+                .font(.system(size: monoSize, design: .monospaced))
                 .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14).padding(.vertical, 12)
