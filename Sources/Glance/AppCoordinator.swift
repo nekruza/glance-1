@@ -599,6 +599,9 @@ final class AppCoordinator {
         overlay.session.clearHandler = { [weak self] in
             self?.clearSession()
         }
+        overlay.session.stopHandler = { [weak self] in
+            self?.backend?.interrupt()
+        }
         if showsHistory {
             // Populate the Claude History dropdown off the main thread
             // (directory scan + head parse of each candidate file).
@@ -781,9 +784,15 @@ final class AppCoordinator {
               backendLifecycle.isCurrent(lease) else { return }
         let kind = kind ?? prefs.askBackend
         let generation = generation ?? providerGeneration
+        // Stopped while the screenshot was being taken: don't send it at all.
+        guard let turnId = overlay.session.turns.last?.id,
+              !overlay.session.lastTurnStopped else { return }
         backend.ask(question: question, imagePNG: image) { [weak self] event in
             guard let self, self.backendLifecycle.isCurrent(lease),
-                  self.isCurrentProvider(kind: kind, generation: generation) else { return }
+                  self.isCurrentProvider(kind: kind, generation: generation),
+                  // Events already queued when Stop was pressed.
+                  self.overlay.session.turns.last?.id == turnId,
+                  !self.overlay.session.lastTurnStopped else { return }
             switch event {
             case .token(let text): self.overlay.session.appendToken(text)
             case .completed:

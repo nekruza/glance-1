@@ -38,6 +38,11 @@ final class ClaudeBackend: AskBackend {
     private var currentHandler: ((AskBackendEvent) -> Void)?
     private var catalogHandler: ((BackendCatalog) -> Void)?
     private var sawTokenThisTurn = false
+    /// User messages written whose `result` line hasn't arrived yet.
+    private var openTurns = 0
+    /// Interrupted turns whose leftover lines (through their `result`, which
+    /// the CLI reports as `error_during_execution`) must be dropped.
+    private var discardedTurns = 0
     private var timeoutWork: DispatchWorkItem?
     private var shutdownForceKillWork: DispatchWorkItem?
     private var shuttingDown = false
@@ -165,9 +170,26 @@ final class ClaudeBackend: AskBackend {
             }
             do {
                 try handle.write(contentsOf: payload)
+                self.openTurns += 1
             } catch {
                 self.emit(.failed("Couldn't send question to Claude CLI."))
             }
+        }
+    }
+
+    /// Send the CLI's `interrupt` control request — what Esc does in the
+    /// terminal. It answers with an `error_during_execution` result for the
+    /// stopped turn and then takes follow-ups on the same session.
+    func interrupt() {
+        ioQueue.async { [weak self] in
+            guard let self, self.openTurns > self.discardedTurns,
+                  let handle = self.stdinPipe?.fileHandleForWriting else { return }
+            self.timeoutWork?.cancel()
+            self.timeoutWork = nil
+            self.currentHandler = nil
+            self.discardedTurns += 1
+            let request = #"{"type":"control_request","request_id":"glance-stop-\#(UUID().uuidString)","request":{"subtype":"interrupt"}}"#
+            try? handle.write(contentsOf: Data((request + "\n").utf8))
         }
     }
 
@@ -191,6 +213,8 @@ final class ClaudeBackend: AskBackend {
             }
             self.stdoutBuffer.removeAll()
             self.didSendFirstMessage = false
+            self.openTurns = 0
+            self.discardedTurns = 0
         }
     }
 
@@ -214,6 +238,14 @@ final class ClaudeBackend: AskBackend {
 
         if let catalog = line.catalog, let handler = catalogHandler {
             DispatchQueue.main.async { handler(catalog) }
+        }
+
+        if line.isResult { openTurns = max(openTurns - 1, 0) }
+        // Lines still belonging to a turn the user stopped: its partial text,
+        // tool runs and the interrupted result never reach the next turn.
+        if discardedTurns > 0 {
+            if line.isResult { discardedTurns -= 1 }
+            return
         }
 
         // Local commands (/context, /model, /usage…) answer with one whole
@@ -257,6 +289,8 @@ final class ClaudeBackend: AskBackend {
         }
         process = nil
         stdinPipe = nil
+        openTurns = 0
+        discardedTurns = 0
         if shuttingDown { finishShutdown() }
     }
 

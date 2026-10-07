@@ -267,10 +267,19 @@ struct OverlayView: View {
             // Markdown — keep its lines, indents and meters (/usage, /model…).
             CommandOutputView(text: turn.answer, textScale: textScale)
         } else {
-            MarkdownText(text: turn.answer)
-                .font(.system(size: 13 * textScale))
-                .foregroundStyle(Theme.fg.opacity(0.92))
-                .environment(\.chatTextScale, textScale)
+            VStack(alignment: .leading, spacing: 10) {
+                if !turn.answer.isEmpty {
+                    MarkdownText(text: turn.answer)
+                        .font(.system(size: 13 * textScale))
+                        .foregroundStyle(Theme.fg.opacity(0.92))
+                        .environment(\.chatTextScale, textScale)
+                }
+                if turn.stopped {
+                    Label("Stopped", systemImage: "stop.circle")
+                        .font(.system(size: 12 * textScale))
+                        .foregroundStyle(Theme.muted)
+                }
+            }
         }
     }
 
@@ -340,7 +349,30 @@ struct OverlayView: View {
         !session.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !session.isWorking
     }
 
-    private var sendButton: some View {
+    /// While a turn runs, Send becomes Stop (Esc still only hides the overlay).
+    @ViewBuilder private var sendButton: some View {
+        if session.isWorking {
+            stopButton
+        } else {
+            submitButton
+        }
+    }
+
+    private var stopButton: some View {
+        Button(action: { session.stopTurn() }) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.82))
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Theme.fg.opacity(0.85)))
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 5)
+        .help("Stop")
+        .accessibilityLabel("Stop")
+    }
+
+    private var submitButton: some View {
         Button(action: { session.submit() }) {
             Image(systemName: "arrow.up")
                 .font(.system(size: 12, weight: .bold))

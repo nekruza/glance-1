@@ -38,6 +38,10 @@ protocol AskBackend: AnyObject {
     func configure(systemPrompt: String)
     func startWarm()
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void)
+    /// Stop the turn in flight (the overlay's Stop button) but keep the
+    /// conversation, like Esc in the terminal. The stopped turn's handler gets
+    /// no further events; the next `ask` continues the same session.
+    func interrupt()
     func shutdown()
     /// Receives the slash-command catalog (and account) whenever the backend
     /// learns or refreshes it; delivered on main. Register before `startWarm()`.
@@ -50,4 +54,7 @@ extension AskBackend {
     func configure(systemPrompt: String) {}
     /// Backends without a command catalog never call back.
     func onCatalog(_ handler: @escaping (BackendCatalog) -> Void) {}
+    /// Backends that can't stop a turn let it finish; the overlay already
+    /// ignores the stopped turn's events.
+    func interrupt() {}
 }

@@ -91,6 +91,23 @@ final class CodexBackend: AskBackend {
         }
     }
 
+    /// `codex exec` has no interrupt message, but each question is its own
+    /// process: end it. The thread id is kept, so the next question resumes.
+    func interrupt() {
+        // Callbacks already queued on main for this turn go stale first.
+        advanceCallbackGeneration()
+        ioQueue.async { [self] in
+            guard self.currentHandler != nil else { return }
+            self.timeoutWork?.cancel()
+            self.timeoutWork = nil
+            self.advanceCallbackGeneration()
+            self.currentHandler = nil
+            if let process = self.process, process.isRunning {
+                self.requestShutdown(of: process)
+            }
+        }
+    }
+
     func shutdown() {
         // Invalidate callbacks already queued on main before scheduling the
         // slower process/file cleanup on ioQueue.

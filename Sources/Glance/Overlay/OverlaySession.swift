@@ -17,6 +17,8 @@ final class OverlaySession: ObservableObject {
         /// Output of a CLI command (/usage…) rather than a model answer;
         /// rendered terminal-style unless it is Markdown.
         var isCommandOutput: Bool = false
+        /// The user pressed Stop; the answer is whatever streamed before it.
+        var stopped: Bool = false
     }
 
     @Published var input: String = "" {
@@ -83,6 +85,7 @@ final class OverlaySession: ObservableObject {
     var settingsHandler: (() -> Void)?
     var historyHandler: ((SessionSummary) -> Void)?
     var clearHandler: (() -> Void)?
+    var stopHandler: (() -> Void)?
 
     var canSubmit: Bool {
         !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isWorking
@@ -99,6 +102,19 @@ final class OverlaySession: ObservableObject {
         suggestions = []
         submitHandler?(q)
     }
+
+    /// Stop button: end the turn now and keep its partial answer. The
+    /// conversation stays, so the next message continues it.
+    func stopTurn() {
+        guard isWorking else { return }
+        isWorking = false
+        activity = nil
+        if !turns.isEmpty { turns[turns.count - 1].stopped = true }
+        stopHandler?()
+    }
+
+    /// True once the user stopped the newest turn — its late events are stale.
+    var lastTurnStopped: Bool { turns.last?.stopped == true }
 
     /// Flip the screenshot attachment for the next message. Shared by the
     /// footer photo button and the ⌘J shortcut (OverlayController's key monitor).
