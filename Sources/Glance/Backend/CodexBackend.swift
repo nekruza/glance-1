@@ -367,7 +367,7 @@ final class CodexBackend: AskBackend {
         switch event {
         case .completed, .failed:
             currentHandler = nil
-        case .token, .model:
+        case .token, .model, .commandOutput:
             break
         }
         DispatchQueue.main.async { [weak self] in

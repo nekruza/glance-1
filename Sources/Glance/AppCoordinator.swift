@@ -135,7 +135,7 @@ final class AppCoordinator {
         replaceProviderServices(for: prefs.askBackend)
         configureTaskInfrastructureIfNeeded()
 
-        overlay.onDismiss = { [weak self] in self?.endSession() }
+        overlay.onDismiss = { [weak self] in self?.overlayDismissed() }
 
         // Warm ScreenCaptureKit's shareable-content cache so the first capture
         // isn't slow (helps FR2), and record whether capture actually works —
@@ -697,6 +697,7 @@ final class AppCoordinator {
                 if !question.hasPrefix("/") { self.generateSuggestions() }
             case .failed(let msg):  self.overlay.session.failTurn(msg)
             case .model(let id):    self.overlay.session.modelName = ModelCatalog.prettify(id)
+            case .commandOutput(let text): self.overlay.session.appendCommandOutput(text)
             }
         }
     }
@@ -738,6 +739,18 @@ final class AppCoordinator {
 
     /// Overlay dismissed. Stop the selected CLI immediately and invalidate any
     /// capture/backend callbacks that were suspended or queued for this session.
+    /// ⌥Space / Esc / ✕ only hides the overlay: the conversation and its CLI
+    /// process stay, so the next summon shows the latest message and
+    /// follow-ups keep their context. Trash or /clear starts fresh
+    /// (`clearSession`); quitting or a provider switch ends it (`endSession`).
+    func overlayDismissed() {
+        // Each summon captures a fresh still; never send a stale one.
+        pendingImagePNG = nil
+        pendingCaptureLabel = ""
+        overlay.session.captureLabel = ""
+    }
+
+    /// Full teardown: backend shut down, conversation wiped.
     func endSession() {
         teardownBackend()
         pendingImagePNG = nil

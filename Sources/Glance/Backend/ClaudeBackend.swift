@@ -216,13 +216,13 @@ final class ClaudeBackend: AskBackend {
             DispatchQueue.main.async { handler(catalog) }
         }
 
-        // Local commands (/context, /model, /cost…) answer with one whole
+        // Local commands (/context, /model, /usage…) answer with one whole
         // assistant message and no stream deltas; without this the turn
         // would complete blank.
         if !sawTokenThisTurn, let text = line.successResultText {
             sawTokenThisTurn = true
             timeoutWork?.cancel()
-            emit(.token(text))
+            emit(.commandOutput(text))
         }
 
         if let event = line.askBackendEvent {
@@ -232,7 +232,7 @@ final class ClaudeBackend: AskBackend {
                     sawTokenThisTurn = true
                     timeoutWork?.cancel() // first token arrived (FR13)
                 }
-            case .completed, .failed, .model:
+            case .completed, .failed, .model, .commandOutput:
                 break
             }
             emit(event)
@@ -304,7 +304,7 @@ final class ClaudeBackend: AskBackend {
         switch event {
         case .failed:
             currentHandler = nil
-        case .completed, .token, .model:
+        case .completed, .token, .model, .commandOutput:
             break
         }
         DispatchQueue.main.async { handler?(event) }

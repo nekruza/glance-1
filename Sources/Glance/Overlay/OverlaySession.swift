@@ -14,6 +14,9 @@ final class OverlaySession: ObservableObject {
         /// Downscaled preview of the screenshot sent with this question, shown
         /// in the asked header. nil for text-only turns.
         var thumbnail: NSImage?
+        /// Output of a CLI command (/usage…) rather than a model answer;
+        /// rendered terminal-style unless it is Markdown.
+        var isCommandOutput: Bool = false
     }
 
     @Published var input: String = "" {
@@ -215,6 +218,14 @@ final class OverlaySession: ObservableObject {
         isWorking = false
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].answer += text
+    }
+
+    /// A CLI command's whole output (see `AskBackendEvent.commandOutput`).
+    func appendCommandOutput(_ text: String) {
+        isWorking = false
+        guard !turns.isEmpty else { return }
+        turns[turns.count - 1].answer = text
+        turns[turns.count - 1].isCommandOutput = true
     }
 
     func completeTurn() {

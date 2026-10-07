@@ -21,6 +21,10 @@ enum AskBackendEvent {
     /// The model id the CLI reports on its `system/init` line, e.g.
     /// "claude-fable-5-1". Informational; arrives once per spawned process.
     case model(String)
+    /// The whole output of a CLI-local command (/usage, /context, /model…),
+    /// which arrives as one result instead of streamed tokens and is laid out
+    /// for a terminal rather than written as Markdown.
+    case commandOutput(String)
 }
 
 protocol AskBackend: AnyObject {

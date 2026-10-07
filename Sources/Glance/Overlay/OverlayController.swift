@@ -23,9 +23,11 @@ final class OverlayController {
     private var heightCancellable: AnyCancellable?
     private var keyMonitor: Any?
 
-    /// Deterministic window heights — no SwiftUI/window auto-sizing feedback
-    /// loop (that raced and clipped the input + footer).
-    private let conversationHeight: CGFloat = 560
+    /// Deterministic window sizes — no SwiftUI/window auto-sizing feedback
+    /// loop (that raced and clipped the input + footer). Width and the
+    /// conversation height follow the user's last edge drag.
+    private var sizing = OverlaySizing()
+    private var resizeObserver: NSObjectProtocol?
     /// Measured from the idle content the first time we present while empty.
     private var idleHeight: CGFloat = 96
 
@@ -36,6 +38,14 @@ final class OverlayController {
 
     init() {
         panel.onCancel = { [weak self] in self?.cancel() }
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didEndLiveResizeNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, (note.object as? NSWindow) === self.panel else { return }
+                self.userDidResize()
+            }
+        }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
@@ -199,8 +209,27 @@ final class OverlayController {
     /// One source of truth for the window size: height is idle-compact until
     /// there's a conversation to show.
     private func applySize() {
-        let height = session.turns.isEmpty ? idleHeight : conversationHeight
-        panel.setContentSize(NSSize(width: Theme.overlayWidth, height: height))
+        let conversation = !session.turns.isEmpty
+        var size = sizing.contentSize(isConversation: conversation, idleHeight: idleHeight)
+        // Mid-drag the idle height re-measures as text rewraps; keep the
+        // width under the user's pointer rather than the last saved one.
+        if panel.inLiveResize, let content = panel.contentView {
+            size.width = content.frame.width
+        }
+        // Idle height follows the content, so only the width is draggable there.
+        panel.contentMinSize = NSSize(width: OverlaySizing.minWidth,
+                                      height: conversation ? OverlaySizing.minConversationHeight : size.height)
+        panel.contentMaxSize = NSSize(width: 10_000, height: conversation ? 10_000 : size.height)
+        panel.setContentSize(size)
+    }
+
+    /// An edge drag ended: remember the size, and pin the panel's new top-left
+    /// so the next auto-resize grows from where the user left it.
+    private func userDidResize() {
+        let content = panel.contentRect(forFrameRect: panel.frame).size
+        sizing.recordUserResize(content, isConversation: !session.turns.isEmpty)
+        panel.anchoredLeft = panel.frame.minX
+        panel.anchoredTop = panel.frame.maxY
     }
 
     private func positionPanel() {

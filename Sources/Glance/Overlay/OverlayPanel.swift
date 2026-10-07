@@ -9,7 +9,8 @@ final class OverlayPanel: NSPanel {
 
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 620, height: 120),
-                   styleMask: [.borderless, .nonactivatingPanel],
+                   // .resizable: drag any edge to resize (sizes kept by OverlaySizing).
+                   styleMask: [.borderless, .nonactivatingPanel, .resizable],
                    backing: .buffered,
                    defer: false)
         isFloatingPanel = true

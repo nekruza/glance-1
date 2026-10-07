@@ -12,6 +12,8 @@ extension AskBackendEvent: Equatable {
             return lhsMessage == rhsMessage
         case let (.model(lhsID), .model(rhsID)):
             return lhsID == rhsID
+        case let (.commandOutput(lhsText), .commandOutput(rhsText)):
+            return lhsText == rhsText
         default:
             return false
         }

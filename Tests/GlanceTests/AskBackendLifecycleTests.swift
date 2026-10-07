@@ -51,6 +51,25 @@ final class AskBackendLifecycleTests: XCTestCase {
         XCTAssertTrue(overlay.session.suggestions.isEmpty)
     }
 
+    func testDismissingTheOverlayKeepsTheConversationAndItsBackend() {
+        let lifecycle = AskBackendLifecycle()
+        let backend = BackendSpy()
+        lifecycle.install(backend)
+        let overlay = OverlayController()
+        let coordinator = AppCoordinator(backendLifecycle: lifecycle, overlay: overlay)
+        overlay.session.turns = [
+            OverlaySession.Turn(question: "Latest question", answer: "Latest answer")
+        ]
+        overlay.session.input = "Half-typed follow-up"
+
+        coordinator.overlayDismissed()
+
+        XCTAssertEqual(backend.shutdownCount, 0, "the CLI keeps the conversation's context")
+        XCTAssertNotNil(lifecycle.backend)
+        XCTAssertEqual(overlay.session.turns.map(\.answer), ["Latest answer"])
+        XCTAssertEqual(overlay.session.input, "Half-typed follow-up")
+    }
+
     func testCoordinatorProviderSwitchShutsDownAskBackendBeforeReplacingTaskServices() throws {
         let lifecycle = AskBackendLifecycle()
         let backend = BackendSpy()

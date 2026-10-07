@@ -37,7 +37,8 @@ struct OverlayView: View {
             }
             footer
         }
-        .frame(width: Theme.overlayWidth)
+        // Width comes from the window, which the user can drag (OverlaySizing).
+        .frame(minWidth: OverlaySizing.minWidth, maxWidth: .infinity)
         // Idle mode: refuse the window's proposed height and report the
         // TRUE ideal height instead. Without this the hosting view forces
         // the column into the window's current (short) bounds, SwiftUI
@@ -155,21 +156,21 @@ struct OverlayView: View {
             ScrollView {
                 transcriptContent
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // Detects user scrolling AND follows the bottom while
+                    // pinned (streamed text, whole command outputs, chips or
+                    // the `/` menu shrinking the viewport, re-summons).
                     .background(ScrollPinTracker(pinned: $pinAtBottom))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            // Streamed chunks follow the bottom only while pinned. Instant
-            // scroll: chunks arrive faster than any animation, so animating
-            // each one queues up and feels rubbery.
-            .onChange(of: session.turns.last?.answer) { _, _ in
-                if pinAtBottom { scrollToEnd(proxy) }
-            }
             // New turn = the user just asked something: snap down and re-pin
             // regardless of where they had scrolled.
             .onChange(of: session.turns.count) { _, _ in
                 pinAtBottom = true
                 scrollToEnd(proxy, animated: true)
             }
+            // Re-summon (the conversation is kept across ⌥Space): open on the
+            // latest message — the tracker scrolls once the content lays out.
+            .onAppear { pinAtBottom = true }
             .overlay(alignment: .bottom) {
                 if !pinAtBottom {
                     jumpToBottomPill(proxy).padding(.bottom, 10)
@@ -247,6 +248,10 @@ struct OverlayView: View {
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.danger.opacity(0.09)))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Theme.danger.opacity(0.28), lineWidth: 1))
+        } else if turn.isCommandOutput && !CommandOutput.looksLikeMarkdown(turn.answer) {
+            // CLI command output is laid out for a terminal, not written as
+            // Markdown — keep its lines, indents and meters (/usage, /model…).
+            CommandOutputView(text: turn.answer, textScale: textScale)
         } else {
             MarkdownText(text: turn.answer)
                 .font(.system(size: 13 * textScale))
@@ -536,12 +541,17 @@ struct OverlayView: View {
         return session.attachImage ? "Ask about what's on screen…" : "Ask anything (no screenshot)…"
     }
 
+    /// Always deferred a run-loop turn: called from layout callbacks
+    /// (preference changes, onAppear), where a scrollTo issued mid-pass is
+    /// dropped and the view stays put.
     private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = false) {
-        guard let last = session.turns.last?.id else { return }
-        if animated {
-            withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last, anchor: .bottom) }
-        } else {
-            proxy.scrollTo(last, anchor: .bottom)
+        DispatchQueue.main.async {
+            guard let last = session.turns.last?.id else { return }
+            if animated {
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last, anchor: .bottom) }
+            } else {
+                proxy.scrollTo(last, anchor: .bottom)
+            }
         }
     }
 }
@@ -557,6 +567,7 @@ private struct ScrollPinTracker: NSViewRepresentable {
     func makeNSView(context: Context) -> TrackerView { TrackerView() }
 
     func updateNSView(_ view: TrackerView, context: Context) {
+        view.isPinned = pinned
         view.onUserScroll = { distanceFromBottom in
             let nowPinned = distanceFromBottom < 50
             if nowPinned != pinned { pinned = nowPinned }
@@ -565,6 +576,7 @@ private struct ScrollPinTracker: NSViewRepresentable {
 
     final class TrackerView: NSView {
         var onUserScroll: ((CGFloat) -> Void)?
+        var isPinned = true
         private var observers: [NSObjectProtocol] = []
 
         override func viewDidMoveToWindow() {
@@ -582,9 +594,43 @@ private struct ScrollPinTracker: NSViewRepresentable {
                     let distance = doc.isFlipped
                         ? doc.frame.height - clip.bounds.maxY
                         : clip.bounds.minY
+                    // Unpin at once, before SwiftUI's round-trip, so a chunk
+                    // landing mid-gesture can't yank the user back down.
+                    self?.isPinned = distance < 50
                     self?.onUserScroll?(distance)
                 })
             }
+            // Follow the bottom from AppKit, after layout: the document view
+            // grows as text lays out; the clip view shrinks when chips or the
+            // `/` menu appear or the window is resized. (SwiftUI-side triggers
+            // fired before layout, or — preferences out of the ScrollView —
+            // not at all, so the transcript stayed put.) Programmatic scrolls
+            // post no live-scroll notifications, so they never unpin.
+            let follow: (Notification) -> Void = { [weak self, weak scroll] _ in
+                guard let self, let scroll, self.isPinned else { return }
+                Self.scrollToBottom(scroll)
+            }
+            if let doc = scroll.documentView {
+                doc.postsFrameChangedNotifications = true
+                observers.append(NotificationCenter.default.addObserver(
+                    forName: NSView.frameDidChangeNotification, object: doc, queue: .main, using: follow))
+            }
+            scroll.contentView.postsFrameChangedNotifications = true
+            observers.append(NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main, using: follow))
+            DispatchQueue.main.async { [weak self, weak scroll] in
+                guard let self, let scroll, self.isPinned else { return }
+                Self.scrollToBottom(scroll)
+            }
+        }
+
+        static func scrollToBottom(_ scroll: NSScrollView) {
+            guard let doc = scroll.documentView else { return }
+            let clip = scroll.contentView
+            let y = doc.isFlipped ? max(0, doc.frame.height - clip.bounds.height) : 0
+            guard abs(clip.bounds.minY - y) > 0.5 else { return }
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+            scroll.reflectScrolledClipView(clip)
         }
 
         deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
