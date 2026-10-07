@@ -28,7 +28,8 @@ struct OverlayView: View {
                 // Provider CLI missing/broken: explain the fix instead of a
                 // prompt that couldn't answer anyway.
                 ProviderSetupCard(issue: issue, textScale: textScale,
-                                  onRetry: { session.setupRetryHandler?() })
+                                  onRetry: { session.setupRetryHandler?() },
+                                  onTerminal: { session.setupTerminalHandler?($0) })
             } else if session.turns.isEmpty {
                 promptRow
                 slashMenu

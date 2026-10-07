@@ -232,7 +232,7 @@ final class ClaudeBackend: AskBackend {
                     sawTokenThisTurn = true
                     timeoutWork?.cancel() // first token arrived (FR13)
                 }
-            case .completed, .failed, .model, .commandOutput:
+            case .completed, .failed, .model, .commandOutput, .signedOut:
                 break
             }
             emit(event)
@@ -240,7 +240,7 @@ final class ClaudeBackend: AskBackend {
         }
 
         if line.isResult, line.isError == true {
-            emit(.failed(Self.friendlyError(from: line.result)))
+            emit(Self.isAuthError(line.result) ? .signedOut : .failed(Self.friendlyError(from: line.result)))
         }
     }
 
@@ -302,7 +302,7 @@ final class ClaudeBackend: AskBackend {
         // On completion/failure the turn is over; keep handler for follow-ups
         // only after `completed`.
         switch event {
-        case .failed:
+        case .failed, .signedOut:
             currentHandler = nil
         case .completed, .token, .model, .commandOutput:
             break
@@ -330,6 +330,13 @@ final class ClaudeBackend: AskBackend {
         ]
         let data = (try? JSONSerialization.data(withJSONObject: msg)) ?? Data()
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// "Not logged in · Please run /login", "Invalid API key", 401s…
+    static func isAuthError(_ raw: String?) -> Bool {
+        let text = (raw ?? "").lowercased()
+        return text.contains("logged in") || text.contains("authenticat") ||
+            text.contains("login") || text.contains("unauthorized") || text.contains("api key")
     }
 
     /// FR16: map raw CLI errors to specific, actionable messages.

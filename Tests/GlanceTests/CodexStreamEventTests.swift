@@ -169,7 +169,7 @@ final class CodexStreamEventTests: XCTestCase {
                 tokenHandled.fulfill()
             case .completed:
                 staleCompletion.fulfill()
-            case .failed, .model, .commandOutput:
+            case .failed, .model, .commandOutput, .signedOut:
                 break
             }
         }

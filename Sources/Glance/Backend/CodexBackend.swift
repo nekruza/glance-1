@@ -245,7 +245,7 @@ final class CodexBackend: AskBackend {
             timeoutWork?.cancel()
             timeoutWork = nil
             removeActiveImage()
-            emit(.failed(Self.friendlyError(message)))
+            emit(Self.isAuthError(message) ? .signedOut : .failed(Self.friendlyError(message)))
             if let process, process.isRunning { process.terminate() }
         case .ignored:
             break
@@ -284,7 +284,7 @@ final class CodexBackend: AskBackend {
             let stderr = String(data: stderrBuffer, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let stderr, !stderr.isEmpty {
-                emit(.failed(Self.friendlyError(stderr)))
+                emit(Self.isAuthError(stderr) ? .signedOut : .failed(Self.friendlyError(stderr)))
             } else {
                 emit(.failed("Codex CLI exited unexpectedly (status \(terminatedProcess.terminationStatus))."))
             }
@@ -365,7 +365,7 @@ final class CodexBackend: AskBackend {
         let handler = currentHandler
         let generation = currentCallbackGeneration()
         switch event {
-        case .completed, .failed:
+        case .completed, .failed, .signedOut:
             currentHandler = nil
         case .token, .model, .commandOutput:
             break
@@ -416,6 +416,12 @@ final class CodexBackend: AskBackend {
         guard let url = activeImageURL else { return }
         try? FileManager.default.removeItem(at: url)
         activeImageURL = nil
+    }
+
+    static func isAuthError(_ raw: String) -> Bool {
+        let normalized = raw.lowercased()
+        return normalized.contains("login") || normalized.contains("authenticat") ||
+            normalized.contains("unauthorized") || normalized.contains("api key")
     }
 
     private static func friendlyError(_ raw: String) -> String {

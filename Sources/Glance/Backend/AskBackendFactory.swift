@@ -27,6 +27,14 @@ struct AskBackendFactory {
         self.codexStatus = codexStatus
     }
 
+    /// Where the selected CLI is (and whether it runs), without building a backend.
+    func availability(kind: AskBackendKind) -> AutomationAvailability {
+        switch kind {
+        case .claude: return Self.availability(from: claudeStatus())
+        case .codex: return Self.availability(from: codexStatus())
+        }
+    }
+
     /// Locates and constructs exactly the selected conversational CLI.
     func make(kind: AskBackendKind) -> Result<Selection, AutomationAvailability> {
         switch kind {

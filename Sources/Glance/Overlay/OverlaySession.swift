@@ -71,6 +71,8 @@ final class OverlaySession: ObservableObject {
     /// instead of the prompt. Nil when the provider started fine.
     @Published var setupIssue: ProviderSetupIssue?
     var setupRetryHandler: (() -> Void)?
+    /// Runs a setup step (install / sign in) in Terminal.
+    var setupTerminalHandler: ((String) -> Void)?
 
     /// Wired by the controller.
     var submitHandler: ((String) -> Void)?
@@ -232,6 +234,14 @@ final class OverlaySession: ObservableObject {
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].answer = text
         turns[turns.count - 1].isCommandOutput = true
+    }
+
+    /// The turn couldn't be answered (signed out): drop it and put the
+    /// question back in the box to resend once fixed.
+    func returnLastQuestionToInput() {
+        isWorking = false
+        guard let last = turns.popLast() else { return }
+        input = last.question
     }
 
     func completeTurn() {

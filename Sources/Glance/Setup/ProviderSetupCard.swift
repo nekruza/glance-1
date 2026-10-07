@@ -7,6 +7,7 @@ struct ProviderSetupCard: View {
     let issue: ProviderSetupIssue
     let textScale: CGFloat
     let onRetry: () -> Void
+    let onTerminal: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -63,15 +64,22 @@ struct ProviderSetupCard: View {
                     Button("Setup guide") { NSWorkspace.shared.open(url) }
                         .buttonStyle(OverlayChipButtonStyle())
                 }
-                Button(action: onRetry) {
-                    Text("Try again")
-                        .font(.system(size: 12.5, weight: .semibold))
+                Button("Try again", action: onRetry)
+                    .buttonStyle(OverlayChipButtonStyle())
+                    .help("Check again now")
+                if let action = issue.terminalAction {
+                    Button { onTerminal(action.command) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "terminal").font(.system(size: 11, weight: .semibold))
+                            Text(action.label).font(.system(size: 12.5, weight: .semibold))
+                        }
                         .foregroundStyle(Color.black.opacity(0.82))
                         .padding(.horizontal, 14).padding(.vertical, 6)
                         .background(Capsule().fill(Theme.accent))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Opens Terminal and runs it — you'll see every step")
                 }
-                .buttonStyle(.plain)
-                .help("Look for the CLI again")
             }
         }
         .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 16)

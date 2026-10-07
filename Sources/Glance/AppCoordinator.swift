@@ -56,6 +56,17 @@ final class AppCoordinator {
     private var claudeAccount: ClaudeAccount?
     private var mcpServers: [McpServerStatus]?
     private var defaultModel: String?
+
+    /// Signed in? Asks the CLI's own status command; replaceable in tests.
+    var authStatusCheck: (AskBackendKind, String) async -> Bool? = { kind, path in
+        await AuthStatus.check(kind: kind, binaryPath: path)
+    }
+    private var setupRecheckInFlight = false
+    private lazy var setupWatcher: ProviderSetupWatcher = {
+        let watcher = ProviderSetupWatcher()
+        watcher.onRecheck = { [weak self] in self?.recheckProviderSetup() }
+        return watcher
+    }()
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -425,7 +436,7 @@ final class AppCoordinator {
             switch makeSelectedBackend() {
             case .success(let made):
                 backendLifecycle.install(made.backend)
-                overlay.session.setupIssue = nil
+                clearSetupIssue()
                 overlay.session.backendConnected = true
                 overlay.session.backendLabel = made.statusLabel
             case .failure(let status):
@@ -494,16 +505,74 @@ final class AppCoordinator {
     /// The selected CLI is missing or broken: open the overlay anyway with
     /// the fix-it steps, rather than a modal alert and no overlay.
     private func showSetupIssue(kind: AskBackendKind, status: AutomationAvailability) {
+        guard let issue = ProviderSetupIssue.make(kind: kind, availability: status) else { return }
+        presentSetupIssue(issue, label: "\(kind.displayName) not connected")
+    }
+
+    /// The CLI said it isn't signed in: put the question back in the box and
+    /// offer Sign in, which runs the exact binary in use.
+    private func handleSignedOut(kind: AskBackendKind) {
+        overlay.session.returnLastQuestionToInput()
+        switch askBackendFactory.availability(kind: kind) {
+        case .available(let path, _):
+            presentSetupIssue(.signedOut(kind: kind, binaryPath: path),
+                              label: "\(kind.displayName) not signed in")
+        case let status:
+            showSetupIssue(kind: kind, status: status)
+        }
+    }
+
+    private func presentSetupIssue(_ issue: ProviderSetupIssue, label: String) {
         let session = overlay.session
-        session.setupIssue = ProviderSetupIssue.make(kind: kind, availability: status)
+        session.setupIssue = issue
         session.backendConnected = false
-        session.backendLabel = "\(kind.displayName) not connected"
-        session.setupRetryHandler = { [weak self] in self?.present() }
+        session.backendLabel = label
+        session.setupRetryHandler = { [weak self] in self?.recheckProviderSetup() }
+        session.setupTerminalHandler = { [weak self] command in
+            self?.setupWatcher.runInTerminal(command)
+        }
         session.settingsHandler = { [weak self] in
             self?.overlay.dismiss()
             self?.summonTaskSettings()
         }
-        overlay.present()
+        setupWatcher.start()
+        if !overlay.isVisible { overlay.present() }
+    }
+
+    private func clearSetupIssue() {
+        overlay.session.setupIssue = nil
+        setupWatcher.stop()
+    }
+
+    /// Try again / the Terminal step finished / the user switched apps: see
+    /// whether the fix landed. Only while the card is on screen, so a
+    /// background check never pops the overlay up.
+    private func recheckProviderSetup() {
+        guard let issue = overlay.session.setupIssue, overlay.isVisible,
+              !setupRecheckInFlight else { return }
+        let kind = prefs.askBackend
+        switch issue.problem {
+        case .notInstalled, .broken:
+            present() // re-locates the CLI; success clears the card
+        case .signedOut:
+            guard case .available(let path, _) = askBackendFactory.availability(kind: kind) else {
+                present()
+                return
+            }
+            setupRecheckInFlight = true
+            Task { [weak self] in
+                guard let self else { return }
+                let signedIn = await self.authStatusCheck(kind, path)
+                self.setupRecheckInFlight = false
+                guard signedIn == true, self.overlay.session.setupIssue?.problem == .signedOut,
+                      self.prefs.askBackend == kind else { return }
+                // A process started before the sign-in may hold no
+                // credentials: start a fresh one. The question stays typed.
+                self.teardownBackend()
+                self.clearSetupIssue()
+                self.present()
+            }
+        }
     }
 
     private func showOverlay() {
@@ -546,6 +615,8 @@ final class AppCoordinator {
         overlay.onSubmit { [weak self] question in
             self?.handleSubmit(question)
         }
+        // Reopened with the Sign in card still up: maybe they signed in meanwhile.
+        if overlay.session.setupIssue?.problem == .signedOut { recheckProviderSetup() }
     }
 
     /// Clear button: drop the conversation (and any resumed session), start a
@@ -556,7 +627,7 @@ final class AppCoordinator {
         switch makeSelectedBackend() {
         case .success(let made):
             backendLifecycle.install(made.backend)
-            overlay.session.setupIssue = nil
+            clearSetupIssue()
             overlay.session.backendConnected = true
             overlay.session.backendLabel = made.statusLabel
         case .failure(let status):
@@ -723,6 +794,7 @@ final class AppCoordinator {
             case .failed(let msg):  self.overlay.session.failTurn(msg)
             case .model(let id):    self.overlay.session.modelName = ModelCatalog.prettify(id)
             case .commandOutput(let text): self.overlay.session.appendCommandOutput(text)
+            case .signedOut: self.handleSignedOut(kind: kind)
             }
         }
     }
@@ -777,6 +849,7 @@ final class AppCoordinator {
 
     /// Full teardown: backend shut down, conversation wiped.
     func endSession() {
+        setupWatcher.stop()
         teardownBackend()
         pendingImagePNG = nil
         pendingCaptureLabel = ""

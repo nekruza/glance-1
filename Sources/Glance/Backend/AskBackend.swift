@@ -25,6 +25,9 @@ enum AskBackendEvent {
     /// which arrives as one result instead of streamed tokens and is laid out
     /// for a terminal rather than written as Markdown.
     case commandOutput(String)
+    /// The CLI refused because it isn't signed in. Ends the turn, like
+    /// `.failed`, but the overlay offers a Sign in step instead of an error.
+    case signedOut
 }
 
 protocol AskBackend: AnyObject {
