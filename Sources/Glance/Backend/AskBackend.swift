@@ -29,10 +29,15 @@ protocol AskBackend: AnyObject {
     func startWarm()
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void)
     func shutdown()
+    /// Receives the slash-command catalog (and account) whenever the backend
+    /// learns or refreshes it; delivered on main. Register before `startWarm()`.
+    func onCatalog(_ handler: @escaping (BackendCatalog) -> Void)
 }
 
 extension AskBackend {
     /// Backends that do not expose a distinct instruction channel may ignore
     /// this. First-party implementations install it before warming.
     func configure(systemPrompt: String) {}
+    /// Backends without a command catalog never call back.
+    func onCatalog(_ handler: @escaping (BackendCatalog) -> Void) {}
 }

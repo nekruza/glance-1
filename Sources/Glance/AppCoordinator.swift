@@ -52,6 +52,10 @@ final class AppCoordinator {
         try await ScreenCaptureService.captureActiveDisplay()
     }
     private var claudeStatus: ClaudeLocator.Status = .notFound
+    /// Catalog facts from the Claude CLI for /status (see `wireCatalog`).
+    private var claudeAccount: ClaudeAccount?
+    private var mcpServers: [McpServerStatus]?
+    private var defaultModel: String?
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -477,6 +481,7 @@ final class AppCoordinator {
         let backend = selection.backend
         backend.configure(systemPrompt: TaskCapture.systemPrompt)
         backend.firstTokenTimeout = 30 // FR13
+        wireCatalog(backend)
         backend.startWarm()
         return (backend, connectionLabel(for: kind, version: selection.version))
     }
@@ -552,6 +557,7 @@ final class AppCoordinator {
         // Resuming a large session (long transcript, project hooks) can take
         // far longer to first token than a fresh one.
         backend.firstTokenTimeout = 120
+        wireCatalog(backend)
         backend.startWarm()
         backendLifecycle.install(backend)
 
@@ -569,9 +575,57 @@ final class AppCoordinator {
         }
     }
 
+    // MARK: - Slash commands
+
+    /// Feed a backend's command catalog (and account/MCP state) to the `/`
+    /// menu and the /status report. The catalog outlives the backend, so the
+    /// menu stays filled across /clear and resume while the new process starts.
+    private func wireCatalog(_ backend: AskBackend) {
+        backend.onCatalog { [weak self] catalog in
+            guard let self else { return }
+            if let commands = catalog.commands { self.overlay.session.cliCommands = commands }
+            if let hidden = catalog.terminalOnly { self.overlay.session.terminalOnlyCommands = hidden }
+            if let account = catalog.account { self.claudeAccount = account }
+            if let servers = catalog.mcpServers { self.mcpServers = servers }
+            if let model = catalog.defaultModel { self.defaultModel = model }
+        }
+    }
+
+    /// Answer the commands the headless CLI refuses (`LocalSlashCommand`)
+    /// in place. True when `question` was one of them.
+    private func handleLocalCommand(_ question: String) -> Bool {
+        guard let (command, _) = LocalSlashCommand.parse(question) else { return false }
+        let session = overlay.session
+        let answer: String
+        switch command {
+        case .clear:
+            clearSession()
+            return true
+        case .help:
+            answer = SlashCommandReport.help(session.allSlashCommands)
+        case .skills:
+            answer = prefs.askBackend == .claude
+                ? SlashCommandReport.skills(session.cliCommands)
+                : "Skills come from Claude Code — switch the provider to Claude CLI in Settings to use them."
+        case .status:
+            answer = SlashCommandReport.status(.init(
+                backendLabel: session.backendLabel,
+                connected: session.backendConnected && backend != nil,
+                modelName: session.modelName,
+                defaultModel: prefs.askBackend == .claude ? defaultModel : nil,
+                account: prefs.askBackend == .claude ? claudeAccount : nil,
+                mcpServers: prefs.askBackend == .claude ? mcpServers : [],
+                commands: session.cliCommands))
+        }
+        session.replaceLastAnswer(answer)
+        session.completeTurn()
+        return true
+    }
+
     // MARK: - Q&A
 
     private func handleSubmit(_ question: String) {
+        if handleLocalCommand(question) { return }
         let kind = prefs.askBackend
         guard let backend else {
             overlay.session.failTurn("\(kind.displayName) unavailable.")
@@ -639,7 +693,8 @@ final class AppCoordinator {
             case .completed:
                 self.overlay.session.completeTurn()
                 self.captureTasksFromAnswer()
-                self.generateSuggestions()
+                // Command output (/context, a skill's run…) isn't a Q&A to riff on.
+                if !question.hasPrefix("/") { self.generateSuggestions() }
             case .failed(let msg):  self.overlay.session.failTurn(msg)
             case .model(let id):    self.overlay.session.modelName = ModelCatalog.prettify(id)
             }

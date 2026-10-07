@@ -36,6 +36,7 @@ final class ClaudeBackend: AskBackend {
     private var didSendFirstMessage = false
 
     private var currentHandler: ((AskBackendEvent) -> Void)?
+    private var catalogHandler: ((BackendCatalog) -> Void)?
     private var sawTokenThisTurn = false
     private var timeoutWork: DispatchWorkItem?
     private var shutdownForceKillWork: DispatchWorkItem?
@@ -79,6 +80,10 @@ final class ClaudeBackend: AskBackend {
 
     func configure(systemPrompt: String) {
         appendSystemPrompt = systemPrompt
+    }
+
+    func onCatalog(_ handler: @escaping (BackendCatalog) -> Void) {
+        ioQueue.async { [weak self] in self?.catalogHandler = handler }
     }
 
     /// Pre-spawn the process (FR15 warm path). Idempotent.
@@ -131,6 +136,12 @@ final class ClaudeBackend: AskBackend {
         }
         self.process = proc
         self.stdinPipe = inPipe
+
+        // Ask for the command catalog up front, as the Agent SDK does on
+        // connect: free, ~3 s, and the `/` menu is filled before the first
+        // question (the init line only arrives once a message is sent).
+        let initialize = #"{"type":"control_request","request_id":"glance-init","request":{"subtype":"initialize"}}"#
+        try? inPipe.fileHandleForWriting.write(contentsOf: Data((initialize + "\n").utf8))
     }
 
     /// Ask a question. First call includes the screenshot; later calls are
@@ -200,6 +211,19 @@ final class ClaudeBackend: AskBackend {
         guard let line = try? JSONDecoder().decode(StreamLine.self, from: lineData) else { return }
 
         if let sid = line.sessionId { resumeSessionId = sid }
+
+        if let catalog = line.catalog, let handler = catalogHandler {
+            DispatchQueue.main.async { handler(catalog) }
+        }
+
+        // Local commands (/context, /model, /cost…) answer with one whole
+        // assistant message and no stream deltas; without this the turn
+        // would complete blank.
+        if !sawTokenThisTurn, let text = line.successResultText {
+            sawTokenThisTurn = true
+            timeoutWork?.cancel()
+            emit(.token(text))
+        }
 
         if let event = line.askBackendEvent {
             switch event {

@@ -35,7 +35,7 @@ final class OverlayController {
     var isVisible: Bool { panel.isVisible }
 
     init() {
-        panel.onCancel = { [weak self] in self?.dismiss() }
+        panel.onCancel = { [weak self] in self?.cancel() }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
@@ -131,7 +131,7 @@ final class OverlayController {
         let old = panel
         let wasVisible = old.isVisible
         panel = OverlayPanel()
-        panel.onCancel = { [weak self] in self?.dismiss() }
+        panel.onCancel = { [weak self] in self?.cancel() }
         old.onCancel = nil
         old.contentView = nil
         // close() frees the window-server window (orderOut alone leaks one per
@@ -174,6 +174,14 @@ final class OverlayController {
     /// follow-up so the overlay itself stays out of the shot (FR8).
     func setHiddenForCapture(_ hidden: Bool) {
         panel.alphaValue = hidden ? 0 : 1
+    }
+
+    /// Esc: close the `/` menu if it's open, otherwise the overlay. (The
+    /// view's key handler normally takes Esc first; this covers the field
+    /// editor routing it through cancelOperation instead.)
+    private func cancel() {
+        if session.dismissSlashMenu() { return }
+        dismiss()
     }
 
     func dismiss() {

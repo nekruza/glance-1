@@ -16,7 +16,13 @@ final class OverlaySession: ObservableObject {
         var thumbnail: NSImage?
     }
 
-    @Published var input: String = ""
+    @Published var input: String = "" {
+        didSet {
+            guard input != oldValue else { return }
+            slashSelection = 0
+            slashMenuSuppressed = false
+        }
+    }
     @Published var turns: [Turn] = []
     /// Whether to attach a screenshot to the next message (toggled in overlay).
     /// Default off — attach only when the user opts in.
@@ -113,6 +119,8 @@ final class OverlaySession: ObservableObject {
         backendConnected = false
         backendLabel = "Checking \(kind.displayName)…"
         modelName = nil
+        cliCommands = [] // the next provider reports its own (Codex: none)
+        terminalOnlyCommands = []
     }
 
     /// Replace the transcript with a resumed Claude session only if no clear or
@@ -131,6 +139,74 @@ final class OverlaySession: ObservableObject {
     func setLastTurnThumbnail(_ image: NSImage?) {
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].thumbnail = image
+    }
+
+    // MARK: - Slash commands
+
+    /// The CLI's own commands (built-ins, skills, plugin and user commands),
+    /// as reported by the backend. Kept across clears so the menu is instant.
+    @Published var cliCommands: [SlashCommand] = []
+    /// Commands the CLI only runs in its terminal UI; hidden from the menu.
+    @Published var terminalOnlyCommands: [String] = []
+    /// Highlighted row in the `/` menu.
+    @Published var slashSelection = 0
+    /// Esc hid the menu for the current input; any edit brings it back.
+    @Published private(set) var slashMenuSuppressed = false
+
+    /// Everything the menu can offer: Glance's local commands + the CLI's.
+    var allSlashCommands: [SlashCommand] {
+        SlashCommandMatcher.merge(cli: cliCommands, hidden: terminalOnlyCommands)
+    }
+
+    /// Menu rows for the current input; empty when the menu is closed.
+    var slashMatches: [SlashMatch] {
+        guard !slashMenuSuppressed, let query = SlashCommandMatcher.query(in: input) else { return [] }
+        return SlashCommandMatcher.match(query, in: allSlashCommands)
+    }
+
+    private var selectedSlashCommand: SlashCommand? {
+        let matches = slashMatches
+        guard matches.indices.contains(slashSelection) else { return matches.first?.command }
+        return matches[slashSelection].command
+    }
+
+    /// ↑/↓ in the menu, wrapping at the ends.
+    func moveSlashSelection(_ delta: Int) {
+        let count = slashMatches.count
+        guard count > 0 else { return }
+        slashSelection = ((slashSelection + delta) % count + count) % count
+    }
+
+    /// Tab: fill in the selected name and leave the cursor ready for arguments.
+    @discardableResult
+    func completeSlash() -> Bool {
+        guard let command = selectedSlashCommand else { return false }
+        input = "/\(command.name) "
+        return true
+    }
+
+    /// Return: run the selected command right away, as the CLI does.
+    @discardableResult
+    func runSelectedSlash() -> Bool {
+        guard let command = selectedSlashCommand else { return false }
+        input = "/\(command.name)"
+        submit()
+        return true
+    }
+
+    /// Click on a menu row.
+    func pickSlash(_ command: SlashCommand) {
+        input = "/\(command.name)"
+        submit()
+    }
+
+    /// Esc: close the menu. False when it wasn't open, so Esc can fall
+    /// through to dismissing the overlay.
+    @discardableResult
+    func dismissSlashMenu() -> Bool {
+        guard !slashMatches.isEmpty else { return false }
+        slashMenuSuppressed = true
+        return true
     }
 
     // MARK: - Backend event application (called on main)

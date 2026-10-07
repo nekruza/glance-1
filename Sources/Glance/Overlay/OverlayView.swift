@@ -26,12 +26,14 @@ struct OverlayView: View {
         VStack(alignment: .leading, spacing: 0) {
             if session.turns.isEmpty {
                 promptRow
+                slashMenu
             } else {
                 transcript
                 if !session.suggestions.isEmpty && !session.isWorking {
                     suggestionChips
                 }
                 followUpBar
+                slashMenu
             }
             footer
         }
@@ -126,6 +128,8 @@ struct OverlayView: View {
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
                 .onKeyPress(.return, phases: .down, action: handleReturn)
+                .onKeyPress(keys: [.upArrow, .downArrow, .tab, .escape], phases: .down,
+                            action: handleMenuKey)
             micButton
             kbd("↩ Ask")
         }
@@ -289,6 +293,8 @@ struct OverlayView: View {
                 .focused($inputFocused)
                 .onSubmit { session.submit() }
                 .onKeyPress(.return, phases: .down, action: handleReturn)
+                .onKeyPress(keys: [.upArrow, .downArrow, .tab, .escape], phases: .down,
+                            action: handleMenuKey)
                 .padding(.leading, 14).padding(.vertical, 10)
             micButton
             sendButton
@@ -325,11 +331,41 @@ struct OverlayView: View {
     /// Shift+Return inserts a newline instead of submitting. Insertion goes
     /// through the field editor so the break lands at the cursor, not the end.
     private func handleReturn(_ press: KeyPress) -> KeyPress.Result {
-        guard press.modifiers.contains(.shift) else { return .ignored }
+        guard press.modifiers.contains(.shift) else {
+            // With the `/` menu open, Return runs the highlighted command.
+            return session.runSelectedSlash() ? .handled : .ignored
+        }
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
             editor.insertText("\n", replacementRange: editor.selectedRange())
         } else {
             session.input += "\n"
+        }
+        return .handled
+    }
+
+    // MARK: - Slash command menu
+
+    @ViewBuilder private var slashMenu: some View {
+        let matches = session.slashMatches
+        if !matches.isEmpty {
+            SlashCommandMenu(matches: matches,
+                             selection: session.slashSelection,
+                             loading: session.cliCommands.isEmpty && session.showsHistory,
+                             textScale: textScale,
+                             onPick: { session.pickSlash($0) })
+        }
+    }
+
+    /// ↑/↓ choose, Tab completes, Esc closes — only while the menu is open;
+    /// otherwise the keys keep their usual meaning (Esc dismisses the overlay).
+    private func handleMenuKey(_ press: KeyPress) -> KeyPress.Result {
+        guard !session.slashMatches.isEmpty else { return .ignored }
+        switch press.key {
+        case .upArrow: session.moveSlashSelection(-1)
+        case .downArrow: session.moveSlashSelection(1)
+        case .tab: session.completeSlash()
+        case .escape: session.dismissSlashMenu()
+        default: return .ignored
         }
         return .handled
     }
