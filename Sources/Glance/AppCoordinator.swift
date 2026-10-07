@@ -795,6 +795,7 @@ final class AppCoordinator {
             case .model(let id):    self.overlay.session.modelName = ModelCatalog.prettify(id)
             case .commandOutput(let text): self.overlay.session.appendCommandOutput(text)
             case .signedOut: self.handleSignedOut(kind: kind)
+            case .activity(let label): self.overlay.session.setActivity(label)
             }
         }
     }

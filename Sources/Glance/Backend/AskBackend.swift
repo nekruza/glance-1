@@ -28,6 +28,9 @@ enum AskBackendEvent {
     /// The CLI refused because it isn't signed in. Ends the turn, like
     /// `.failed`, but the overlay offers a Sign in step instead of an error.
     case signedOut
+    /// What the agent is doing right now between answer text — a tool run
+    /// ("Reading files") or a thinking block. Informational; the turn goes on.
+    case activity(String)
 }
 
 protocol AskBackend: AnyObject {

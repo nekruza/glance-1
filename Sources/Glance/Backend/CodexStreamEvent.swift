@@ -6,6 +6,8 @@ enum CodexStreamEvent: Equatable {
     case token(String)
     case completed
     case failed(String)
+    /// An item began that isn't answer text (command, file edit, reasoning…).
+    case activity(String)
     case ignored
 
     var automationEvent: AutomationEvent? {
@@ -18,7 +20,7 @@ enum CodexStreamEvent: Equatable {
             return .completed
         case .failed(let message):
             return .failed(message)
-        case .ignored:
+        case .activity, .ignored:
             return nil
         }
     }
@@ -27,7 +29,7 @@ enum CodexStreamEvent: Equatable {
         switch self {
         case .completed, .failed:
             return true
-        case .threadStarted, .token, .ignored:
+        case .threadStarted, .token, .activity, .ignored:
             return false
         }
     }
@@ -40,6 +42,10 @@ enum CodexStreamEvent: Equatable {
         case "thread.started":
             guard let threadID = payload.threadID else { return .ignored }
             return .threadStarted(threadID)
+        case "item.started":
+            guard let type = payload.item?.type,
+                  let label = ToolActivity.label(forCodexItem: type) else { return .ignored }
+            return .activity(label)
         case "item.completed":
             if payload.item?.type == "agent_message", let text = payload.item?.text {
                 return .token(text)

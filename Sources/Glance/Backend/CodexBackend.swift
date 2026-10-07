@@ -233,6 +233,8 @@ final class CodexBackend: AskBackend {
                 timeoutWork?.cancel()
             }
             emit(.token(text))
+        case let .activity(label):
+            emit(.activity(label))
         case .completed:
             receivedTerminalEvent = true
             timeoutWork?.cancel()
@@ -367,7 +369,7 @@ final class CodexBackend: AskBackend {
         switch event {
         case .completed, .failed, .signedOut:
             currentHandler = nil
-        case .token, .model, .commandOutput:
+        case .token, .model, .commandOutput, .activity:
             break
         }
         DispatchQueue.main.async { [weak self] in

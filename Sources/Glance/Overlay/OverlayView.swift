@@ -208,8 +208,15 @@ struct OverlayView: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
                 askedHeader(turn)
-                answerBlock(turn)
-                    .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 22)
+                VStack(alignment: .leading, spacing: 14) {
+                    answerBlock(turn)
+                    // Text has streamed but the turn isn't over: the agent is
+                    // running tools or thinking again — keep showing it's busy.
+                    if isStillWorking(on: turn) {
+                        workingRow(activity: session.activity ?? "Working")
+                    }
+                }
+                .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 22)
                 if idx < session.turns.count - 1 {
                     Divider().overlay(Theme.hairline)
                 }
@@ -238,7 +245,8 @@ struct OverlayView: View {
 
     @ViewBuilder private func answerBlock(_ turn: OverlaySession.Turn) -> some View {
         if turn.answer.isEmpty && session.isWorking && turn.id == session.turns.last?.id {
-            workingRow
+            workingRow(activity: session.activity
+                       ?? (session.attachImage ? "Reading your screen" : ToolActivity.thinking))
         } else if turn.failed {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -266,12 +274,20 @@ struct OverlayView: View {
         }
     }
 
-    private var workingRow: some View {
+    private func isStillWorking(on turn: OverlaySession.Turn) -> Bool {
+        session.isWorking && !turn.answer.isEmpty && turn.id == session.turns.last?.id
+    }
+
+    private func workingRow(activity: String) -> some View {
         HStack(spacing: 10) {
             BouncingDots()
-            Text(session.attachImage ? "Reading your screen…" : "Thinking…")
+            Text("\(activity)…")
                 .foregroundStyle(Theme.muted).font(.system(size: 13 * textScale))
+                .contentTransition(.opacity)
+                .animation(.easeOut(duration: 0.15), value: activity)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(activity)…")
     }
 
     private var suggestionChips: some View {
@@ -367,10 +383,22 @@ struct OverlayView: View {
         }
     }
 
-    /// ↑/↓ choose, Tab completes, Esc closes — only while the menu is open;
-    /// otherwise the keys keep their usual meaning (Esc dismisses the overlay).
+    /// ↑/↓ choose, Tab completes, Esc closes — only while the menu is open.
+    /// Otherwise ↑/↓ walk the sent-message history (from an empty box), and
+    /// the rest keep their usual meaning (Esc dismisses the overlay).
     private func handleMenuKey(_ press: KeyPress) -> KeyPress.Result {
-        guard !session.slashMatches.isEmpty else { return .ignored }
+        guard !session.slashMatches.isEmpty else {
+            // Arrow keys always carry .function/.numericPad; only a real
+            // modifier (⇧ selects, ⌘ jumps…) keeps its text-editing meaning.
+            guard press.modifiers.isDisjoint(with: [.shift, .control, .option, .command]) else {
+                return .ignored
+            }
+            switch press.key {
+            case .upArrow: return session.recallOlderMessage() ? .handled : .ignored
+            case .downArrow: return session.recallNewerMessage() ? .handled : .ignored
+            default: return .ignored
+            }
+        }
         switch press.key {
         case .upArrow: session.moveSlashSelection(-1)
         case .downArrow: session.moveSlashSelection(1)

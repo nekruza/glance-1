@@ -48,9 +48,12 @@ final class OverlaySession: ObservableObject {
     @Published var captureLabel: String = ""
 
     var turnCount: Int { turns.count }
-    /// True between submitting a question and the first streamed token (FR13
-    /// "working" state).
+    /// True from submitting a question until its turn completes or fails —
+    /// including tool runs between streamed text (FR13 "working" state).
     @Published var isWorking: Bool = false
+    /// What the agent is doing right now ("Reading files"), shown with the
+    /// working indicator. Nil while it writes answer text.
+    @Published var activity: String?
 
     /// Past Claude CLI sessions for the footer History dropdown.
     @Published var historySessions: [SessionSummary] = []
@@ -89,8 +92,10 @@ final class OverlaySession: ObservableObject {
         let q = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !isWorking else { return }
         turns.append(Turn(question: q))
+        recordSent(q)
         input = ""
         isWorking = true
+        activity = nil
         suggestions = []
         submitHandler?(q)
     }
@@ -114,6 +119,7 @@ final class OverlaySession: ObservableObject {
         turns = []
         input = ""
         isWorking = false
+        activity = nil
         attachImage = false
         suggestions = []
     }
@@ -141,7 +147,9 @@ final class OverlaySession: ObservableObject {
                         ifGeneration generation: UInt) -> Bool {
         guard generation == transcriptGeneration, showsHistory else { return false }
         turns = pairs.map { Turn(question: $0.question, answer: $0.answer) }
+        pairs.forEach { recordSent($0.question) }
         isWorking = false
+        activity = nil
         input = ""
         return true
     }
@@ -220,17 +228,87 @@ final class OverlaySession: ObservableObject {
         return true
     }
 
+    // MARK: - Input history (↑ / ↓)
+
+    /// Messages sent from this overlay, oldest first. Kept across Clear, like
+    /// a shell's history, so ↑ still recalls them in a fresh conversation.
+    private(set) var sentHistory: [String] = []
+    /// Position in `sentHistory` while browsing; nil when not browsing.
+    private var historyCursor: Int?
+    private static let historyLimit = 100
+
+    private func recordSent(_ text: String) {
+        historyCursor = nil
+        if sentHistory.last == text { return }
+        sentHistory.append(text)
+        if sentHistory.count > Self.historyLimit {
+            sentHistory.removeFirst(sentHistory.count - Self.historyLimit)
+        }
+    }
+
+    /// Still showing the entry ↑/↓ put there — an edit ends browsing, so the
+    /// arrows go back to moving the cursor.
+    private var isBrowsingHistory: Bool {
+        guard let cursor = historyCursor, sentHistory.indices.contains(cursor) else { return false }
+        return input == sentHistory[cursor]
+    }
+
+    /// ↑: the previous sent message, newest first. Starts only from an empty
+    /// box, so ↑ inside a draft still moves the cursor. False when unhandled.
+    @discardableResult
+    func recallOlderMessage() -> Bool {
+        let next: Int
+        if isBrowsingHistory, let cursor = historyCursor {
+            next = max(cursor - 1, 0)
+        } else if input.isEmpty, !sentHistory.isEmpty {
+            next = sentHistory.count - 1
+        } else {
+            return false
+        }
+        showHistoryEntry(at: next)
+        return true
+    }
+
+    /// ↓: back toward the newest message; past it, an empty box again.
+    @discardableResult
+    func recallNewerMessage() -> Bool {
+        guard isBrowsingHistory, let cursor = historyCursor else { return false }
+        if cursor + 1 < sentHistory.count {
+            showHistoryEntry(at: cursor + 1)
+        } else {
+            historyCursor = nil
+            input = ""
+        }
+        return true
+    }
+
+    private func showHistoryEntry(at index: Int) {
+        historyCursor = index
+        input = sentHistory[index]
+        // A recalled "/status" must not open the `/` menu, or the next ↑ would
+        // move the menu instead of going further back.
+        slashMenuSuppressed = true
+    }
+
     // MARK: - Backend event application (called on main)
 
+    /// Streamed answer text. The turn stays working — tools may run after it.
     func appendToken(_ text: String) {
-        isWorking = false
+        activity = nil
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].answer += text
+    }
+
+    /// The agent started a tool run or a thinking block mid-turn.
+    func setActivity(_ label: String) {
+        guard isWorking else { return }
+        activity = label
     }
 
     /// A CLI command's whole output (see `AskBackendEvent.commandOutput`).
     func appendCommandOutput(_ text: String) {
         isWorking = false
+        activity = nil
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].answer = text
         turns[turns.count - 1].isCommandOutput = true
@@ -240,12 +318,14 @@ final class OverlaySession: ObservableObject {
     /// question back in the box to resend once fixed.
     func returnLastQuestionToInput() {
         isWorking = false
+        activity = nil
         guard let last = turns.popLast() else { return }
         input = last.question
     }
 
     func completeTurn() {
         isWorking = false
+        activity = nil
     }
 
     /// Swap the last answer's text (task-capture cleanup after completion).
@@ -256,6 +336,7 @@ final class OverlaySession: ObservableObject {
 
     func failTurn(_ message: String) {
         isWorking = false
+        activity = nil
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].answer = message
         turns[turns.count - 1].failed = true

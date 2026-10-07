@@ -34,9 +34,20 @@ struct StreamLine: Decodable {
     struct Inner: Decodable {
         let type: String?
         let delta: Delta?
+        let contentBlock: ContentBlock?
         struct Delta: Decodable {
             let type: String?
             let text: String?
+        }
+        /// `content_block_start`: a text, thinking or tool_use block opening.
+        struct ContentBlock: Decodable {
+            let type: String?
+            let name: String?
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case type, delta
+            case contentBlock = "content_block"
         }
     }
 
@@ -109,6 +120,21 @@ struct StreamLine: Decodable {
 
     var isResult: Bool { type == "result" }
 
+    /// A tool call or thinking block starting — the agent is busy without
+    /// writing answer text. `stream_event → content_block_start`.
+    var activityLabel: String? {
+        guard type == "stream_event", event?.type == "content_block_start",
+              let block = event?.contentBlock else { return nil }
+        switch block.type {
+        case "tool_use", "server_tool_use", "mcp_tool_use":
+            return ToolActivity.label(forClaudeTool: block.name ?? "")
+        case "thinking", "redacted_thinking":
+            return ToolActivity.thinking
+        default:
+            return nil
+        }
+    }
+
     /// The model id announced on the `system/init` line. Hook-related
     /// `system` lines carry no `model`, so they yield nil.
     var announcedModel: String? {
@@ -121,6 +147,9 @@ struct StreamLine: Decodable {
     var askBackendEvent: AskBackendEvent? {
         if let text = streamedText, !text.isEmpty {
             return .token(text)
+        }
+        if let label = activityLabel {
+            return .activity(label)
         }
         if let model = announcedModel {
             return .model(model)
