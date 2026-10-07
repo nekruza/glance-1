@@ -422,10 +422,16 @@ final class AppCoordinator {
         // FR15 warm path: spawn the backend now so start/auth overlaps with the
         // user reading the overlay and typing.
         if backend == nil {
-            guard let made = makeSelectedBackend() else { return }
-            backendLifecycle.install(made.backend)
-            overlay.session.backendConnected = true
-            overlay.session.backendLabel = made.statusLabel
+            switch makeSelectedBackend() {
+            case .success(let made):
+                backendLifecycle.install(made.backend)
+                overlay.session.setupIssue = nil
+                overlay.session.backendConnected = true
+                overlay.session.backendLabel = made.statusLabel
+            case .failure(let status):
+                showSetupIssue(kind: kind, status: status)
+                return
+            }
         }
         guard let backend,
               let lease = backendLifecycle.lease(for: backend) else { return }
@@ -467,15 +473,14 @@ final class AppCoordinator {
     /// Construct only the selected ask provider and return the status text that
     /// describes that exact binary. Task automation is built separately from
     /// the same selected provider in `replaceProviderServices(for:)`.
-    private func makeSelectedBackend() -> (backend: AskBackend, statusLabel: String)? {
+    private func makeSelectedBackend() -> Result<(backend: AskBackend, statusLabel: String), AutomationAvailability> {
         let kind = prefs.askBackend
         let selection: AskBackendFactory.Selection
         switch askBackendFactory.make(kind: kind) {
         case .success(let selected):
             selection = selected
         case .failure(let status):
-            PermissionOnboarding.reportAskProvider(kind: kind, availability: status)
-            return nil
+            return .failure(status)
         }
 
         let backend = selection.backend
@@ -483,7 +488,22 @@ final class AppCoordinator {
         backend.firstTokenTimeout = 30 // FR13
         wireCatalog(backend)
         backend.startWarm()
-        return (backend, connectionLabel(for: kind, version: selection.version))
+        return .success((backend, connectionLabel(for: kind, version: selection.version)))
+    }
+
+    /// The selected CLI is missing or broken: open the overlay anyway with
+    /// the fix-it steps, rather than a modal alert and no overlay.
+    private func showSetupIssue(kind: AskBackendKind, status: AutomationAvailability) {
+        let session = overlay.session
+        session.setupIssue = ProviderSetupIssue.make(kind: kind, availability: status)
+        session.backendConnected = false
+        session.backendLabel = "\(kind.displayName) not connected"
+        session.setupRetryHandler = { [weak self] in self?.present() }
+        session.settingsHandler = { [weak self] in
+            self?.overlay.dismiss()
+            self?.summonTaskSettings()
+        }
+        overlay.present()
     }
 
     private func showOverlay() {
@@ -533,10 +553,15 @@ final class AppCoordinator {
     private func clearSession() {
         teardownBackend()
         overlay.session.clearTranscript()
-        guard let made = makeSelectedBackend() else { return }
-        backendLifecycle.install(made.backend)
-        overlay.session.backendConnected = true
-        overlay.session.backendLabel = made.statusLabel
+        switch makeSelectedBackend() {
+        case .success(let made):
+            backendLifecycle.install(made.backend)
+            overlay.session.setupIssue = nil
+            overlay.session.backendConnected = true
+            overlay.session.backendLabel = made.statusLabel
+        case .failure(let status):
+            showSetupIssue(kind: prefs.askBackend, status: status)
+        }
     }
 
     // MARK: - History resume

@@ -67,6 +67,11 @@ final class OverlaySession: ObservableObject {
     /// clipped the content.
     @Published var contentHeight: CGFloat = 0
 
+    /// The selected CLI is missing or broken: the overlay shows how to fix it
+    /// instead of the prompt. Nil when the provider started fine.
+    @Published var setupIssue: ProviderSetupIssue?
+    var setupRetryHandler: (() -> Void)?
+
     /// Wired by the controller.
     var submitHandler: ((String) -> Void)?
     var dismissHandler: (() -> Void)?
@@ -122,6 +127,7 @@ final class OverlaySession: ObservableObject {
         backendConnected = false
         backendLabel = "Checking \(kind.displayName)…"
         modelName = nil
+        setupIssue = nil
         cliCommands = [] // the next provider reports its own (Codex: none)
         terminalOnlyCommands = []
     }

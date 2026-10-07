@@ -24,7 +24,12 @@ struct OverlayView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if session.turns.isEmpty {
+            if let issue = session.setupIssue {
+                // Provider CLI missing/broken: explain the fix instead of a
+                // prompt that couldn't answer anyway.
+                ProviderSetupCard(issue: issue, textScale: textScale,
+                                  onRetry: { session.setupRetryHandler?() })
+            } else if session.turns.isEmpty {
                 promptRow
                 slashMenu
             } else {
