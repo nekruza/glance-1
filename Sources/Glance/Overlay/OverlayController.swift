@@ -165,12 +165,17 @@ final class OverlayController {
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.panel.isVisible, event.window === self.panel,
-                  OverlayPanel.isAttachShortcut(characters: event.charactersIgnoringModifiers,
-                                                modifiers: event.modifierFlags)
-            else { return event }
-            self.session.toggleAttachImage()
-            return nil
+            guard let self, self.panel.isVisible, event.window === self.panel else { return event }
+            if OverlayPanel.isAttachShortcut(characters: event.charactersIgnoringModifiers,
+                                             modifiers: event.modifierFlags) {
+                self.session.toggleAttachImage()
+                return nil
+            }
+            if OverlayPanel.isModeCycleShortcut(keyCode: event.keyCode, modifiers: event.modifierFlags),
+               self.session.cyclePermissionMode() {
+                return nil
+            }
+            return event
         }
     }
 

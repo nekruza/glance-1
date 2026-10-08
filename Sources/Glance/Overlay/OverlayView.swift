@@ -210,6 +210,11 @@ struct OverlayView: View {
                 askedHeader(turn)
                 VStack(alignment: .leading, spacing: 14) {
                     answerBlock(turn)
+                    // Claude is paused on a tool it needs approval for.
+                    if let request = session.pendingPermission, turn.id == session.turns.last?.id {
+                        PermissionCard(request: request, textScale: textScale,
+                                       onAnswer: { session.answerPermission(allow: $0) })
+                    }
                     // Text has streamed but the turn isn't over: the agent is
                     // running tools or thinking again — keep showing it's busy.
                     if isStillWorking(on: turn) {
@@ -487,6 +492,41 @@ struct OverlayView: View {
         .help("Clear conversation and start a fresh session")
     }
 
+    // MARK: - Permission mode menu
+
+    private var permissionModeMenu: some View {
+        let mode = session.permissionMode
+        let risky = mode == .bypassPermissions
+        return Menu {
+            ForEach(PermissionMode.allCases) { option in
+                if option == .bypassPermissions { Divider() }
+                Toggle(isOn: Binding(
+                    get: { option == session.permissionMode },
+                    set: { if $0 { session.selectPermissionMode(option) } }
+                )) {
+                    Text("\(option.title) — \(option.summary)")
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: mode.symbol)
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(mode.shortTitle)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 7.5, weight: .bold))
+            }
+            .foregroundStyle(risky ? Theme.danger : Theme.muted)
+            .fixedSize()
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.leading, 6)
+        .help("Permission mode: \(mode.title) — \(mode.summary) (⇧Tab to switch)")
+    }
+
     // MARK: - Model menu
 
     /// The model name in the footer, as a menu of the CLI's models. A pick
@@ -605,7 +645,7 @@ struct OverlayView: View {
                     .fill(session.backendConnected ? Theme.success : Theme.danger)
                     .frame(width: 6, height: 6)
                     .shadow(color: session.backendConnected ? Theme.success.opacity(0.8) : .clear, radius: 4)
-                Text(session.backendLabel)
+                Text(session.footerStatusLabel)
                     .foregroundStyle(Theme.faint)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -617,6 +657,9 @@ struct OverlayView: View {
                         .foregroundStyle(Theme.muted)
                         .lineLimit(1)
                         .fixedSize()
+                }
+                if session.showsPermissionModes {
+                    permissionModeMenu
                 }
             }
             .font(.system(size: 11.5))
@@ -778,5 +821,63 @@ private struct BouncingDots: View {
         .onAppear {
             withAnimation(.easeInOut(duration: 0.4).repeatForever()) { phase = 2 }
         }
+    }
+}
+
+/// Claude is waiting to use a tool: show what it will act on and let the
+/// user Allow or Deny — the overlay's version of the terminal's prompt. For
+/// plan mode's ExitPlanMode it shows the plan instead.
+private struct PermissionCard: View {
+    let request: PermissionRequest
+    let textScale: CGFloat
+    let onAnswer: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: request.isPlanApproval ? "list.bullet.clipboard" : "hand.raised.fill")
+                    .foregroundStyle(Theme.accent)
+                Text(request.isPlanApproval ? "Claude's plan is ready" : "Allow \(request.displayName)?")
+                    .font(.system(size: 13 * textScale, weight: .semibold))
+            }
+            if let plan = request.plan, !plan.isEmpty {
+                ScrollView {
+                    MarkdownText(text: plan)
+                        .font(.system(size: 12.5 * textScale))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
+            } else {
+                if let reason = request.reason, !reason.isEmpty {
+                    Text(reason)
+                        .font(.system(size: 12.5 * textScale))
+                        .foregroundStyle(Theme.fg.opacity(0.85))
+                }
+                if let detail = request.detail {
+                    Text(detail)
+                        .font(.system(size: 12 * textScale, design: .monospaced))
+                        .foregroundStyle(Theme.fg.opacity(0.92))
+                        .lineLimit(6)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
+                }
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                Button(request.isPlanApproval ? "Keep planning" : "Deny") { onAnswer(false) }
+                    .buttonStyle(OverlayChipButtonStyle())
+                    .help(request.isPlanApproval ? "Tell Claude to keep planning" : "Don't let Claude do this")
+                Button(request.isPlanApproval ? "Approve plan" : "Allow") { onAnswer(true) }
+                    .buttonStyle(OverlayChipButtonStyle())
+                    .foregroundStyle(Theme.accent)
+                    .help(request.isPlanApproval ? "Approve and continue in Auto mode" : "Let Claude do this once")
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.accent.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Theme.accent.opacity(0.3), lineWidth: 1))
     }
 }

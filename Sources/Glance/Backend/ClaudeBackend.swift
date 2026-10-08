@@ -32,6 +32,10 @@ final class ClaudeBackend: AskBackend {
     /// `--model` for every spawn (nil = the CLI's default); kept in step with
     /// live `set_model` switches so a respawn stays on the chosen model.
     private var model: String?
+    /// `--permission-mode` for every spawn; follows live switches.
+    private var permissionMode: PermissionMode = .defaultMode
+    /// Open `can_use_tool` requests: id → the tool input to echo on Allow.
+    private var pendingPermissions: [String: Data] = [:]
 
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -107,11 +111,13 @@ final class ClaudeBackend: AskBackend {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        // `claude --dangerously-skip-permissions --chrome`, run headless:
-        // -p mode can't answer permission prompts, so tools would otherwise
-        // just be denied; --chrome adds the Claude in Chrome tools.
+        // Bypass is available (switchable from the footer) but never the
+        // starting mode. Permission prompts come to Glance over stdio as
+        // `can_use_tool` requests; --chrome adds the Claude in Chrome tools.
         var args = [
-            "--dangerously-skip-permissions",
+            "--allow-dangerously-skip-permissions",
+            "--permission-mode", permissionMode.cliValue,
+            "--permission-prompt-tool", "stdio",
             "--chrome",
             "-p",
             "--input-format", "stream-json",
@@ -209,9 +215,43 @@ final class ClaudeBackend: AskBackend {
             self.timeoutWork = nil
             self.currentHandler = nil
             self.discardedTurns += 1
+            self.pendingPermissions.removeAll() // the CLI drops them on interrupt
             let request = #"{"type":"control_request","request_id":"glance-stop-\#(UUID().uuidString)","request":{"subtype":"interrupt"}}"#
             try? handle.write(contentsOf: Data((request + "\n").utf8))
         }
+    }
+
+    func setPermissionMode(_ mode: PermissionMode) {
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            self.permissionMode = mode
+            guard self.process != nil else { return } // the next spawn's flag covers it
+            self.writeControl(["type": "control_request",
+                               "request_id": "glance-mode-\(UUID().uuidString)",
+                               "request": ["subtype": "set_permission_mode", "mode": mode.cliValue]])
+        }
+    }
+
+    func answerPermission(id: String, allow: Bool) {
+        ioQueue.async { [weak self] in
+            guard let self, let input = self.pendingPermissions.removeValue(forKey: id) else { return }
+            self.respondToPermission(id: id, allow: allow, input: input)
+        }
+    }
+
+    private func respondToPermission(id: String, allow: Bool, input: Data) {
+        let decision: [String: Any] = allow
+            ? ["behavior": "allow",
+               "updatedInput": (try? JSONSerialization.jsonObject(with: input)) ?? [String: Any]()]
+            : ["behavior": "deny", "message": "The user denied this in Glance."]
+        writeControl(["type": "control_response",
+                      "response": ["subtype": "success", "request_id": id, "response": decision]])
+    }
+
+    private func writeControl(_ object: [String: Any]) {
+        guard let handle = stdinPipe?.fileHandleForWriting,
+              let json = try? JSONSerialization.data(withJSONObject: object) else { return }
+        try? handle.write(contentsOf: json + Data("\n".utf8))
     }
 
     func setModel(_ value: String) {
@@ -252,6 +292,7 @@ final class ClaudeBackend: AskBackend {
             self.didSendFirstMessage = false
             self.openTurns = 0
             self.discardedTurns = 0
+            self.pendingPermissions.removeAll()
         }
     }
 
@@ -269,6 +310,17 @@ final class ClaudeBackend: AskBackend {
     }
 
     private func handleLine(_ lineData: Data) {
+        // The CLI pauses until a tool request is answered. Nobody is waiting
+        // for a stopped turn's, so refuse those at once.
+        if let request = PermissionRequest.parse(lineData) {
+            if discardedTurns > 0 || currentHandler == nil {
+                respondToPermission(id: request.id, allow: false, input: request.inputJSON)
+            } else {
+                pendingPermissions[request.id] = request.inputJSON
+                emit(.permissionRequest(request))
+            }
+            return
+        }
         guard let line = try? JSONDecoder().decode(StreamLine.self, from: lineData) else { return }
 
         if let sid = line.sessionId { resumeSessionId = sid }
@@ -277,13 +329,18 @@ final class ClaudeBackend: AskBackend {
             DispatchQueue.main.async { handler(catalog) }
         }
 
-        if line.isResult { openTurns = max(openTurns - 1, 0) }
+        if line.isResult {
+            openTurns = max(openTurns - 1, 0)
+            pendingPermissions.removeAll()
+        }
         // Lines still belonging to a turn the user stopped: its partial text,
         // tool runs and the interrupted result never reach the next turn.
         if discardedTurns > 0 {
             if line.isResult { discardedTurns -= 1 }
             return
         }
+
+        if let mode = line.reportedPermissionMode { emit(.permissionMode(mode)) }
 
         // Local commands (/context, /model, /usage…) answer with one whole
         // assistant message and no stream deltas; without this the turn
@@ -303,7 +360,7 @@ final class ClaudeBackend: AskBackend {
                     sawTokenThisTurn = true
                     timeoutWork?.cancel()
                 }
-            case .completed, .failed, .model, .commandOutput, .signedOut:
+            case .completed, .failed, .model, .commandOutput, .signedOut, .permissionRequest, .permissionMode:
                 break
             }
             emit(event)
@@ -332,6 +389,7 @@ final class ClaudeBackend: AskBackend {
         stdinPipe = nil
         openTurns = 0
         discardedTurns = 0
+        pendingPermissions.removeAll()
         if shuttingDown { finishShutdown() }
     }
 
@@ -387,6 +445,7 @@ final class ClaudeBackend: AskBackend {
         stdoutBuffer.removeAll()
         openTurns = 0
         discardedTurns = 0
+        pendingPermissions.removeAll()
         hung.terminate()
         ioQueue.asyncAfter(deadline: .now() + 0.25) { [weak hung] in
             guard let hung, hung.isRunning else { return }
@@ -401,7 +460,7 @@ final class ClaudeBackend: AskBackend {
         switch event {
         case .failed, .signedOut:
             currentHandler = nil
-        case .completed, .token, .model, .commandOutput, .activity:
+        case .completed, .token, .model, .commandOutput, .activity, .permissionRequest, .permissionMode:
             break
         }
         DispatchQueue.main.async { handler?(event) }

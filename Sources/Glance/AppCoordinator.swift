@@ -606,6 +606,19 @@ final class AppCoordinator {
         overlay.session.modelHandler = { [weak self] value in
             self?.selectModel(value)
         }
+        overlay.session.showsPermissionModes = kind == .claude
+        overlay.session.permissionModeHandler = { [weak self] mode in
+            self?.backend?.setPermissionMode(mode)
+        }
+        overlay.session.permissionAnswerHandler = { [weak self] request, allow in
+            guard let self else { return }
+            self.backend?.answerPermission(id: request.id, allow: allow)
+            // An approved plan drops the CLI into Ask mode; carry on in Auto
+            // instead, as the terminal does.
+            if allow, request.isPlanApproval {
+                self.overlay.session.selectPermissionMode(.auto)
+            }
+        }
         if showsHistory {
             // Populate the Claude History dropdown off the main thread
             // (directory scan + head parse of each candidate file).
@@ -685,6 +698,8 @@ final class AppCoordinator {
     /// Codex offers no model list).
     private func applyChosenModel(to backend: AskBackend, kind: AskBackendKind) {
         guard kind == .claude else { return }
+        // A new conversation starts in Auto (the backend's launch default).
+        overlay.session.permissionMode = .defaultMode
         overlay.session.selectedModel = prefs.askModel ?? ModelOption.defaultValue
         if let model = prefs.askModel { backend.setModel(model) }
     }
@@ -826,6 +841,8 @@ final class AppCoordinator {
             case .commandOutput(let text): self.overlay.session.appendCommandOutput(text)
             case .signedOut: self.handleSignedOut(kind: kind)
             case .activity(let label): self.overlay.session.setActivity(label)
+            case .permissionRequest(let request): self.overlay.session.showPermissionRequest(request)
+            case .permissionMode(let mode): self.overlay.session.permissionMode = mode
             }
         }
     }

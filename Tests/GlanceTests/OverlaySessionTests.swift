@@ -14,6 +14,15 @@ final class OverlaySessionTests: XCTestCase {
     }
 
     @MainActor
+    func testFooterHidesTheCLIVersion() {
+        let session = OverlaySession()
+        session.backendLabel = "Claude CLI connected · claude 2.1.294"
+        XCTAssertEqual(session.footerStatusLabel, "Claude CLI connected")
+        session.backendLabel = "Checking Claude CLI…"
+        XCTAssertEqual(session.footerStatusLabel, "Checking Claude CLI…")
+    }
+
+    @MainActor
     func testBackendChangeClearsModelName() {
         let session = OverlaySession()
         session.modelName = "Fable 5.1"

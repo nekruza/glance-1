@@ -10,6 +10,8 @@ struct StreamLine: Decodable {
     let isError: Bool?
     let result: String?
     let model: String?
+    /// `system/init` and `system/status`: the session's permission mode.
+    let permissionMode: String?
     let event: Inner?
     /// `system/commands_changed` carries the refreshed command list here.
     let commands: LenientArray<SlashCommand>?
@@ -58,6 +60,7 @@ struct StreamLine: Decodable {
         case isError = "is_error"
         case result
         case model
+        case permissionMode
         case event
         case commands
         case terminalSlashCommands = "terminal_slash_commands"
@@ -73,6 +76,7 @@ struct StreamLine: Decodable {
         isError = try c.decodeIfPresent(Bool.self, forKey: .isError)
         result = try c.decodeIfPresent(String.self, forKey: .result)
         model = try c.decodeIfPresent(String.self, forKey: .model)
+        permissionMode = try? c.decodeIfPresent(String.self, forKey: .permissionMode)
         event = try c.decodeIfPresent(Inner.self, forKey: .event)
         // Catalog fields are best-effort: a shape we don't expect must never
         // cost the line its token/result.
@@ -133,6 +137,12 @@ struct StreamLine: Decodable {
         default:
             return nil
         }
+    }
+
+    /// The mode a `system` line reports ("default" = manual), if any.
+    var reportedPermissionMode: PermissionMode? {
+        guard type == "system", let permissionMode else { return nil }
+        return PermissionMode(cliValue: permissionMode)
     }
 
     /// The model id announced on the `system/init` line. Hook-related

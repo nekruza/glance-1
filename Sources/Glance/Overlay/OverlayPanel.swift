@@ -95,6 +95,15 @@ final class OverlayPanel: NSPanel {
             && characters?.lowercased() == "j"
     }
 
+    /// ⇧Tab: cycle the permission mode, as in the terminal. Matched by key
+    /// code — its character is backtab (\u{19}), which SwiftUI's `.tab`
+    /// key press doesn't match, and the field editor would otherwise use it
+    /// to move focus out of the input.
+    static func isModeCycleShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        let meaningful: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        return keyCode == 48 && modifiers.intersection(meaningful) == .shift
+    }
+
     override func cancelOperation(_ sender: Any?) {
         onCancel?() // Esc via responder chain too
     }

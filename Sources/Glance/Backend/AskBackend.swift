@@ -31,6 +31,12 @@ enum AskBackendEvent {
     /// What the agent is doing right now between answer text — a tool run
     /// ("Reading files") or a thinking block. Informational; the turn goes on.
     case activity(String)
+    /// The CLI wants to use a tool and is waiting for Allow / Deny
+    /// (`answerPermission`). The turn is paused until answered.
+    case permissionRequest(PermissionRequest)
+    /// The session's permission mode, as the CLI reports it (each turn's init
+    /// line, or after a switch such as an approved plan).
+    case permissionMode(PermissionMode)
 }
 
 protocol AskBackend: AnyObject {
@@ -46,6 +52,10 @@ protocol AskBackend: AnyObject {
     /// from the next message on. Call before `startWarm()` for a new backend;
     /// on a live one it switches the running session, keeping the conversation.
     func setModel(_ value: String)
+    /// Switch the permission mode (live, or for the next spawn).
+    func setPermissionMode(_ mode: PermissionMode)
+    /// Reply to a `.permissionRequest`.
+    func answerPermission(id: String, allow: Bool)
     func shutdown()
     /// Receives the slash-command catalog (and account) whenever the backend
     /// learns or refreshes it; delivered on main. Register before `startWarm()`.
@@ -63,4 +73,7 @@ extension AskBackend {
     func interrupt() {}
     /// Backends without a model list keep their CLI's default.
     func setModel(_ value: String) {}
+    /// Backends without permission modes never ask, so never need an answer.
+    func setPermissionMode(_ mode: PermissionMode) {}
+    func answerPermission(id: String, allow: Bool) {}
 }

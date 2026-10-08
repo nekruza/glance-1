@@ -53,12 +53,57 @@ final class OverlaySession: ObservableObject {
         return modelOptions.first { $0.value == selectedModel }?.label ?? "Model"
     }
 
+    // MARK: - Permission mode
+
+    /// The CLI's permission mode (footer menu, ⇧Tab). Each conversation
+    /// starts in Auto; Bypass only by an explicit menu pick.
+    @Published var permissionMode: PermissionMode = .defaultMode
+    /// Claude only — Codex has no permission modes.
+    @Published var showsPermissionModes = false
+    /// A tool use waiting for Allow / Deny; the turn is paused meanwhile.
+    @Published var pendingPermission: PermissionRequest?
+    var permissionModeHandler: ((PermissionMode) -> Void)?
+    var permissionAnswerHandler: ((PermissionRequest, Bool) -> Void)?
+
+    func selectPermissionMode(_ mode: PermissionMode) {
+        guard showsPermissionModes, mode != permissionMode else { return }
+        permissionMode = mode
+        permissionModeHandler?(mode)
+    }
+
+    /// ⇧Tab, as in the terminal. False when modes don't apply.
+    @discardableResult
+    func cyclePermissionMode() -> Bool {
+        guard showsPermissionModes else { return false }
+        selectPermissionMode(permissionMode.next)
+        return true
+    }
+
+    func showPermissionRequest(_ request: PermissionRequest) {
+        guard isWorking else { return }
+        pendingPermission = request
+        activity = "Waiting for your approval"
+    }
+
+    func answerPermission(allow: Bool) {
+        guard let request = pendingPermission else { return }
+        pendingPermission = nil
+        activity = nil
+        permissionAnswerHandler?(request, allow)
+    }
+
     /// Footer menu pick: takes effect from the next message, same conversation.
     func selectModel(_ option: ModelOption) {
         guard option.value != selectedModel else { return }
         selectedModel = option.value
         modelName = option.label
         modelHandler?(option.value)
+    }
+
+    /// The footer's connection text without the CLI version ("Claude CLI
+    /// connected"). The full label keeps it for /status.
+    var footerStatusLabel: String {
+        backendLabel.components(separatedBy: " · ").first ?? backendLabel
     }
 
     /// Footer text: the connection label, plus the model once known.
@@ -130,6 +175,7 @@ final class OverlaySession: ObservableObject {
         guard isWorking else { return }
         isWorking = false
         activity = nil
+        pendingPermission = nil
         if !turns.isEmpty { turns[turns.count - 1].stopped = true }
         stopHandler?()
     }
@@ -157,6 +203,7 @@ final class OverlaySession: ObservableObject {
         input = ""
         isWorking = false
         activity = nil
+        pendingPermission = nil
         attachImage = false
         suggestions = []
     }
@@ -177,6 +224,10 @@ final class OverlaySession: ObservableObject {
         terminalOnlyCommands = []
         modelOptions = []
         modelHandler = nil
+        permissionMode = .defaultMode
+        showsPermissionModes = kind == .claude
+        permissionModeHandler = nil
+        permissionAnswerHandler = nil
     }
 
     /// Replace the transcript with a resumed Claude session only if no clear or
@@ -348,6 +399,7 @@ final class OverlaySession: ObservableObject {
     func appendCommandOutput(_ text: String) {
         isWorking = false
         activity = nil
+        pendingPermission = nil
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].answer = text
         turns[turns.count - 1].isCommandOutput = true
@@ -358,6 +410,7 @@ final class OverlaySession: ObservableObject {
     func returnLastQuestionToInput() {
         isWorking = false
         activity = nil
+        pendingPermission = nil
         guard let last = turns.popLast() else { return }
         input = last.question
     }
@@ -365,6 +418,7 @@ final class OverlaySession: ObservableObject {
     func completeTurn() {
         isWorking = false
         activity = nil
+        pendingPermission = nil
     }
 
     /// Swap the last answer's text (task-capture cleanup after completion).
@@ -376,6 +430,7 @@ final class OverlaySession: ObservableObject {
     func failTurn(_ message: String) {
         isWorking = false
         activity = nil
+        pendingPermission = nil
         guard !turns.isEmpty else { return }
         turns[turns.count - 1].answer = message
         turns[turns.count - 1].failed = true

@@ -18,6 +18,10 @@ extension AskBackendEvent: Equatable {
             return lhsLabel == rhsLabel
         case (.signedOut, .signedOut):
             return true
+        case let (.permissionRequest(lhsRequest), .permissionRequest(rhsRequest)):
+            return lhsRequest == rhsRequest
+        case let (.permissionMode(lhsMode), .permissionMode(rhsMode)):
+            return lhsMode == rhsMode
         default:
             return false
         }
@@ -152,9 +156,9 @@ final class ClaudeBackendTests: XCTestCase {
         XCTAssertEqual(second.prefix(2), [.token("hi"), .completed])
     }
 
-    /// The overlay's CLI runs without permission prompts (headless mode can't
-    /// answer them) and with the Claude in Chrome tools.
-    func testLaunchesWithPermissionBypassAndChrome() throws {
+    /// The overlay's CLI starts in Auto mode with bypass only available,
+    /// sends permission prompts to Glance, and has the Claude in Chrome tools.
+    func testLaunchesInAutoModeWithPromptsAndChrome() throws {
         let fixture = try IgnoringTerminationFixture(prefix: "claude-launch-flags")
         defer { fixture.cleanup() }
         let cli = fixture.directory.appendingPathComponent("args-cli")
@@ -170,7 +174,13 @@ final class ClaudeBackendTests: XCTestCase {
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))
         }
         let args = try String(contentsOf: argsFile, encoding: .utf8).split(separator: "\n").map(String.init)
-        XCTAssertEqual(Array(args.prefix(2)), ["--dangerously-skip-permissions", "--chrome"])
+        XCTAssertEqual(Array(args.prefix(6)), [
+            "--allow-dangerously-skip-permissions",
+            "--permission-mode", "auto",
+            "--permission-prompt-tool", "stdio",
+            "--chrome",
+        ])
+        XCTAssertFalse(args.contains("--dangerously-skip-permissions"), "bypass must not be the default")
         XCTAssertTrue(args.contains("-p"))
     }
 
