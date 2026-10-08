@@ -73,9 +73,12 @@ final class ClaudeBackend: AskBackend {
         }
 
         // Neutral cwd: a private temp dir so we don't inherit a project's
-        // CLAUDE.md / hooks (keeps latency and behavior predictable).
+        // CLAUDE.md / hooks (keeps latency and behavior predictable). One per
+        // backend: a replaced backend deletes its dir on shutdown, which must
+        // never be the dir its successor launches in.
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("glance-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            .appendingPathComponent("glance-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)",
+                                    isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.workingDir = dir
         self.ownsWorkingDir = true
@@ -115,6 +118,11 @@ final class ClaudeBackend: AskBackend {
             args += ["--append-system-prompt", sys]
         }
         proc.arguments = args
+        // Launching in a missing dir fails outright; the system may have
+        // cleaned the temp dir during a long-lived session.
+        if ownsWorkingDir {
+            try? FileManager.default.createDirectory(at: workingDir, withIntermediateDirectories: true)
+        }
         proc.currentDirectoryURL = workingDir
 
         let inPipe = Pipe()
@@ -154,9 +162,11 @@ final class ClaudeBackend: AskBackend {
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void) {
         ioQueue.async { [weak self] in
             guard let self else { return }
-            self.spawnIfNeeded()
+            // Handler first: a failed launch reports why to this question.
             self.currentHandler = onEvent
             self.sawTokenThisTurn = false
+            self.spawnIfNeeded()
+            guard self.currentHandler != nil else { return } // launch failed, already reported
             self.startTimeout()
 
             // Attach whatever image the caller passed (may be nil for text-only,
@@ -283,8 +293,10 @@ final class ClaudeBackend: AskBackend {
         shutdownForceKillWork?.cancel()
         shutdownForceKillWork = nil
         // If the process dies mid-turn, surface it rather than spin (FR13/FR16).
+        // The handler outlives a completed turn, so check a question is still
+        // waiting for its result — an idle exit must not fail the last answer.
         timeoutWork?.cancel()
-        if currentHandler != nil {
+        if currentHandler != nil, openTurns > 0 {
             emit(.failed("Claude CLI exited unexpectedly (status \(p.terminationStatus))."))
         }
         process = nil
