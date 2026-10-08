@@ -100,10 +100,13 @@ final class OverlaySession: ObservableObject {
         modelHandler?(option.value)
     }
 
-    /// The footer's connection text without the CLI version ("Claude CLI
-    /// connected"). The full label keeps it for /status.
+    /// The provider this overlay talks to (footer name).
+    @Published var backendKind: AskBackendKind = .defaultValue
+
+    /// Footer status: "Claude ON" / "Codex OFF". The full `backendLabel`
+    /// (with the CLI version) stays for /status.
     var footerStatusLabel: String {
-        backendLabel.components(separatedBy: " · ").first ?? backendLabel
+        "\(backendKind.shortName) \(backendConnected ? "ON" : "OFF")"
     }
 
     /// Footer text: the connection label, plus the model once known.
@@ -217,6 +220,7 @@ final class OverlaySession: ObservableObject {
         historyHandler = nil
         historySessions = []
         backendConnected = false
+        backendKind = kind
         backendLabel = "Checking \(kind.displayName)…"
         modelName = nil
         setupIssue = nil

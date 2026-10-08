@@ -12,6 +12,14 @@ enum AskBackendKind: String, CaseIterable, Hashable, Codable {
         case .codex: return "Codex CLI"
         }
     }
+
+    /// Footer name: "Claude ON".
+    var shortName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        }
+    }
 }
 
 enum AskBackendEvent {

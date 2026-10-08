@@ -607,6 +607,7 @@ final class AppCoordinator {
             self?.selectModel(value)
         }
         overlay.session.showsPermissionModes = kind == .claude
+        overlay.session.backendKind = kind
         overlay.session.permissionModeHandler = { [weak self] mode in
             self?.backend?.setPermissionMode(mode)
         }

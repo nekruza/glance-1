@@ -14,12 +14,18 @@ final class OverlaySessionTests: XCTestCase {
     }
 
     @MainActor
-    func testFooterHidesTheCLIVersion() {
+    func testFooterShowsProviderOnOff() {
         let session = OverlaySession()
         session.backendLabel = "Claude CLI connected · claude 2.1.294"
-        XCTAssertEqual(session.footerStatusLabel, "Claude CLI connected")
-        session.backendLabel = "Checking Claude CLI…"
-        XCTAssertEqual(session.footerStatusLabel, "Checking Claude CLI…")
+        session.backendConnected = true
+        XCTAssertEqual(session.footerStatusLabel, "Claude ON", "no CLI version in the footer")
+        session.backendConnected = false
+        XCTAssertEqual(session.footerStatusLabel, "Claude OFF")
+
+        session.resetForBackendChange(to: .codex)
+        XCTAssertEqual(session.footerStatusLabel, "Codex OFF")
+        session.backendConnected = true
+        XCTAssertEqual(session.footerStatusLabel, "Codex ON")
     }
 
     @MainActor
