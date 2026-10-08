@@ -269,12 +269,14 @@ final class ClaudeBackend: AskBackend {
 
         if let event = line.askBackendEvent {
             switch event {
-            case .token:
+            case .token, .activity:
+                // Text or a tool/thinking start: the CLI is alive (FR13). Tool
+                // runs (Jira, Slack…) can go well past the timeout before text.
                 if !sawTokenThisTurn {
                     sawTokenThisTurn = true
-                    timeoutWork?.cancel() // first token arrived (FR13)
+                    timeoutWork?.cancel()
                 }
-            case .completed, .failed, .model, .commandOutput, .signedOut, .activity:
+            case .completed, .failed, .model, .commandOutput, .signedOut:
                 break
             }
             emit(event)
@@ -337,10 +339,32 @@ final class ClaudeBackend: AskBackend {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.sawTokenThisTurn else { return }
             self.emit(.failed("Claude didn't respond within \(Int(self.firstTokenTimeout))s."))
-            self.shutdown()
+            self.abandonHungProcess()
         }
         timeoutWork = work
         ioQueue.asyncAfter(deadline: .now() + firstTokenTimeout, execute: work)
+    }
+
+    /// Kill a CLI that never answered but keep this backend: it stays the
+    /// installed one, so `shutdown()` here would fail every later question
+    /// with "Backend not ready.". The next ask spawns a fresh CLI, resuming
+    /// the session.
+    private func abandonHungProcess() {
+        guard let hung = process else { return }
+        (hung.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        stdinPipe?.fileHandleForWriting.closeFile()
+        // Detach first: its exit is then ignored (handleExit checks identity)
+        // and nothing it still prints reaches the next turn.
+        process = nil
+        stdinPipe = nil
+        stdoutBuffer.removeAll()
+        openTurns = 0
+        discardedTurns = 0
+        hung.terminate()
+        ioQueue.asyncAfter(deadline: .now() + 0.25) { [weak hung] in
+            guard let hung, hung.isRunning else { return }
+            Darwin.kill(hung.processIdentifier, SIGKILL)
+        }
     }
 
     private func emit(_ event: AskBackendEvent) {

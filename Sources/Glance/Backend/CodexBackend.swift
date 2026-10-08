@@ -251,6 +251,12 @@ final class CodexBackend: AskBackend {
             }
             emit(.token(text))
         case let .activity(label):
+            // Codex sends its text only once a message is complete, so a
+            // started command or reasoning item is the first sign of life.
+            if !sawTokenThisTurn {
+                sawTokenThisTurn = true
+                timeoutWork?.cancel()
+            }
             emit(.activity(label))
         case .completed:
             receivedTerminalEvent = true

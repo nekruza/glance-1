@@ -14,6 +14,10 @@ extension AskBackendEvent: Equatable {
             return lhsID == rhsID
         case let (.commandOutput(lhsText), .commandOutput(rhsText)):
             return lhsText == rhsText
+        case let (.activity(lhsLabel), .activity(rhsLabel)):
+            return lhsLabel == rhsLabel
+        case (.signedOut, .signedOut):
+            return true
         default:
             return false
         }
