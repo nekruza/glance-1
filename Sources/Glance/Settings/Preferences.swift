@@ -41,6 +41,7 @@ final class Preferences: ObservableObject {
         static let completionSoundName = "tasks.completionSoundName"
         static let confetti = "tasks.confetti"
         static let askBackend = "ask.backend"
+        static let askModel = "ask.model"
         static let onboardingCompleted = "onboarding.completed"
     }
 
@@ -263,6 +264,12 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(askBackend.rawValue, forKey: Keys.askBackend) }
     }
 
+    /// Claude model for the ask overlay, as a `ModelOption.value` ("opus",
+    /// "claude-opus-4-8"); nil = the CLI's default. Picked in the footer.
+    @Published var askModel: String? {
+        didSet { defaults.set(askModel, forKey: Keys.askModel) }
+    }
+
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
     @Published var overlayOpacity: Double {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
@@ -388,6 +395,7 @@ final class Preferences: ObservableObject {
             ? true : defaults.bool(forKey: Keys.confetti)
         askBackend = AskBackendKind(rawValue: defaults.string(forKey: Keys.askBackend) ?? "")
             ?? .claude
+        askModel = defaults.string(forKey: Keys.askModel)
     }
 }
 

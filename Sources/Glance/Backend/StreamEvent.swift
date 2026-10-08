@@ -89,7 +89,7 @@ struct StreamLine: Decodable {
         if type == "control_response", let payload = response?.response {
             let defaultModel = payload.models?.elements.first { $0.value == "default" }?.resolvedModel
             return BackendCatalog(commands: payload.commands?.elements, account: payload.account,
-                                  defaultModel: defaultModel)
+                                  defaultModel: defaultModel, models: payload.models?.elements)
         }
         if type == "system", subtype == "commands_changed", let commands {
             return BackendCatalog(commands: commands.elements)

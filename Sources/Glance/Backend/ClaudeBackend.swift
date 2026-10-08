@@ -29,6 +29,9 @@ final class ClaudeBackend: AskBackend {
     /// Extra system-prompt text appended to the session (V2: task-creation
     /// protocol for the ask overlay).
     var appendSystemPrompt: String?
+    /// `--model` for every spawn (nil = the CLI's default); kept in step with
+    /// live `set_model` switches so a respawn stays on the chosen model.
+    private var model: String?
 
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -117,6 +120,9 @@ final class ClaudeBackend: AskBackend {
         if let sys = appendSystemPrompt, !sys.isEmpty {
             args += ["--append-system-prompt", sys]
         }
+        if let model {
+            args += ["--model", model]
+        }
         proc.arguments = args
         // Launching in a missing dir fails outright; the system may have
         // cleaned the temp dir during a long-lived session.
@@ -200,6 +206,22 @@ final class ClaudeBackend: AskBackend {
             self.discardedTurns += 1
             let request = #"{"type":"control_request","request_id":"glance-stop-\#(UUID().uuidString)","request":{"subtype":"interrupt"}}"#
             try? handle.write(contentsOf: Data((request + "\n").utf8))
+        }
+    }
+
+    func setModel(_ value: String) {
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            self.model = value == ModelOption.defaultValue ? nil : value
+            // Not spawned yet: the flag above covers it.
+            guard self.process != nil, let handle = self.stdinPipe?.fileHandleForWriting else { return }
+            let request: [String: Any] = [
+                "type": "control_request",
+                "request_id": "glance-model-\(UUID().uuidString)",
+                "request": ["subtype": "set_model", "model": value],
+            ]
+            guard let json = try? JSONSerialization.data(withJSONObject: request) else { return }
+            try? handle.write(contentsOf: json + Data("\n".utf8))
         }
     }
 

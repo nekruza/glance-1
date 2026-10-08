@@ -40,6 +40,27 @@ final class OverlaySession: ObservableObject {
     /// Nil until the first reply of a spawned process.
     @Published var modelName: String?
 
+    /// Models the CLI offers (footer menu); empty for providers without a
+    /// list (Codex), which keep the plain label.
+    @Published var modelOptions: [ModelOption] = []
+    /// The chosen `ModelOption.value`; "default" until the user picks one.
+    @Published var selectedModel: String = ModelOption.defaultValue
+    var modelHandler: ((String) -> Void)?
+
+    /// The footer menu's title: what's answering now, else what's chosen.
+    var modelMenuLabel: String {
+        if let modelName, !modelName.isEmpty { return modelName }
+        return modelOptions.first { $0.value == selectedModel }?.label ?? "Model"
+    }
+
+    /// Footer menu pick: takes effect from the next message, same conversation.
+    func selectModel(_ option: ModelOption) {
+        guard option.value != selectedModel else { return }
+        selectedModel = option.value
+        modelName = option.label
+        modelHandler?(option.value)
+    }
+
     /// Footer text: the connection label, plus the model once known.
     var footerLabel: String {
         guard let modelName, !modelName.isEmpty else { return backendLabel }
@@ -154,6 +175,8 @@ final class OverlaySession: ObservableObject {
         setupIssue = nil
         cliCommands = [] // the next provider reports its own (Codex: none)
         terminalOnlyCommands = []
+        modelOptions = []
+        modelHandler = nil
     }
 
     /// Replace the transcript with a resumed Claude session only if no clear or

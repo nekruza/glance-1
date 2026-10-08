@@ -497,6 +497,7 @@ final class AppCoordinator {
         let backend = selection.backend
         backend.configure(systemPrompt: TaskCapture.systemPrompt)
         backend.firstTokenTimeout = 30 // FR13
+        applyChosenModel(to: backend, kind: kind)
         wireCatalog(backend)
         backend.startWarm()
         return .success((backend, connectionLabel(for: kind, version: selection.version)))
@@ -602,6 +603,9 @@ final class AppCoordinator {
         overlay.session.stopHandler = { [weak self] in
             self?.backend?.interrupt()
         }
+        overlay.session.modelHandler = { [weak self] value in
+            self?.selectModel(value)
+        }
         if showsHistory {
             // Populate the Claude History dropdown off the main thread
             // (directory scan + head parse of each candidate file).
@@ -656,6 +660,7 @@ final class AppCoordinator {
         // Resuming a large session (long transcript, project hooks) can take
         // far longer to first token than a fresh one.
         backend.firstTokenTimeout = 120
+        applyChosenModel(to: backend, kind: .claude)
         wireCatalog(backend)
         backend.startWarm()
         backendLifecycle.install(backend)
@@ -676,6 +681,21 @@ final class AppCoordinator {
 
     // MARK: - Slash commands
 
+    /// Start a new backend on the model picked in the footer (Claude only —
+    /// Codex offers no model list).
+    private func applyChosenModel(to backend: AskBackend, kind: AskBackendKind) {
+        guard kind == .claude else { return }
+        overlay.session.selectedModel = prefs.askModel ?? ModelOption.defaultValue
+        if let model = prefs.askModel { backend.setModel(model) }
+    }
+
+    /// Footer model menu: remember the pick and switch the live session.
+    private func selectModel(_ value: String) {
+        guard prefs.askBackend == .claude else { return }
+        prefs.askModel = value == ModelOption.defaultValue ? nil : value
+        backend?.setModel(value)
+    }
+
     /// Feed a backend's command catalog (and account/MCP state) to the `/`
     /// menu and the /status report. The catalog outlives the backend, so the
     /// menu stays filled across /clear and resume while the new process starts.
@@ -687,6 +707,7 @@ final class AppCoordinator {
             if let account = catalog.account { self.claudeAccount = account }
             if let servers = catalog.mcpServers { self.mcpServers = servers }
             if let model = catalog.defaultModel { self.defaultModel = model }
+            if let models = catalog.models, !models.isEmpty { self.overlay.session.modelOptions = models }
         }
     }
 

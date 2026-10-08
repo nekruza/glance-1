@@ -42,6 +42,10 @@ protocol AskBackend: AnyObject {
     /// conversation, like Esc in the terminal. The stopped turn's handler gets
     /// no further events; the next `ask` continues the same session.
     func interrupt()
+    /// Use this model (a `ModelOption.value`; "default" = the CLI's choice)
+    /// from the next message on. Call before `startWarm()` for a new backend;
+    /// on a live one it switches the running session, keeping the conversation.
+    func setModel(_ value: String)
     func shutdown()
     /// Receives the slash-command catalog (and account) whenever the backend
     /// learns or refreshes it; delivered on main. Register before `startWarm()`.
@@ -57,4 +61,6 @@ extension AskBackend {
     /// Backends that can't stop a turn let it finish; the overlay already
     /// ignores the stopped turn's events.
     func interrupt() {}
+    /// Backends without a model list keep their CLI's default.
+    func setModel(_ value: String) {}
 }

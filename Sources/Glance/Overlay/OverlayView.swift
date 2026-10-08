@@ -487,6 +487,53 @@ struct OverlayView: View {
         .help("Clear conversation and start a fresh session")
     }
 
+    // MARK: - Model menu
+
+    /// The model name in the footer, as a menu of the CLI's models. A pick
+    /// applies from the next message and keeps the conversation.
+    private var modelMenu: some View {
+        let options = session.modelOptions
+        return Menu {
+            ForEach(options.filter(\.isAlias), id: \.value) { modelItem($0) }
+            let pinned = options.filter { !$0.isAlias }
+            if !pinned.isEmpty {
+                Divider()
+                Menu("Other versions") {
+                    ForEach(pinned, id: \.value) { modelItem($0) }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(session.modelMenuLabel)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 7.5, weight: .bold))
+            }
+            .foregroundStyle(Theme.muted)
+            .fixedSize()
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Change model — applies from your next message")
+    }
+
+    /// A Toggle renders as a native checkmarked menu item.
+    private func modelItem(_ option: ModelOption) -> some View {
+        Toggle(itemTitle(option), isOn: Binding(
+            get: { option.value == session.selectedModel },
+            set: { if $0 { session.selectModel(option) } }
+        ))
+    }
+
+    /// "Default (Opus 5.5)", "Fable 5.1 — For your toughest challenges".
+    private func itemTitle(_ option: ModelOption) -> String {
+        if option.value == ModelOption.defaultValue { return "Default (\(option.label))" }
+        guard let description = option.description, !description.isEmpty else { return option.label }
+        return "\(option.label) — \(description)"
+    }
+
     // MARK: - History (past Claude CLI sessions)
 
     private var historyButton: some View {
@@ -562,7 +609,9 @@ struct OverlayView: View {
                     .foregroundStyle(Theme.faint)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if let model = session.modelName, !model.isEmpty {
+                if !session.modelOptions.isEmpty {
+                    modelMenu
+                } else if let model = session.modelName, !model.isEmpty {
                     Text(model)
                         .fontWeight(.medium)
                         .foregroundStyle(Theme.muted)

@@ -49,10 +49,33 @@ struct McpServerStatus: Decodable, Equatable {
     let status: String
 }
 
-/// A model choice from `initialize` → `models`; only the default is used.
-struct ModelOption: Decodable {
+/// A model choice from `initialize` → `models` — the overlay's model menu.
+/// `value` is what `--model` / `set_model` take ("default", "opus",
+/// "claude-opus-4-8"); `resolvedModel` the id it maps to.
+struct ModelOption: Decodable, Equatable, Hashable {
+    static let defaultValue = "default"
+
     let value: String
     let resolvedModel: String?
+    let displayName: String?
+    let description: String?
+
+    init(value: String, resolvedModel: String? = nil, displayName: String? = nil, description: String? = nil) {
+        self.value = value
+        self.resolvedModel = resolvedModel
+        self.displayName = displayName
+        self.description = description
+    }
+
+    /// The name to show: "Opus 5.5". The default reads as the model it picks.
+    var label: String {
+        if value == Self.defaultValue, let resolvedModel { return ModelCatalog.prettify(resolvedModel) }
+        return displayName ?? ModelCatalog.prettify(resolvedModel ?? value)
+    }
+
+    /// Current aliases (default, opus, fable…) rather than pinned older
+    /// versions ("claude-opus-4-8"), which go in a submenu.
+    var isAlias: Bool { !value.hasPrefix("claude-") }
 }
 
 /// Catalog facts carried by one stream line. Each field is nil when that line
@@ -67,6 +90,8 @@ struct BackendCatalog: Equatable {
     var mcpServers: [McpServerStatus]?
     /// Model id the CLI uses when none is chosen, e.g. "claude-opus-5-5".
     var defaultModel: String?
+    /// Every model the CLI offers (`initialize`), for the model menu.
+    var models: [ModelOption]?
 }
 
 /// Commands Glance answers itself. The CLI refuses these in headless
