@@ -107,7 +107,12 @@ final class ClaudeBackend: AskBackend {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
+        // `claude --dangerously-skip-permissions --chrome`, run headless:
+        // -p mode can't answer permission prompts, so tools would otherwise
+        // just be denied; --chrome adds the Claude in Chrome tools.
         var args = [
+            "--dangerously-skip-permissions",
+            "--chrome",
             "-p",
             "--input-format", "stream-json",
             "--output-format", "stream-json",

@@ -152,6 +152,28 @@ final class ClaudeBackendTests: XCTestCase {
         XCTAssertEqual(second.prefix(2), [.token("hi"), .completed])
     }
 
+    /// The overlay's CLI runs without permission prompts (headless mode can't
+    /// answer them) and with the Claude in Chrome tools.
+    func testLaunchesWithPermissionBypassAndChrome() throws {
+        let fixture = try IgnoringTerminationFixture(prefix: "claude-launch-flags")
+        defer { fixture.cleanup() }
+        let cli = fixture.directory.appendingPathComponent("args-cli")
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/args\"\nexec cat >/dev/null\n".utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        let backend = ClaudeBackend(binaryPath: cli.path)
+        defer { backend.shutdown() }
+        backend.startWarm()
+
+        let argsFile = fixture.directory.appendingPathComponent("args")
+        let deadline = Date().addingTimeInterval(2)
+        while !FileManager.default.fileExists(atPath: argsFile.path), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        let args = try String(contentsOf: argsFile, encoding: .utf8).split(separator: "\n").map(String.init)
+        XCTAssertEqual(Array(args.prefix(2)), ["--dangerously-skip-permissions", "--chrome"])
+        XCTAssertTrue(args.contains("-p"))
+    }
+
     /// If launching does fail, the real reason reaches the question that
     /// triggered it instead of a bare "Backend not ready.".
     func testLaunchFailureReportsTheRealReason() {
