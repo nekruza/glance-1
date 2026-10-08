@@ -93,6 +93,13 @@ final class ClaudeBackend: AskBackend {
 
     // MARK: - Lifecycle
 
+    /// Read from main; never call on `ioQueue`.
+    var resumePoint: ResumePoint? {
+        ioQueue.sync {
+            resumeSessionId.map { ResumePoint(sessionId: $0, cwd: workingDir.path) }
+        }
+    }
+
     func configure(systemPrompt: String) {
         appendSystemPrompt = systemPrompt
     }

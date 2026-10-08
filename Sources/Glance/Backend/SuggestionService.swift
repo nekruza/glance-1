@@ -4,6 +4,9 @@ import Foundation
 /// one-shot provider request (separate from the conversation session, so the
 /// transcript is never polluted).
 final class SuggestionService {
+    /// How the prompt starts; past sessions beginning with it are Glance's
+    /// own calls, not the user's (`SessionHistoryStore`).
+    static let promptOpening = "Based on this Q&A, suggest"
 
     private final class RequestState {
         var output = ""
@@ -41,7 +44,7 @@ final class SuggestionService {
         // Keep the excerpt bounded — suggestions don't need the whole answer.
         let a = String(answer.prefix(4000))
         let prompt = """
-        Based on this Q&A, suggest 3 short follow-up questions the user \
+        \(Self.promptOpening) 3 short follow-up questions the user \
         might ask next. Each under 60 characters. Output ONLY the 3 \
         questions, one per line, no numbering, no quotes.
 
@@ -50,7 +53,8 @@ final class SuggestionService {
         """
 
         let model = provider.descriptor.model(for: .haiku)
-        let cancellation = provider.runText(AutomationRequest(prompt: prompt, model: model)) {
+        let cancellation = provider.runText(AutomationRequest(prompt: prompt, model: model,
+                                                              persistSession: false)) {
             [weak self, state] event in
             self?.handle(event, for: state, completion: completion)
         }

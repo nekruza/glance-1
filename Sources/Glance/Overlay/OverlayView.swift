@@ -5,9 +5,11 @@ import SwiftUI
 /// asked header(s) + streamed Markdown + follow-up bar + footer.
 struct OverlayView: View {
     @ObservedObject var session: OverlaySession
+    /// The open chats (Chats menu); the same list whichever chat is shown.
+    @ObservedObject var chats = ChatListModel()
     @ObservedObject private var prefs = Preferences.shared
     @FocusState private var inputFocused: Bool
-    @State private var showHistory = false
+    @State private var showChats = false
     // "Viewport is at the bottom" — streaming auto-scroll runs only while
     // true. User scrolling up disengages it (ScrollPinTracker); scrolling
     // back to the bottom, tapping the ↓ pill, or asking a new question
@@ -483,13 +485,13 @@ struct OverlayView: View {
         .help("Close overlay")
     }
 
-    private var clearButton: some View {
-        Button(action: { session.clearHandler?() }) {
-            Image(systemName: "trash")
-                .font(.system(size: 13))
+    private var newChatButton: some View {
+        Button(action: { chats.newChat() }) {
+            Image(systemName: "square.and.pencil")
+                .font(.system(size: 13.5))
         }
         .buttonStyle(OverlayIconButtonStyle())
-        .help("Clear conversation and start a fresh session")
+        .help("New chat (⌘N) — this one stays in Chats")
     }
 
     // MARK: - Permission mode menu
@@ -574,49 +576,130 @@ struct OverlayView: View {
         return "\(option.label) — \(description)"
     }
 
-    // MARK: - History (past Claude CLI sessions)
+    // MARK: - Chats (open conversations + past Claude CLI sessions)
 
-    private var historyButton: some View {
-        Button(action: { showHistory.toggle() }) {
+    private var chatsButton: some View {
+        Button(action: { showChats.toggle() }) {
             HStack(spacing: 4) {
-                Text("History").font(.system(size: 11.5, weight: .medium))
+                Text("Chats").font(.system(size: 11.5, weight: .medium))
                 Image(systemName: "chevron.down").font(.system(size: 8.5, weight: .bold))
             }
             .padding(.horizontal, 8)
-        }
-        .buttonStyle(OverlayIconButtonStyle(minWidth: 28, height: 28))
-        .help("Resume a past Claude CLI session")
-        .popover(isPresented: $showHistory, arrowEdge: .bottom) { historyList }
-    }
-
-    private var historyList: some View {
-        Group {
-            if session.historySessions.isEmpty {
-                Text("No past sessions")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Theme.muted)
-                    .padding(20)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(session.historySessions) { item in
-                            historyRow(item)
-                        }
-                    }
-                    .padding(6)
+            .overlay(alignment: .topTrailing) {
+                // A background chat finished or is waiting for approval.
+                if chats.backgroundNeedsAttention {
+                    Circle().fill(Theme.accent).frame(width: 6, height: 6).offset(x: 1, y: -3)
                 }
-                .frame(width: 340)
-                .frame(maxHeight: 320)
             }
         }
+        .buttonStyle(OverlayIconButtonStyle(minWidth: 28, height: 28))
+        .help(session.showsHistory ? "Switch chats or resume a past Claude CLI session" : "Switch chats")
+        .popover(isPresented: $showChats, arrowEdge: .bottom) { chatsList }
+    }
+
+    /// Past sessions not already open as a chat.
+    private var pastSessions: [SessionSummary] {
+        session.showsHistory ? session.historySessions : []
+    }
+
+    private var chatsList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                popoverRow(action: { showChats = false; chats.newChat() }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.and.pencil").font(.system(size: 12))
+                        Text("New chat").font(.system(size: 12.5, weight: .medium))
+                        Spacer()
+                        Text("⌘N").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                sectionHeader("Open")
+                ForEach(chats.rows) { chatRow($0) }
+                if session.showsHistory {
+                    sectionHeader("Past Claude sessions")
+                    if pastSessions.isEmpty {
+                        Text("No past sessions")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                    }
+                    ForEach(pastSessions) { historyRow($0) }
+                }
+            }
+            .padding(6)
+        }
+        .frame(width: 340)
+        .frame(maxHeight: 380)
         .preferredColorScheme(.dark)
     }
 
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
+    }
+
+    private func popoverRow<Label: View>(action: @escaping () -> Void,
+                                         @ViewBuilder label: () -> Label) -> some View {
+        Button(action: action) {
+            label()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HistoryRowButtonStyle())
+    }
+
+    private func chatRow(_ row: ChatListModel.Row) -> some View {
+        HStack(spacing: 0) {
+            popoverRow(action: {
+                showChats = false
+                chats.select(row.id)
+            }) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(row.isActive ? Theme.accent : Color.clear)
+                        .frame(width: 5, height: 5)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(row.title)
+                            .font(.system(size: 12.5, weight: row.isActive ? .semibold : .regular))
+                            .lineLimit(1)
+                        chatStatusLine(row)
+                    }
+                }
+            }
+            .help(row.isActive ? "On screen now" : "Switch to this chat")
+            Button { chats.close(row.id) } label: {
+                Image(systemName: "xmark").font(.system(size: 8.5, weight: .bold))
+            }
+            .buttonStyle(OverlayIconButtonStyle(minWidth: 22, height: 22, corner: 11))
+            .help(row.status == .working ? "Stop and close this chat" : "Close this chat")
+            .padding(.trailing, 4)
+        }
+    }
+
+    @ViewBuilder private func chatStatusLine(_ row: ChatListModel.Row) -> some View {
+        let when = Self.relativeTime.localizedString(for: row.lastActive, relativeTo: Date())
+        switch row.status {
+        case .working:
+            Text("Working…").font(.system(size: 10.5)).foregroundStyle(Theme.accent)
+        case .needsApproval:
+            Text("Waiting for your approval").font(.system(size: 10.5)).foregroundStyle(Theme.accent)
+        case .unseenReply:
+            Text("New reply · \(when)").font(.system(size: 10.5)).foregroundStyle(Theme.accent)
+        case .failed:
+            Text("Failed · \(when)").font(.system(size: 10.5)).foregroundStyle(Theme.danger)
+        case .idle:
+            Text(row.isActive ? "Open now" : when).font(.system(size: 10.5)).foregroundStyle(.secondary)
+        }
+    }
+
     private func historyRow(_ item: SessionSummary) -> some View {
-        Button {
-            showHistory = false
+        popoverRow(action: {
+            showChats = false
             session.historyHandler?(item)
-        } label: {
+        }) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title)
                     .font(.system(size: 12.5))
@@ -625,11 +708,8 @@ struct OverlayView: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(HistoryRowButtonStyle())
+        .help("Open as a new chat")
     }
 
     private static let relativeTime: RelativeDateTimeFormatter = {
@@ -665,11 +745,9 @@ struct OverlayView: View {
             .font(.system(size: 11.5))
             Spacer(minLength: 12)
             if !session.turns.isEmpty {
-                clearButton
+                newChatButton
             }
-            if session.showsHistory {
-                historyButton
-            }
+            chatsButton
             attachButton
             Button(action: { session.settingsHandler?() }) {
                 Image(systemName: "gearshape")

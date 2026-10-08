@@ -126,6 +126,12 @@ final class AutomationProviderTests: XCTestCase {
         XCTAssertEqual(result.events, [.text("{\"ok\":true}"), .completed])
     }
 
+    func testThrowawayClaudeOneShotIsNotSavedAsASession() throws {
+        let result = try runFakeProvider(kind: .claude, prompt: "Return JSON", persistSession: false)
+
+        XCTAssertEqual(result.arguments, ["-p", "--no-session-persistence", "Return JSON"])
+    }
+
     func testCodexOneShotPlacesModelFlagBeforeStdinPlaceholder() throws {
         let result = try runFakeProvider(kind: .codex, prompt: "Return JSON", model: "gpt-test")
 
@@ -414,7 +420,8 @@ final class AutomationProviderTests: XCTestCase {
 
     private func runFakeProvider(kind: AskBackendKind, prompt: String,
                                  model: String? = nil,
-                                 systemPrompt: String? = nil) throws -> FakeInvocation {
+                                 systemPrompt: String? = nil,
+                                 persistSession: Bool = true) throws -> FakeInvocation {
         let fixtureDirectory = try makeFixtureDirectory()
         defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
         let script: String
@@ -461,7 +468,8 @@ final class AutomationProviderTests: XCTestCase {
             throw FakeProviderError.providerUnavailable
         }
         let cancellation = provider.runText(AutomationRequest(prompt: prompt, model: model,
-                                                               systemPrompt: systemPrompt)) { event in
+                                                               systemPrompt: systemPrompt,
+                                                               persistSession: persistSession)) { event in
             events.append(event)
             switch event {
             case .completed, .failed:

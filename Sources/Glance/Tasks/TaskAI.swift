@@ -438,7 +438,8 @@ final class TaskAI {
         var settled = false
         let choice = model.flatMap(AutomationModelChoice.init(rawValue:))
         provider.runText(AutomationRequest(prompt: prompt,
-                                           model: provider.descriptor.model(for: choice))) { event in
+                                           model: provider.descriptor.model(for: choice),
+                                           persistSession: false)) { event in
             var shouldComplete = false
             var result: String?
             lock.lock()

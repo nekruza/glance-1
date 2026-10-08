@@ -43,8 +43,17 @@ final class AppCoordinator {
     /// Opens the Settings window (wired to the status-item controller).
     var onOpenSettings: (() -> Void)?
 
-    private let backendLifecycle: AskBackendLifecycle
+    /// Open chats (the overlay's Chats menu). Each has its own transcript and
+    /// CLI process, so one keeps working while the user is in another.
+    private var chats: [OverlayChat]
+    /// The chat on screen.
+    private var activeChat: OverlayChat
+    private var backendLifecycle: AskBackendLifecycle { activeChat.lifecycle }
     private var backend: AskBackend? { backendLifecycle.backend }
+    /// Idle Claude processes kept running (~175 MB each). Past this, the
+    /// least recently used idle chat closes its process and resumes the
+    /// conversation by session id when reopened.
+    static let maxLiveChats = 4
     private var suggestions: SuggestionService?
     private var pendingImagePNG: Data?
     private var pendingCaptureLabel: String = ""
@@ -72,7 +81,9 @@ final class AppCoordinator {
     init() {
         self.taskStore = TaskStore()
         self.overlay = OverlayController()
-        self.backendLifecycle = AskBackendLifecycle()
+        let chat = OverlayChat(session: overlay.session)
+        self.activeChat = chat
+        self.chats = [chat]
         self.automationProviderFactory = AutomationProviderFactory()
         self.askBackendFactory = AskBackendFactory()
     }
@@ -80,7 +91,9 @@ final class AppCoordinator {
     init(backendLifecycle: AskBackendLifecycle) {
         self.taskStore = TaskStore()
         self.overlay = OverlayController()
-        self.backendLifecycle = backendLifecycle
+        let chat = OverlayChat(session: overlay.session, lifecycle: backendLifecycle)
+        self.activeChat = chat
+        self.chats = [chat]
         self.automationProviderFactory = AutomationProviderFactory()
         self.askBackendFactory = AskBackendFactory()
     }
@@ -88,7 +101,9 @@ final class AppCoordinator {
     init(backendLifecycle: AskBackendLifecycle, overlay: OverlayController) {
         self.taskStore = TaskStore()
         self.overlay = overlay
-        self.backendLifecycle = backendLifecycle
+        let chat = OverlayChat(session: overlay.session, lifecycle: backendLifecycle)
+        self.activeChat = chat
+        self.chats = [chat]
         self.automationProviderFactory = AutomationProviderFactory()
         self.askBackendFactory = AskBackendFactory()
     }
@@ -104,7 +119,9 @@ final class AppCoordinator {
          }) {
         self.taskStore = taskStore
         self.overlay = overlay
-        self.backendLifecycle = backendLifecycle
+        let chat = OverlayChat(session: overlay.session, lifecycle: backendLifecycle)
+        self.activeChat = chat
+        self.chats = [chat]
         self.automationProviderFactory = automationProviderFactory
         self.askBackendFactory = askBackendFactory
         self.captureDisplay = captureDisplay
@@ -184,6 +201,9 @@ final class AppCoordinator {
     func replaceProviderServices(for kind: AskBackendKind) {
         providerGeneration &+= 1
         ModelCatalog.shared.providerDidChange()
+        // Every chat belongs to the old provider's CLI: keep only the one on
+        // screen (reset by the caller) and stop its process.
+        closeBackgroundChats()
         backendLifecycle.shutdown()
         suggestions?.cancel()
         taskRunner?.cancelAll(reason: "AI provider changed.")
@@ -432,19 +452,7 @@ final class AppCoordinator {
         let generation = providerGeneration
         // FR15 warm path: spawn the backend now so start/auth overlaps with the
         // user reading the overlay and typing.
-        if backend == nil {
-            switch makeSelectedBackend() {
-            case .success(let made):
-                backendLifecycle.install(made.backend)
-                clearSetupIssue()
-                overlay.session.backendConnected = true
-                overlay.session.backendLabel = made.statusLabel
-            case .failure(let status):
-                showSetupIssue(kind: kind, status: status)
-                return
-            }
-        }
-        guard let backend,
+        guard ensureBackend(for: activeChat), let backend,
               let lease = backendLifecycle.lease(for: backend) else { return }
 
         // Attachment defaults off, so don't block on Screen Recording — capture
@@ -484,10 +492,10 @@ final class AppCoordinator {
     /// Construct only the selected ask provider and return the status text that
     /// describes that exact binary. Task automation is built separately from
     /// the same selected provider in `replaceProviderServices(for:)`.
-    private func makeSelectedBackend() -> Result<(backend: AskBackend, statusLabel: String), AutomationAvailability> {
+    private func makeSelectedBackend(for chat: OverlayChat) -> Result<(backend: AskBackend, statusLabel: String), AutomationAvailability> {
         let kind = prefs.askBackend
         let selection: AskBackendFactory.Selection
-        switch askBackendFactory.make(kind: kind) {
+        switch askBackendFactory.make(kind: kind, resuming: chat.resumePoint) {
         case .success(let selected):
             selection = selected
         case .failure(let status):
@@ -496,11 +504,34 @@ final class AppCoordinator {
 
         let backend = selection.backend
         backend.configure(systemPrompt: TaskCapture.systemPrompt)
-        backend.firstTokenTimeout = 30 // FR13
-        applyChosenModel(to: backend, kind: kind)
+        // FR13. Resuming a large session (long transcript, project hooks) can
+        // take far longer to first token than a fresh one.
+        backend.firstTokenTimeout = chat.resumePoint == nil ? 30 : 120
+        applyChosenModel(to: backend, kind: kind, chat: chat)
         wireCatalog(backend)
         backend.startWarm()
         return .success((backend, connectionLabel(for: kind, version: selection.version)))
+    }
+
+    /// Give a chat a running CLI — a fresh one, or one that resumes the chat's
+    /// conversation when its process was closed. False when the CLI is
+    /// missing or broken (the setup card is shown instead).
+    @discardableResult
+    private func ensureBackend(for chat: OverlayChat) -> Bool {
+        guard chat.backend == nil else { return true }
+        switch makeSelectedBackend(for: chat) {
+        case .success(let made):
+            chat.lifecycle.install(made.backend)
+            // The process now carries the conversation (and reports its id).
+            chat.resumePoint = nil
+            if chat === activeChat { clearSetupIssue() }
+            chat.session.backendConnected = true
+            chat.session.backendLabel = made.statusLabel
+            return true
+        case .failure(let status):
+            showSetupIssue(kind: prefs.askBackend, status: status)
+            return false
+        }
     }
 
     /// The selected CLI is missing or broken: open the overlay anyway with
@@ -512,8 +543,8 @@ final class AppCoordinator {
 
     /// The CLI said it isn't signed in: put the question back in the box and
     /// offer Sign in, which runs the exact binary in use.
-    private func handleSignedOut(kind: AskBackendKind) {
-        overlay.session.returnLastQuestionToInput()
+    private func handleSignedOut(kind: AskBackendKind, in chat: OverlayChat) {
+        chat.session.returnLastQuestionToInput()
         switch askBackendFactory.availability(kind: kind) {
         case .available(let path, _):
             presentSetupIssue(.signedOut(kind: kind, binaryPath: path),
@@ -580,116 +611,237 @@ final class AppCoordinator {
         let kind = prefs.askBackend
         let generation = providerGeneration
         let showsHistory = kind == .claude
-        overlay.session.showsHistory = showsHistory
+        let session = overlay.session
+        session.showsHistory = showsHistory
+        session.showsPermissionModes = kind == .claude
+        session.backendKind = kind
+        if !showsHistory { session.historySessions = [] }
+        wireChatList()
+        wire(activeChat)
         overlay.present()
-        // Reflect CLI connection in the footer (present() only reaches here when
-        // the CLI is OK, so show the connected version).
-        overlay.session.settingsHandler = { [weak self] in
-            guard let self else { return }
-            self.overlay.dismiss()
-            self.summonTaskSettings()
-        }
         if showsHistory {
-            overlay.session.historyHandler = { [weak self] summary in
-                self?.resumeHistorySession(summary)
-            }
-        } else {
-            overlay.session.historyHandler = nil
-            overlay.session.historySessions = []
-        }
-        overlay.session.clearHandler = { [weak self] in
-            self?.clearSession()
-        }
-        overlay.session.stopHandler = { [weak self] in
-            self?.backend?.interrupt()
-        }
-        overlay.session.modelHandler = { [weak self] value in
-            self?.selectModel(value)
-        }
-        overlay.session.showsPermissionModes = kind == .claude
-        overlay.session.backendKind = kind
-        overlay.session.permissionModeHandler = { [weak self] mode in
-            self?.backend?.setPermissionMode(mode)
-        }
-        overlay.session.permissionAnswerHandler = { [weak self] request, allow in
-            guard let self else { return }
-            self.backend?.answerPermission(id: request.id, allow: allow)
-            // An approved plan drops the CLI into Ask mode; carry on in Auto
-            // instead, as the terminal does.
-            if allow, request.isPlanApproval {
-                self.overlay.session.selectPermissionMode(.auto)
-            }
-        }
-        if showsHistory {
-            // Populate the Claude History dropdown off the main thread
-            // (directory scan + head parse of each candidate file).
+            // Populate the past-sessions list off the main thread (directory
+            // scan + head parse of each candidate file). Sessions already open
+            // as a chat are left out.
             Task { [weak self] in
                 let sessions = await Task.detached(priority: .utility) {
                     SessionHistoryStore.recentSessions()
                 }.value
                 guard let self, self.prefs.askBackend == .claude,
                       self.isCurrentProvider(kind: kind, generation: generation) else { return }
-                self.overlay.session.historySessions = sessions
+                let open = Set(self.chats.compactMap(\.claudeSessionId))
+                self.overlay.session.historySessions = sessions.filter { !open.contains($0.id) }
             }
         }
-        overlay.session.captureLabel = pendingCaptureLabel
-        overlay.onSubmit { [weak self] question in
-            self?.handleSubmit(question)
-        }
+        session.captureLabel = pendingCaptureLabel
         // Reopened with the Sign in card still up: maybe they signed in meanwhile.
-        if overlay.session.setupIssue?.problem == .signedOut { recheckProviderSetup() }
+        if session.setupIssue?.problem == .signedOut { recheckProviderSetup() }
+    }
+
+    // MARK: - Chats
+
+    private func wireChatList() {
+        let list = overlay.chats
+        list.newChatHandler = { [weak self] in self?.newChat() }
+        list.selectHandler = { [weak self] id in self?.switchToChat(id) }
+        list.closeHandler = { [weak self] id in self?.closeChat(id) }
+        if activeChat.observers.isEmpty { observe(activeChat) }
+        refreshChatList()
+    }
+
+    /// Point a chat's controls at that chat — its own backend, wherever the
+    /// user is when its events arrive.
+    private func wire(_ chat: OverlayChat) {
+        let session = chat.session
+        session.settingsHandler = { [weak self] in
+            guard let self else { return }
+            self.overlay.dismiss()
+            self.summonTaskSettings()
+        }
+        session.historyHandler = session.showsHistory
+            ? { [weak self] summary in self?.resumeHistorySession(summary) }
+            : nil
+        session.submitHandler = { [weak self, weak chat] question in
+            guard let self, let chat else { return }
+            self.handleSubmit(question, in: chat)
+        }
+        session.stopHandler = { [weak chat] in chat?.backend?.interrupt() }
+        session.modelHandler = { [weak self, weak chat] value in
+            guard let self, let chat else { return }
+            self.selectModel(value, in: chat)
+        }
+        session.permissionModeHandler = { [weak chat] mode in
+            chat?.backend?.setPermissionMode(mode)
+        }
+        session.permissionAnswerHandler = { [weak chat] request, allow in
+            guard let chat else { return }
+            chat.backend?.answerPermission(id: request.id, allow: allow)
+            // An approved plan drops the CLI into Ask mode; carry on in Auto
+            // instead, as the terminal does.
+            if allow, request.isPlanApproval {
+                chat.session.selectPermissionMode(.auto)
+            }
+        }
+    }
+
+    /// Keep the Chats menu in step with each chat's transcript and state.
+    /// `@Published` fires before the change lands, hence the hop to main.
+    private func observe(_ chat: OverlayChat) {
+        let session = chat.session
+        let turns = session.$turns
+            .map { "\($0.count)|\($0.last?.failed == true)|\($0.first?.question ?? "")" }
+            .removeDuplicates()
+            .map { _ in () }
+        let working = session.$isWorking.removeDuplicates().map { _ in () }
+        let approval = session.$pendingPermission.map { $0 != nil }.removeDuplicates().map { _ in () }
+        turns.merge(with: working, approval)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.refreshChatList() }
+            .store(in: &chat.observers)
+    }
+
+    private func refreshChatList() {
+        let rows = chats
+            .filter { !$0.isEmpty || $0 === activeChat }
+            .sorted { $0.lastActive > $1.lastActive }
+            .map { $0.row(isActive: $0 === activeChat) }
+        if overlay.chats.rows != rows { overlay.chats.rows = rows }
+    }
+
+    private func makeChat() -> OverlayChat {
+        let chat = OverlayChat()
+        chat.session.adoptSharedState(from: activeChat.session)
+        chats.append(chat)
+        wire(chat)
+        observe(chat)
+        return chat
+    }
+
+    /// New chat (button, ⌘N, Chats menu): a fresh conversation with new
+    /// context. The current one keeps running and stays in the menu.
+    func newChat() {
+        guard !activeChat.isEmpty else { return } // already a fresh chat
+        let chat = makeChat()
+        activate(chat)
+        ensureBackend(for: chat)
+    }
+
+    func switchToChat(_ id: UUID) {
+        guard let chat = chats.first(where: { $0.id == id }), chat !== activeChat else { return }
+        activate(chat)
+        ensureBackend(for: chat)
+    }
+
+    /// Close a chat for good (its CLI stops; a Claude session stays in Past
+    /// sessions). Closing the one on screen shows the most recent other one.
+    func closeChat(_ id: UUID) {
+        guard let chat = chats.first(where: { $0.id == id }) else { return }
+        if chat === activeChat {
+            guard let next = chats.filter({ $0 !== chat && !$0.isEmpty })
+                .max(by: { $0.lastActive < $1.lastActive }) else {
+                clearSession() // the only chat: start it over
+                return
+            }
+            activate(next)
+            ensureBackend(for: next)
+        }
+        remove(chat)
+    }
+
+    private func activate(_ chat: OverlayChat) {
+        let previous = activeChat
+        guard chat !== previous else { return }
+        previous.lastActive = Date()
+        chat.lastActive = Date()
+        chat.hasUnseenReply = false
+        // Connection, command menu and model list may have updated while
+        // this chat was in the background.
+        chat.session.adoptSharedState(from: previous.session)
+        activeChat = chat
+        overlay.show(chat.session)
+        // A chat left with nothing in it has nothing to come back to.
+        if previous.isEmpty, !previous.session.isWorking { remove(previous) }
+        parkIdleChats()
+        refreshChatList()
+    }
+
+    private func remove(_ chat: OverlayChat) {
+        guard chat !== activeChat, chats.contains(where: { $0 === chat }) else { return }
+        chat.lifecycle.shutdown()
+        chat.observers.removeAll()
+        chats.removeAll { $0 === chat }
+        refreshChatList()
+    }
+
+    /// Provider switch / full teardown: only the chat on screen survives.
+    private func closeBackgroundChats() {
+        for chat in chats where chat !== activeChat { remove(chat) }
+    }
+
+    /// Cap the idle CLI processes: close the least recently used idle chats'
+    /// processes, keeping where to resume them.
+    private func parkIdleChats() {
+        var live = chats.filter { $0.backend != nil }.count
+        guard live > Self.maxLiveChats else { return }
+        let idle = chats
+            .filter { $0 !== activeChat && $0.backend != nil
+                && !$0.session.isWorking && $0.session.pendingPermission == nil }
+            .sorted { $0.lastActive < $1.lastActive }
+        for chat in idle where live > Self.maxLiveChats {
+            guard let point = chat.backend?.resumePoint else { continue }
+            chat.resumePoint = point
+            chat.lifecycle.shutdown()
+            live -= 1
+        }
     }
 
     /// Clear button: drop the conversation (and any resumed session), start a
     /// fresh warm backend, and fall back to the idle prompt.
     private func clearSession() {
         teardownBackend()
-        overlay.session.clearTranscript()
-        switch makeSelectedBackend() {
-        case .success(let made):
-            backendLifecycle.install(made.backend)
-            clearSetupIssue()
-            overlay.session.backendConnected = true
-            overlay.session.backendLabel = made.statusLabel
-        case .failure(let status):
-            showSetupIssue(kind: prefs.askBackend, status: status)
-        }
+        activeChat.session.clearTranscript()
+        activeChat.resumePoint = nil
+        activeChat.placeholderTitle = nil
+        ensureBackend(for: activeChat)
+        refreshChatList()
     }
 
     // MARK: - History resume
 
-    /// Swap the backend for one that resumes the picked Claude CLI session and
-    /// show its past transcript; follow-ups continue that conversation.
+    /// Open a past Claude CLI session as a chat and show its transcript;
+    /// follow-ups continue that conversation. The chat on screen stays open
+    /// (unless it's empty, in which case the session takes its place).
     private func resumeHistorySession(_ summary: SessionSummary) {
         guard prefs.askBackend == .claude else { return }
+        if let open = chats.first(where: { $0.claudeSessionId == summary.id }) {
+            switchToChat(open.id)
+            return
+        }
         let currentProviderGeneration = providerGeneration
-        claudeStatus = ClaudeLocator.check()
-        guard case .ok(let path, _) = claudeStatus else { return }
-        teardownBackend()
-
-        let backend = ClaudeBackend(binaryPath: path,
-                                    resumeSessionId: summary.id,
-                                    resumeCwd: summary.cwd)
-        backend.configure(systemPrompt: TaskCapture.systemPrompt)
-        // Resuming a large session (long transcript, project hooks) can take
-        // far longer to first token than a fresh one.
-        backend.firstTokenTimeout = 120
-        applyChosenModel(to: backend, kind: .claude)
-        wireCatalog(backend)
-        backend.startWarm()
-        backendLifecycle.install(backend)
+        let chat: OverlayChat
+        if activeChat.isEmpty, !activeChat.session.isWorking {
+            chat = activeChat
+            chat.lifecycle.shutdown()
+        } else {
+            chat = makeChat()
+        }
+        chat.resumePoint = ResumePoint(sessionId: summary.id, cwd: summary.cwd)
+        chat.placeholderTitle = summary.title
+        activate(chat)
+        guard ensureBackend(for: chat), let backend = chat.backend,
+              let lease = chat.lifecycle.lease(for: backend) else { return }
+        refreshChatList()
 
         let url = summary.fileURL
-        let generation = overlay.session.transcriptGeneration
-        guard let lease = backendLifecycle.lease(for: backend) else { return }
-        Task { [weak self] in
+        let generation = chat.session.transcriptGeneration
+        Task { [weak self, weak chat] in
             let turns = await Task.detached(priority: .userInitiated) {
                 SessionHistoryStore.loadTurns(from: url)
             }.value
-            guard let self, self.prefs.askBackend == .claude,
+            guard let self, let chat, self.prefs.askBackend == .claude,
                   self.isCurrentProvider(kind: .claude, generation: currentProviderGeneration),
-                  self.backendLifecycle.isCurrent(lease) else { return }
-            self.overlay.session.loadTranscript(turns, ifGeneration: generation)
+                  chat.lifecycle.isCurrent(lease) else { return }
+            chat.session.loadTranscript(turns, ifGeneration: generation)
         }
     }
 
@@ -697,19 +849,28 @@ final class AppCoordinator {
 
     /// Start a new backend on the model picked in the footer (Claude only —
     /// Codex offers no model list).
-    private func applyChosenModel(to backend: AskBackend, kind: AskBackendKind) {
+    private func applyChosenModel(to backend: AskBackend, kind: AskBackendKind, chat: OverlayChat) {
         guard kind == .claude else { return }
-        // A new conversation starts in Auto (the backend's launch default).
-        overlay.session.permissionMode = .defaultMode
-        overlay.session.selectedModel = prefs.askModel ?? ModelOption.defaultValue
-        if let model = prefs.askModel { backend.setModel(model) }
+        let session = chat.session
+        if session.turns.isEmpty {
+            // A new conversation starts in Auto (the backend's launch default)
+            // on the last model picked.
+            session.permissionMode = .defaultMode
+            session.selectedModel = prefs.askModel ?? ModelOption.defaultValue
+            if let model = prefs.askModel { backend.setModel(model) }
+        } else {
+            // A chat getting its process back keeps its own model and mode.
+            if session.selectedModel != ModelOption.defaultValue { backend.setModel(session.selectedModel) }
+            if session.permissionMode != .defaultMode { backend.setPermissionMode(session.permissionMode) }
+        }
     }
 
-    /// Footer model menu: remember the pick and switch the live session.
-    private func selectModel(_ value: String) {
+    /// Footer model menu: remember the pick (for new chats) and switch this
+    /// chat's live session.
+    private func selectModel(_ value: String, in chat: OverlayChat) {
         guard prefs.askBackend == .claude else { return }
         prefs.askModel = value == ModelOption.defaultValue ? nil : value
-        backend?.setModel(value)
+        chat.backend?.setModel(value)
     }
 
     /// Feed a backend's command catalog (and account/MCP state) to the `/`
@@ -729,9 +890,9 @@ final class AppCoordinator {
 
     /// Answer the commands the headless CLI refuses (`LocalSlashCommand`)
     /// in place. True when `question` was one of them.
-    private func handleLocalCommand(_ question: String) -> Bool {
+    private func handleLocalCommand(_ question: String, in chat: OverlayChat) -> Bool {
         guard let (command, _) = LocalSlashCommand.parse(question) else { return false }
-        let session = overlay.session
+        let session = chat.session
         let answer: String
         switch command {
         case .clear:
@@ -746,7 +907,7 @@ final class AppCoordinator {
         case .status:
             answer = SlashCommandReport.status(.init(
                 backendLabel: session.backendLabel,
-                connected: session.backendConnected && backend != nil,
+                connected: session.backendConnected && chat.backend != nil,
                 modelName: session.modelName,
                 defaultModel: prefs.askBackend == .claude ? defaultModel : nil,
                 account: prefs.askBackend == .claude ? claudeAccount : nil,
@@ -760,27 +921,30 @@ final class AppCoordinator {
 
     // MARK: - Q&A
 
-    private func handleSubmit(_ question: String) {
-        if handleLocalCommand(question) { return }
+    private func handleSubmit(_ question: String, in chat: OverlayChat) {
+        if handleLocalCommand(question, in: chat) { return }
         let kind = prefs.askBackend
-        guard let backend else {
-            overlay.session.failTurn("\(kind.displayName) unavailable.")
+        let session = chat.session
+        // A chat whose idle process was closed gets it back here.
+        if chat.backend == nil { ensureBackend(for: chat) }
+        guard let backend = chat.backend else {
+            session.failTurn("\(kind.displayName) unavailable.")
             return
         }
         let generation = providerGeneration
-        let attach = overlay.session.attachImage
+        let attach = session.attachImage
 
         // Text-only (the default) — send immediately.
         guard attach else {
-            send(question, image: nil, via: backend, kind: kind, generation: generation)
+            send(question, image: nil, via: backend, in: chat, kind: kind, generation: generation)
             return
         }
 
         // First question: use the still captured at invocation (already clean).
         if let firstShot = pendingImagePNG {
             pendingImagePNG = nil
-            overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: firstShot))
-            send(question, image: firstShot, via: backend, kind: kind, generation: generation)
+            session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: firstShot))
+            send(question, image: firstShot, via: backend, in: chat, kind: kind, generation: generation)
             return
         }
 
@@ -788,20 +952,20 @@ final class AppCoordinator {
         // the cached permission result is false (for example after granting
         // access in Settings). Speculative captures remain permission-gated.
         // Hide the overlay so it isn't in the fresh image (FR8).
-        guard let lease = backendLifecycle.lease(for: backend) else { return }
+        guard let lease = chat.lifecycle.lease(for: backend) else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
                 let png = try await self.captureExcludingOverlay()
-                guard self.backendLifecycle.isCurrent(lease),
+                guard chat.lifecycle.isCurrent(lease),
                       self.isCurrentProvider(kind: kind, generation: generation) else { return }
-                self.overlay.session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: png))
-                self.send(question, image: png, via: backend, kind: kind, generation: generation)
+                session.setLastTurnThumbnail(ScreenCaptureService.thumbnailImage(fromPNG: png))
+                self.send(question, image: png, via: backend, in: chat, kind: kind, generation: generation)
             } catch {
-                guard self.backendLifecycle.isCurrent(lease),
+                guard chat.lifecycle.isCurrent(lease),
                       self.isCurrentProvider(kind: kind, generation: generation) else { return }
-                self.overlay.session.failTurn("Screenshot couldn't be attached. \(error.localizedDescription) Your question was not sent; try again or turn off the screenshot attachment.")
-                self.overlay.session.input = question
+                session.failTurn("Screenshot couldn't be attached. \(error.localizedDescription) Your question was not sent; try again or turn off the screenshot attachment.")
+                session.input = question
             }
         }
     }
@@ -815,47 +979,62 @@ final class AppCoordinator {
         return try await captureDisplay().pngData
     }
 
-    private func send(_ question: String, image: Data?, via backend: AskBackend,
+    private func send(_ question: String, image: Data?, via backend: AskBackend, in chat: OverlayChat,
                       kind: AskBackendKind? = nil, generation: UInt? = nil) {
-        guard let lease = backendLifecycle.lease(for: backend),
-              backendLifecycle.isCurrent(lease) else { return }
+        let lifecycle = chat.lifecycle
+        let session = chat.session
+        guard let lease = lifecycle.lease(for: backend),
+              lifecycle.isCurrent(lease) else { return }
         let kind = kind ?? prefs.askBackend
         let generation = generation ?? providerGeneration
         // Stopped while the screenshot was being taken: don't send it at all.
-        guard let turnId = overlay.session.turns.last?.id,
-              !overlay.session.lastTurnStopped else { return }
-        backend.ask(question: question, imagePNG: image) { [weak self] event in
-            guard let self, self.backendLifecycle.isCurrent(lease),
+        guard let turnId = session.turns.last?.id,
+              !session.lastTurnStopped else { return }
+        // Events go to the chat that asked, on screen or not.
+        backend.ask(question: question, imagePNG: image) { [weak self, weak chat] event in
+            guard let self, let chat, lifecycle.isCurrent(lease),
                   self.isCurrentProvider(kind: kind, generation: generation),
                   // Events already queued when Stop was pressed.
-                  self.overlay.session.turns.last?.id == turnId,
-                  !self.overlay.session.lastTurnStopped else { return }
+                  session.turns.last?.id == turnId,
+                  !session.lastTurnStopped else { return }
             switch event {
-            case .token(let text): self.overlay.session.appendToken(text)
+            case .token(let text): session.appendToken(text)
             case .completed:
-                self.overlay.session.completeTurn()
-                self.captureTasksFromAnswer()
+                session.completeTurn()
+                self.captureTasksFromAnswer(in: session)
                 // Command output (/context, a skill's run…) isn't a Q&A to riff on.
-                if !question.hasPrefix("/") { self.generateSuggestions() }
-            case .failed(let msg):  self.overlay.session.failTurn(msg)
-            case .model(let id):    self.overlay.session.modelName = ModelCatalog.prettify(id)
-            case .commandOutput(let text): self.overlay.session.appendCommandOutput(text)
-            case .signedOut: self.handleSignedOut(kind: kind)
-            case .activity(let label): self.overlay.session.setActivity(label)
-            case .permissionRequest(let request): self.overlay.session.showPermissionRequest(request)
-            case .permissionMode(let mode): self.overlay.session.permissionMode = mode
+                if !question.hasPrefix("/") { self.generateSuggestions(for: session) }
+                self.noteBackgroundReply(in: chat)
+            case .failed(let msg):
+                session.failTurn(msg)
+                self.noteBackgroundReply(in: chat)
+            case .model(let id):    session.modelName = ModelCatalog.prettify(id)
+            case .commandOutput(let text):
+                session.appendCommandOutput(text)
+                self.noteBackgroundReply(in: chat)
+            case .signedOut: self.handleSignedOut(kind: kind, in: chat)
+            case .activity(let label): session.setActivity(label)
+            case .permissionRequest(let request): session.showPermissionRequest(request)
+            case .permissionMode(let mode): session.permissionMode = mode
             }
         }
+    }
+
+    /// A chat in the background finished: flag it in the Chats menu.
+    private func noteBackgroundReply(in chat: OverlayChat) {
+        guard chat !== activeChat else { return }
+        chat.hasUnseenReply = true
+        refreshChatList()
     }
 
     /// V2 bridge: harvest `glance-task` blocks the assistant emitted when the
     /// user asked (possibly about a screenshot) to add tasks — create them on
     /// the board and show a confirmation in place of the raw block.
-    private func captureTasksFromAnswer() {
-        guard let last = overlay.session.turns.last, !last.failed else { return }
+    private func captureTasksFromAnswer(in session: OverlaySession) {
+        guard let last = session.turns.last, !last.failed else { return }
         let (cleaned, captured) = TaskCapture.extract(from: last.answer)
         guard !captured.isEmpty else { return }
-        overlay.session.replaceLastAnswer(cleaned)
+        session.replaceLastAnswer(cleaned)
         for c in captured {
             let item = taskStore.add(TaskCapture.makeTaskItem(c))
             taskNotifications.post(message: "Task added: \(item.title)", taskId: item.id)
@@ -864,20 +1043,20 @@ final class AppCoordinator {
 
     /// Fill the suggestion chips from the just-finished turn (cheap one-shot
     /// provider call, separate from the conversation).
-    private func generateSuggestions() {
+    private func generateSuggestions(for session: OverlaySession) {
         guard let suggestions, let kind = providerServices?.kind,
-              let turn = overlay.session.turns.last, !turn.failed, !turn.answer.isEmpty
+              let turn = session.turns.last, !turn.failed, !turn.answer.isEmpty
         else { return }
         let generation = providerGeneration
         let turnId = turn.id
-        suggestions.suggest(question: turn.question, answer: turn.answer) { [weak self] list in
-            guard let self,
+        suggestions.suggest(question: turn.question, answer: turn.answer) { [weak self, weak session] list in
+            guard let self, let session,
                   self.isCurrentProvider(kind: kind, generation: generation),
                   // Stale guard: still the same last turn, nothing in flight.
-                  self.overlay.session.turns.last?.id == turnId,
-                  !self.overlay.session.isWorking
+                  session.turns.last?.id == turnId,
+                  !session.isWorking
             else { return }
-            self.overlay.session.suggestions = list
+            session.suggestions = list
         }
     }
 
@@ -899,19 +1078,24 @@ final class AppCoordinator {
     /// Full teardown: backend shut down, conversation wiped.
     func endSession() {
         setupWatcher.stop()
+        closeBackgroundChats()
         teardownBackend()
+        activeChat.resumePoint = nil
+        activeChat.placeholderTitle = nil
         pendingImagePNG = nil
         pendingCaptureLabel = ""
         // A new invocation gets a new backend, so it must also start with an
         // empty visible conversation and no per-turn UI state.
         overlay.session.clearTranscript()
         overlay.session.captureLabel = ""
+        refreshChatList()
     }
 
     /// App is quitting: don't leave orphaned claude processes behind, and
     /// flush the task store (FR48: active runs are cancelled — their state is
     /// already persisted as interrupted on next launch via failOrphanedRuns).
     func shutdown() {
+        chats.forEach { $0.lifecycle.shutdown() }
         teardownBackend()
         taskRunner?.cancelAll()
         taskOverlay?.session.cancelProviderWork()

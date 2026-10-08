@@ -22,6 +22,9 @@ final class ClaudeAutomationProvider: AutomationProvider {
     func runText(_ request: AutomationRequest,
                  onEvent: @escaping (AutomationEvent) -> Void) -> AutomationCancellation {
         var arguments = ["-p"]
+        if !request.persistSession {
+            arguments.append("--no-session-persistence")
+        }
         if let model = request.model {
             arguments += ["--model", model]
         }

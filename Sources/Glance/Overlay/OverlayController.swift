@@ -9,7 +9,10 @@ import Combine
 @MainActor
 final class OverlayController {
 
+    /// The chat on screen; `show(_:)` swaps it for another open chat.
     private(set) var session = OverlaySession()
+    /// The open chats (Chats menu), shared by every chat's view.
+    let chats = ChatListModel()
     private var panel = OverlayPanel()
     /// A display hot-plug can leave the long-lived panel in no Space at all:
     /// AppKit still orders it in, but the window server draws it nowhere, so
@@ -57,9 +60,30 @@ final class OverlayController {
     /// Present the reusable overlay for a fresh invocation.
     func present() {
         if panelIsStale { replacePanel() }
+        installContent()
+        positionPanel()
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(hostingView)
+        installKeyMonitor()
+        replacePanelIfNotDrawn()
+    }
+
+    /// Put another chat on screen (Chats menu, New chat). Its transcript,
+    /// draft and in-flight turn come with it; the panel stays where it is.
+    func show(_ newSession: OverlaySession) {
+        guard newSession !== session else { return }
+        session = newSession
+        guard panel.isVisible else { return }
+        installContent()
+        panel.makeFirstResponder(hostingView)
+    }
+
+    /// A fresh SwiftUI tree for the current chat: per-view state (scroll pin,
+    /// open popover, focus) must not carry over from the previous chat.
+    private func installContent() {
         session.dismissHandler = { [weak self] in self?.dismiss() }
 
-        let root = OverlayView(session: session)
+        let root = OverlayView(session: session, chats: chats)
         let host = NSHostingView(rootView: root)
         host.sizingOptions = [] // window size is set manually, never auto-tracked
         host.autoresizingMask = [.width, .height]
@@ -92,12 +116,6 @@ final class OverlayController {
                 self.idleHeight = ceil(h)
                 self.applySize()
             }
-
-        positionPanel()
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(host)
-        installKeyMonitor()
-        replacePanelIfNotDrawn()
     }
 
     // MARK: - Panel recovery
@@ -175,13 +193,13 @@ final class OverlayController {
                self.session.cyclePermissionMode() {
                 return nil
             }
+            if OverlayPanel.isNewChatShortcut(characters: event.charactersIgnoringModifiers,
+                                              modifiers: event.modifierFlags) {
+                self.chats.newChat()
+                return nil
+            }
             return event
         }
-    }
-
-    /// Wire the submit action (set by the coordinator).
-    func onSubmit(_ handler: @escaping (String) -> Void) {
-        session.submitHandler = handler
     }
 
     /// Make the panel invisible to screen capture without losing key focus or

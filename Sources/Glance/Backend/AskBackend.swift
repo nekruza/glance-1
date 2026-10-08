@@ -47,8 +47,18 @@ enum AskBackendEvent {
     case permissionMode(PermissionMode)
 }
 
+/// Where a conversation can be picked back up by a fresh CLI process
+/// (`claude --resume <id>`, launched in the session's original directory).
+struct ResumePoint: Equatable {
+    let sessionId: String
+    let cwd: String?
+}
+
 protocol AskBackend: AnyObject {
     var firstTokenTimeout: TimeInterval { get set }
+    /// The live conversation's resume point once the CLI has named it; nil
+    /// before the first reply, or for backends that can't resume.
+    var resumePoint: ResumePoint? { get }
     func configure(systemPrompt: String)
     func startWarm()
     func ask(question: String, imagePNG: Data?, onEvent: @escaping (AskBackendEvent) -> Void)
@@ -71,6 +81,7 @@ protocol AskBackend: AnyObject {
 }
 
 extension AskBackend {
+    var resumePoint: ResumePoint? { nil }
     /// Backends that do not expose a distinct instruction channel may ignore
     /// this. First-party implementations install it before warming.
     func configure(systemPrompt: String) {}

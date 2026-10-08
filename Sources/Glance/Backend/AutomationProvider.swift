@@ -47,14 +47,18 @@ struct AutomationRequest: Equatable {
     let workingDirectory: URL?
     let timeout: TimeInterval
     let systemPrompt: String?
+    /// False for throwaway calls (follow-up suggestions, task drafting): the
+    /// CLI doesn't save them, so they never crowd the overlay's Past sessions.
+    let persistSession: Bool
 
     init(prompt: String, model: String? = nil, workingDirectory: URL? = nil,
-         timeout: TimeInterval = 240, systemPrompt: String? = nil) {
+         timeout: TimeInterval = 240, systemPrompt: String? = nil, persistSession: Bool = true) {
         self.prompt = prompt
         self.model = model
         self.workingDirectory = workingDirectory
         self.timeout = timeout
         self.systemPrompt = systemPrompt
+        self.persistSession = persistSession
     }
 }
 

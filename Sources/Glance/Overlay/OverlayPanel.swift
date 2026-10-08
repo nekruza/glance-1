@@ -104,6 +104,13 @@ final class OverlayPanel: NSPanel {
         return keyCode == 48 && modifiers.intersection(meaningful) == .shift
     }
 
+    /// ⌘N: start a new chat; the current one stays in the Chats menu.
+    static func isNewChatShortcut(characters: String?, modifiers: NSEvent.ModifierFlags) -> Bool {
+        let meaningful: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        return modifiers.intersection(meaningful) == .command
+            && characters?.lowercased() == "n"
+    }
+
     override func cancelOperation(_ sender: Any?) {
         onCancel?() // Esc via responder chain too
     }

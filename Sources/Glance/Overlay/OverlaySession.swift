@@ -153,7 +153,6 @@ final class OverlaySession: ObservableObject {
     var dismissHandler: (() -> Void)?
     var settingsHandler: (() -> Void)?
     var historyHandler: ((SessionSummary) -> Void)?
-    var clearHandler: (() -> Void)?
     var stopHandler: (() -> Void)?
 
     var canSubmit: Bool {
@@ -232,6 +231,24 @@ final class OverlaySession: ObservableObject {
         showsPermissionModes = kind == .claude
         permissionModeHandler = nil
         permissionAnswerHandler = nil
+    }
+
+    /// A new chat starts with what belongs to the provider rather than to one
+    /// conversation: connection, command menu, model list, input history.
+    func adoptSharedState(from other: OverlaySession) {
+        sentLog = other.sentLog
+        backendKind = other.backendKind
+        backendConnected = other.backendConnected
+        backendLabel = other.backendLabel
+        showsHistory = other.showsHistory
+        historySessions = other.historySessions
+        showsPermissionModes = other.showsPermissionModes
+        cliCommands = other.cliCommands
+        terminalOnlyCommands = other.terminalOnlyCommands
+        modelOptions = other.modelOptions
+        captureLabel = other.captureLabel
+        attachImage = other.attachImage
+        setupIssue = other.setupIssue
     }
 
     /// Replace the transcript with a resumed Claude session only if no clear or
@@ -324,19 +341,21 @@ final class OverlaySession: ObservableObject {
 
     // MARK: - Input history (↑ / ↓)
 
-    /// Messages sent from this overlay, oldest first. Kept across Clear, like
-    /// a shell's history, so ↑ still recalls them in a fresh conversation.
-    private(set) var sentHistory: [String] = []
+    /// Messages sent from this overlay, oldest first. Kept across Clear and
+    /// shared by every chat, like a shell's history, so ↑ still recalls them
+    /// in a fresh conversation.
+    var sentLog = SentMessageLog()
+    var sentHistory: [String] { sentLog.messages }
     /// Position in `sentHistory` while browsing; nil when not browsing.
     private var historyCursor: Int?
     private static let historyLimit = 100
 
     private func recordSent(_ text: String) {
         historyCursor = nil
-        if sentHistory.last == text { return }
-        sentHistory.append(text)
-        if sentHistory.count > Self.historyLimit {
-            sentHistory.removeFirst(sentHistory.count - Self.historyLimit)
+        if sentLog.messages.last == text { return }
+        sentLog.messages.append(text)
+        if sentLog.messages.count > Self.historyLimit {
+            sentLog.messages.removeFirst(sentLog.messages.count - Self.historyLimit)
         }
     }
 
@@ -439,4 +458,9 @@ final class OverlaySession: ObservableObject {
         turns[turns.count - 1].answer = message
         turns[turns.count - 1].failed = true
     }
+}
+
+/// The sent-message history (↑), one instance shared by all chats.
+final class SentMessageLog {
+    var messages: [String] = []
 }

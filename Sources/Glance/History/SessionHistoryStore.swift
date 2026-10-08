@@ -102,6 +102,9 @@ enum SessionHistoryStore {
         }
         guard let title else { return nil } // nothing user-visible → skip
 
+        // Glance's own follow-up suggestion calls, saved before they ran
+        // with --no-session-persistence.
+        if title.hasPrefix(SuggestionService.promptOpening) { return nil }
         // Plugin machinery, not the user's own sessions (claude-mem observers).
         if let cwd, cwd.contains(".claude-mem") { return nil }
         if url.deletingLastPathComponent().lastPathComponent.contains("-claude-mem-") { return nil }
