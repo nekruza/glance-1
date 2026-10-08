@@ -209,7 +209,7 @@ struct OverlayView: View {
     private var transcriptContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(session.turns.enumerated()), id: \.element.id) { idx, turn in
-                askedHeader(turn)
+                askedHeader(turn, isFirst: idx == 0)
                 VStack(alignment: .leading, spacing: 14) {
                     answerBlock(turn)
                     // Claude is paused on a tool it needs approval for.
@@ -223,7 +223,7 @@ struct OverlayView: View {
                         workingRow(activity: session.activity ?? "Working")
                     }
                 }
-                .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 22)
+                .padding(.horizontal, 22).padding(.top, 14).padding(.bottom, 22)
                 if idx < session.turns.count - 1 {
                     Divider().overlay(Theme.hairline)
                 }
@@ -232,22 +232,29 @@ struct OverlayView: View {
         }
     }
 
-    /// The user's question, set on a faint band so it reads as the prompt and
-    /// the answer below it as the response.
-    private func askedHeader(_ turn: OverlaySession.Turn) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            sparkBadge(size: 26)
-            Text(turn.question)
-                .font(.system(size: 14.5 * textScale, weight: .medium))
-                .lineSpacing(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let thumb = turn.thumbnail {
-                thumbnail(thumb)
+    /// The user's message as a chat bubble on the right, so it reads as
+    /// "you said" and the answer below it as the reply.
+    private func askedHeader(_ turn: OverlaySession.Turn, isFirst: Bool) -> some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 72)
+            VStack(alignment: .trailing, spacing: 6) {
+                if let thumb = turn.thumbnail {
+                    thumbnail(thumb)
+                }
+                Text(turn.question)
+                    .font(.system(size: 13.5 * textScale))
+                    .lineSpacing(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 13).padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Theme.accent.opacity(0.2)))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Theme.accent.opacity(0.28), lineWidth: 1))
             }
         }
-        .padding(.leading, 18).padding(.trailing, 44).padding(.vertical, 14)
-        .background(Color.white.opacity(0.035))
-        .overlay(Divider().overlay(Theme.hairline), alignment: .bottom)
+        // The first bubble sits clear of the panel's close button.
+        .padding(.horizontal, 22).padding(.top, isFirst ? 42 : 18)
     }
 
     @ViewBuilder private func answerBlock(_ turn: OverlaySession.Turn) -> some View {
