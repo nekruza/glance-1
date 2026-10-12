@@ -18,6 +18,8 @@ final class CodexBackend: AskBackend {
     private var stderrBuffer = Data()
     private var threadID: String?
     private var systemPrompt: String?
+    /// `model_reasoning_effort` for each turn's `codex exec` (nil = config default).
+    private var effort: String?
     private var activeImageURL: URL?
     private var currentHandler: ((AskBackendEvent) -> Void)?
     private var pendingTurn: PendingTurn?
@@ -40,6 +42,11 @@ final class CodexBackend: AskBackend {
 
     func configure(systemPrompt: String) {
         self.systemPrompt = systemPrompt
+    }
+
+    /// Each turn is its own `codex exec`, so the next launch simply carries it.
+    func setEffort(_ value: String?) {
+        ioQueue.async { [weak self] in self?.effort = value }
     }
 
     /// Codex's exec protocol needs a prompt to start, so warming only ensures
@@ -155,6 +162,9 @@ final class CodexBackend: AskBackend {
             arguments += ["resume", threadID]
         }
         arguments += ["--json", "--skip-git-repo-check"]
+        if let effort {
+            arguments += ["-c", "model_reasoning_effort=\"\(effort)\""]
+        }
         if let systemPrompt, !systemPrompt.isEmpty {
             arguments += ["-c", Self.developerInstructionsOverride(systemPrompt)]
         }

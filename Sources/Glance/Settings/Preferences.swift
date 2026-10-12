@@ -42,6 +42,7 @@ final class Preferences: ObservableObject {
         static let confetti = "tasks.confetti"
         static let askBackend = "ask.backend"
         static let askModel = "ask.model"
+        static let askEffort = "ask.effort"
         static let onboardingCompleted = "onboarding.completed"
     }
 
@@ -270,6 +271,12 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(askModel, forKey: Keys.askModel) }
     }
 
+    /// Reasoning effort for the ask overlay, as an `EffortLevel.rawValue`;
+    /// nil = the CLI's own default. Picked in the footer.
+    @Published var askEffort: String? {
+        didSet { defaults.set(askEffort, forKey: Keys.askEffort) }
+    }
+
     /// Overlay background opacity (0.2 barely-there … 1.0 solid).
     @Published var overlayOpacity: Double {
         didSet { defaults.set(overlayOpacity, forKey: Keys.overlayOpacity) }
@@ -396,6 +403,7 @@ final class Preferences: ObservableObject {
         askBackend = AskBackendKind(rawValue: defaults.string(forKey: Keys.askBackend) ?? "")
             ?? .claude
         askModel = defaults.string(forKey: Keys.askModel)
+        askEffort = defaults.string(forKey: Keys.askEffort)
     }
 }
 

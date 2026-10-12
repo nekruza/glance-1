@@ -70,6 +70,9 @@ protocol AskBackend: AnyObject {
     /// from the next message on. Call before `startWarm()` for a new backend;
     /// on a live one it switches the running session, keeping the conversation.
     func setModel(_ value: String)
+    /// Reasoning effort (`EffortLevel.rawValue`) from the next message on;
+    /// nil = the CLI's own default. Same timing rules as `setModel`.
+    func setEffort(_ value: String?)
     /// Switch the permission mode (live, or for the next spawn).
     func setPermissionMode(_ mode: PermissionMode)
     /// Reply to a `.permissionRequest`.
@@ -92,6 +95,8 @@ extension AskBackend {
     func interrupt() {}
     /// Backends without a model list keep their CLI's default.
     func setModel(_ value: String) {}
+    /// Backends without an effort setting ignore it.
+    func setEffort(_ value: String?) {}
     /// Backends without permission modes never ask, so never need an answer.
     func setPermissionMode(_ mode: PermissionMode) {}
     func answerPermission(id: String, allow: Bool) {}

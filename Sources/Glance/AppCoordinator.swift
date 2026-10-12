@@ -508,6 +508,7 @@ final class AppCoordinator {
         // take far longer to first token than a fresh one.
         backend.firstTokenTimeout = chat.resumePoint == nil ? 30 : 120
         applyChosenModel(to: backend, kind: kind, chat: chat)
+        applyChosenEffort(to: backend, kind: kind, chat: chat)
         wireCatalog(backend)
         backend.startWarm()
         return .success((backend, connectionLabel(for: kind, version: selection.version)))
@@ -669,6 +670,11 @@ final class AppCoordinator {
         session.modelHandler = { [weak self, weak chat] value in
             guard let self, let chat else { return }
             self.selectModel(value, in: chat)
+        }
+        session.effortHandler = { [weak self, weak chat] level in
+            guard let self, let chat else { return }
+            self.prefs.askEffort = level?.rawValue
+            chat.backend?.setEffort(level?.rawValue)
         }
         session.permissionModeHandler = { [weak chat] mode in
             chat?.backend?.setPermissionMode(mode)
@@ -863,6 +869,22 @@ final class AppCoordinator {
             if session.selectedModel != ModelOption.defaultValue { backend.setModel(session.selectedModel) }
             if session.permissionMode != .defaultMode { backend.setPermissionMode(session.permissionMode) }
         }
+    }
+
+    /// Start a new backend on the effort picked in the footer. A new
+    /// conversation takes the last pick; a chat getting its process back
+    /// keeps its own.
+    private func applyChosenEffort(to backend: AskBackend, kind: AskBackendKind, chat: OverlayChat) {
+        let session = chat.session
+        if session.turns.isEmpty {
+            let saved = prefs.askEffort.flatMap(EffortLevel.init(rawValue:))
+            // A level this provider doesn't offer (Codex has no Extra high)
+            // falls back to its default rather than failing the launch.
+            session.selectedEffort = saved.flatMap {
+                EffortLevel.available(for: kind, model: nil).contains($0) ? $0 : nil
+            }
+        }
+        if let level = session.selectedEffort { backend.setEffort(level.rawValue) }
     }
 
     /// Footer model menu: remember the pick (for new chats) and switch this

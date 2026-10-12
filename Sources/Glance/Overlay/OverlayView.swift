@@ -536,6 +536,50 @@ struct OverlayView: View {
         .help("Permission mode: \(mode.title) — \(mode.summary) (⇧Tab to switch)")
     }
 
+    // MARK: - Effort menu
+
+    /// How hard the model thinks. Sits beside the model menu; a pick applies
+    /// from the next message and keeps the conversation.
+    private var effortMenu: some View {
+        let levels = session.effortLevels
+        // A level the current model doesn't offer reads as the default.
+        let current = session.selectedEffort.flatMap { levels.contains($0) ? $0 : nil }
+        return Menu {
+            Toggle(isOn: Binding(
+                get: { current == nil },
+                set: { if $0 { session.selectEffort(nil) } }
+            )) {
+                Text("Default — the CLI's own choice")
+            }
+            Divider()
+            ForEach(levels) { level in
+                Toggle(isOn: Binding(
+                    get: { current == level },
+                    set: { if $0 { session.selectEffort(level) } }
+                )) {
+                    Text("\(level.title) — \(level.summary)")
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "brain")
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(current?.title ?? "Effort")
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 7.5, weight: .bold))
+            }
+            .foregroundStyle(Theme.muted)
+            .fixedSize()
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.leading, 6)
+        .help("Reasoning effort — applies from your next message")
+    }
+
     // MARK: - Model menu
 
     /// The model name in the footer, as a menu of the CLI's models. A pick
@@ -744,6 +788,9 @@ struct OverlayView: View {
                         .foregroundStyle(Theme.muted)
                         .lineLimit(1)
                         .fixedSize()
+                }
+                if !session.effortLevels.isEmpty {
+                    effortMenu
                 }
                 if session.showsPermissionModes {
                     permissionModeMenu

@@ -32,6 +32,9 @@ final class ClaudeBackend: AskBackend {
     /// `--model` for every spawn (nil = the CLI's default); kept in step with
     /// live `set_model` switches so a respawn stays on the chosen model.
     private var model: String?
+    /// `effortLevel` re-applied on every spawn (nil = the CLI's default);
+    /// follows live switches so a respawn keeps the chosen effort.
+    private var effort: String?
     /// `--permission-mode` for every spawn; follows live switches.
     private var permissionMode: PermissionMode = .defaultMode
     /// Open `can_use_tool` requests: id → the tool input to echo on Allow.
@@ -179,6 +182,10 @@ final class ClaudeBackend: AskBackend {
         // question (the init line only arrives once a message is sent).
         let initialize = #"{"type":"control_request","request_id":"glance-init","request":{"subtype":"initialize"}}"#
         try? inPipe.fileHandleForWriting.write(contentsOf: Data((initialize + "\n").utf8))
+        // Effort goes over the control channel, not `--settings`/`--effort`:
+        // only a value applied this way can later be cleared back to the
+        // CLI's default by `apply_flag_settings` with null.
+        if let effort { applyEffort(effort) }
     }
 
     /// Ask a question. First call includes the screenshot; later calls are
@@ -275,6 +282,24 @@ final class ClaudeBackend: AskBackend {
             guard let json = try? JSONSerialization.data(withJSONObject: request) else { return }
             try? handle.write(contentsOf: json + Data("\n".utf8))
         }
+    }
+
+    func setEffort(_ value: String?) {
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            self.effort = value
+            guard self.process != nil else { return } // spawnIfNeeded applies it
+            self.applyEffort(value)
+        }
+    }
+
+    /// `null` clears the override, back to the user's own setting.
+    private func applyEffort(_ value: String?) {
+        let level: Any = value ?? NSNull()
+        writeControl(["type": "control_request",
+                      "request_id": "glance-effort-\(UUID().uuidString)",
+                      "request": ["subtype": "apply_flag_settings",
+                                  "settings": ["effortLevel": level]]])
     }
 
     /// End the session (FR4 dismissal, FR9 cleanup). Terminates the process and

@@ -53,6 +53,32 @@ final class OverlaySession: ObservableObject {
         return modelOptions.first { $0.value == selectedModel }?.label ?? "Model"
     }
 
+    // MARK: - Effort
+
+    /// The chosen reasoning effort; nil = the CLI's own default.
+    @Published var selectedEffort: EffortLevel?
+    var effortHandler: ((EffortLevel?) -> Void)?
+
+    /// Levels the footer menu offers: Codex always, Claude per chosen model
+    /// (empty until the model list is in, like the model menu itself).
+    var effortLevels: [EffortLevel] {
+        switch backendKind {
+        case .codex:
+            return EffortLevel.available(for: .codex, model: nil)
+        case .claude:
+            guard let option = modelOptions.first(where: { $0.value == selectedModel }) else { return [] }
+            return EffortLevel.available(for: .claude, model: option)
+        }
+    }
+
+    /// Footer menu pick (nil = back to the CLI's default); applies from the
+    /// next message, same conversation.
+    func selectEffort(_ level: EffortLevel?) {
+        guard level != selectedEffort else { return }
+        selectedEffort = level
+        effortHandler?(level)
+    }
+
     // MARK: - Permission mode
 
     /// The CLI's permission mode (footer menu, ⇧Tab). Each conversation
@@ -227,6 +253,8 @@ final class OverlaySession: ObservableObject {
         terminalOnlyCommands = []
         modelOptions = []
         modelHandler = nil
+        selectedEffort = nil
+        effortHandler = nil
         permissionMode = .defaultMode
         showsPermissionModes = kind == .claude
         permissionModeHandler = nil

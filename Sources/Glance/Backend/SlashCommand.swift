@@ -59,12 +59,19 @@ struct ModelOption: Decodable, Equatable, Hashable {
     let resolvedModel: String?
     let displayName: String?
     let description: String?
+    /// Effort capability the CLI reports per model (`initialize` → `models`).
+    /// Nil = the CLI didn't say.
+    let supportsEffort: Bool?
+    let supportedEffortLevels: [String]?
 
-    init(value: String, resolvedModel: String? = nil, displayName: String? = nil, description: String? = nil) {
+    init(value: String, resolvedModel: String? = nil, displayName: String? = nil, description: String? = nil,
+         supportsEffort: Bool? = nil, supportedEffortLevels: [String]? = nil) {
         self.value = value
         self.resolvedModel = resolvedModel
         self.displayName = displayName
         self.description = description
+        self.supportsEffort = supportsEffort
+        self.supportedEffortLevels = supportedEffortLevels
     }
 
     /// The name to show: "Opus 5.5". The default reads as the model it picks.
