@@ -30,10 +30,12 @@ struct CodeBlockView: View {
 
             Rectangle().fill(palette.rule).frame(height: 1)
 
-            Text(SyntaxHighlighter.highlight(code, language: language,
-                                             theme: palette.syntax, monoSize: monoSize))
-                .font(.system(size: monoSize, design: .monospaced))
-                .lineSpacing(3)
+            // AppKit, not a SwiftUI Text: a colour-run Text costs a full-size
+            // bitmap per block even off screen (see SelectableText).
+            SelectableText(text: MarkdownAttributed.code(
+                SyntaxHighlighter.highlight(code, language: language,
+                                            theme: palette.syntax, monoSize: monoSize),
+                monoSize: monoSize))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14).padding(.vertical, 12)
         }

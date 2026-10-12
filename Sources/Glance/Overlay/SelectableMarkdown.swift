@@ -1,31 +1,34 @@
 import AppKit
 import SwiftUI
 
-/// Consecutive prose blocks (headings, paragraphs, list items, quotes) drawn
-/// as ONE NSTextView so a mouse drag can select across them. SwiftUI scopes a
-/// selection to a single Text view, so the per-block Texts this replaces only
-/// ever let you select one sentence or bullet at a time.
-struct SelectableMarkdown: NSViewRepresentable {
-    let blocks: [MarkdownText.Block]
-    let palette: MarkdownPalette
-    let fontSize: CGFloat
-    let scale: CGFloat
+/// Read-only, selectable rich text drawn by AppKit. Used for prose runs and
+/// code blocks in place of SwiftUI Text, for two reasons:
+/// - one NSTextView holds a whole run of paragraphs, headings and list items,
+///   so a mouse drag selects across them (SwiftUI scopes a selection to a
+///   single Text, so the old per-block Texts selected one sentence at a time);
+/// - SwiftUI gives a Text with styled runs (colours, bold, inline code) a
+///   full-size bitmap even when it's scrolled out of view. The transcript is
+///   not lazy, so a long chat with code blocks reached gigabytes.
+///   NSTextView only draws what's visible.
+struct SelectableText: NSViewRepresentable {
+    let text: NSAttributedString
+    /// Rail colour for runs tagged `.glanceQuote`.
+    var quoteBar: Color = .clear
 
     func makeNSView(context: Context) -> MarkdownTextView {
         let view = MarkdownTextView()
-        view.quoteBarColor = NSColor(palette.quoteBar)
-        view.textStorage?.setAttributedString(attributed)
+        view.quoteBarColor = NSColor(quoteBar)
+        view.textStorage?.setAttributedString(text)
         return view
     }
 
     func updateNSView(_ view: MarkdownTextView, context: Context) {
-        view.quoteBarColor = NSColor(palette.quoteBar)
-        let next = attributed
-        guard let storage = view.textStorage, !storage.isEqual(to: next) else { return }
+        view.quoteBarColor = NSColor(quoteBar)
+        guard let storage = view.textStorage, !storage.isEqual(to: text) else { return }
         // Streaming replaces the text on every token; keep whatever the user
         // has selected so far instead of dropping it.
         let selection = view.selectedRanges
-        storage.setAttributedString(next)
+        storage.setAttributedString(text)
         let length = storage.length
         view.selectedRanges = selection.map { value in
             let r = value.rangeValue
@@ -37,10 +40,6 @@ struct SelectableMarkdown: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MarkdownTextView, context: Context) -> CGSize? {
         nsView.fittingSize(width: proposal.width)
-    }
-
-    private var attributed: NSAttributedString {
-        MarkdownAttributed.build(blocks, palette: palette, fontSize: fontSize, scale: scale)
     }
 }
 
@@ -195,7 +194,26 @@ enum MarkdownAttributed {
         return out
     }
 
-    /// Whether `block` renders as prose inside SelectableMarkdown.
+    /// Syntax-highlighted code from SyntaxHighlighter, whose runs carry only a
+    /// SwiftUI colour and (for comments) an italic font.
+    static func code(_ highlighted: AttributedString, monoSize: CGFloat) -> NSAttributedString {
+        let mono = NSFont.monospacedSystemFont(ofSize: monoSize, weight: .regular)
+        let italic = NSFontManager.shared.convert(mono, toHaveTrait: .italicFontMask)
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 3
+        let out = NSMutableAttributedString()
+        for run in highlighted.runs {
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: run.font == nil ? mono : italic,
+                .paragraphStyle: style,
+            ]
+            if let color = run.foregroundColor { attrs[.foregroundColor] = NSColor(color) }
+            out.append(NSAttributedString(string: String(highlighted[run.range].characters), attributes: attrs))
+        }
+        return out
+    }
+
+    /// Whether `block` renders as prose inside one SelectableText.
     static func isProse(_ block: MarkdownText.Block) -> Bool {
         switch block {
         case .heading, .bullet, .ordered, .quote, .paragraph: return true

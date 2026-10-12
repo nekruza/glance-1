@@ -109,8 +109,9 @@ struct MarkdownText: View {
                     if seg.isProse {
                         // One NSTextView per prose run so a drag selects
                         // across paragraphs, headings and list items.
-                        SelectableMarkdown(blocks: Array(blocks[seg.range]), palette: palette,
-                                           fontSize: fontSize, scale: scale)
+                        SelectableText(text: MarkdownAttributed.build(Array(blocks[seg.range]), palette: palette,
+                                                                      fontSize: fontSize, scale: scale),
+                                       quoteBar: palette.quoteBar)
                     } else {
                         blocks[seg.start].view(palette, scale)
                     }
