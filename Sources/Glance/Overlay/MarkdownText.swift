@@ -16,6 +16,9 @@ extension EnvironmentValues {
 /// Colors for MarkdownText rendering. `.dark` matches the overlay's original
 /// values exactly; `.light` maps to the DS tokens for the task surfaces.
 struct MarkdownPalette {
+    /// Body text. Prose runs are drawn by an NSTextView, which can't inherit
+    /// the caller's SwiftUI foregroundStyle.
+    let text: Color
     let bullet: Color
     let heading: Color
     let codeFg: Color
@@ -42,6 +45,7 @@ struct MarkdownPalette {
     let uppercaseLabels: Bool
 
     static let dark = MarkdownPalette(
+        text: Theme.fg.opacity(0.92),
         bullet: Theme.accent,
         heading: Theme.muted,
         codeFg: SyntaxTheme.dark.plain,
@@ -59,6 +63,7 @@ struct MarkdownPalette {
         uppercaseLabels: false)
 
     static let light = MarkdownPalette(
+        text: DS.textPrimary,
         bullet: DS.accentText,
         heading: DS.textSecondary,
         codeFg: DS.textPrimary,
@@ -90,25 +95,56 @@ struct MarkdownText: View {
     var palette: MarkdownPalette = .dark
     @Environment(\.chatTextScale) private var scale
 
+    /// Body size before the chat text scale. Prose is drawn by AppKit, so it
+    /// can't pick up a `.font` set by the caller.
+    var fontSize: CGFloat = 13
+
     var body: some View {
         let blocks = Self.parse(text)
         // spacing: 0 — vertical rhythm is per-pair (see `gap`), so list items
         // sit tight together while headings and quotes get real breathing room.
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
-                block.view(palette, scale)
-                    .padding(.top, Self.gap(from: i > 0 ? blocks[i - 1] : nil, to: block))
+            ForEach(Self.segments(blocks), id: \.start) { seg in
+                Group {
+                    if seg.isProse {
+                        // One NSTextView per prose run so a drag selects
+                        // across paragraphs, headings and list items.
+                        SelectableMarkdown(blocks: Array(blocks[seg.range]), palette: palette,
+                                           fontSize: fontSize, scale: scale)
+                    } else {
+                        blocks[seg.start].view(palette, scale)
+                    }
+                }
+                .padding(.top, Self.gap(from: seg.start > 0 ? blocks[seg.start - 1] : nil,
+                                        to: blocks[seg.start]))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Enabled once here rather than per block: it propagates through the
-        // environment, so headings / bullets / ordered items become selectable
-        // too (they were previously unselectable — only paragraph, quote and
-        // code opted in). NOTE this still cannot make a drag span blocks —
-        // SwiftUI scopes a selection to a single Text view and every block is
-        // its own Text. Copying a whole answer goes through the Copy button in
-        // OverlayView, not through selection.
+        // For the remaining SwiftUI blocks (tables). A selection still stops
+        // at a code block, table or draft card — those have their own Copy.
         .textSelection(.enabled)
+    }
+
+    /// A maximal run of prose blocks, or a single non-prose block.
+    struct Segment {
+        let range: Range<Int>
+        let isProse: Bool
+        var start: Int { range.lowerBound }
+    }
+
+    static func segments(_ blocks: [Block]) -> [Segment] {
+        var out: [Segment] = []
+        var i = 0
+        while i < blocks.count {
+            guard MarkdownAttributed.isProse(blocks[i]) else {
+                out.append(Segment(range: i..<i + 1, isProse: false)); i += 1; continue
+            }
+            var j = i
+            while j < blocks.count, MarkdownAttributed.isProse(blocks[j]) { j += 1 }
+            out.append(Segment(range: i..<j, isProse: true))
+            i = j
+        }
+        return out
     }
 
     // MARK: - Block model

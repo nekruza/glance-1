@@ -974,8 +974,8 @@ private struct PermissionCard: View {
             }
             if let plan = request.plan, !plan.isEmpty {
                 ScrollView {
-                    MarkdownText(text: plan)
-                        .font(.system(size: 12.5 * textScale))
+                    MarkdownText(text: plan, fontSize: 12.5)
+                        .environment(\.chatTextScale, textScale)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 220)
